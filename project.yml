@@ -1,6 +1,6 @@
 name: LiDARScanner
 options:
-  bundleIdPrefix: com.mberoz420
+  bundleIdPrefix: com.lidarscanner
   deploymentTarget:
     iOS: "15.0"
   xcodeVersion: "15.0"
@@ -21,7 +21,7 @@ targets:
           - "**/.DS_Store"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.mberoz420.LiDARScanner
+        PRODUCT_BUNDLE_IDENTIFIER: com.lidarscanner.LiDarScanner
         INFOPLIST_FILE: LiDARScanner/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
