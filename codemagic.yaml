@@ -11,9 +11,8 @@ workflows:
       vars:
         XCODE_WORKSPACE: "LiDARScanner.xcodeproj/project.xcworkspace"
         XCODE_SCHEME: "LiDARScanner"
-        APP_STORE_CONNECT_ISSUER_ID: Encrypted(...)  # Set in Codemagic UI
-        APP_STORE_CONNECT_KEY_IDENTIFIER: Encrypted(...)  # Set in Codemagic UI
-        APP_STORE_CONNECT_PRIVATE_KEY: Encrypted(...)  # Set in Codemagic UI
+      groups:
+        - app_store
       xcode: 15.4
       cocoapods: default
 
