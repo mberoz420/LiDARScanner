@@ -1,0 +1,73 @@
+workflows:
+  ios-workflow:
+    name: iOS Build & TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.mberoz420.LiDARScanner
+      vars:
+        XCODE_WORKSPACE: "LiDARScanner.xcodeproj/project.xcworkspace"
+        XCODE_SCHEME: "LiDARScanner"
+        APP_STORE_CONNECT_ISSUER_ID: Encrypted(...)  # Set in Codemagic UI
+        APP_STORE_CONNECT_KEY_IDENTIFIER: Encrypted(...)  # Set in Codemagic UI
+        APP_STORE_CONNECT_PRIVATE_KEY: Encrypted(...)  # Set in Codemagic UI
+      xcode: 15.4
+      cocoapods: default
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: master
+          include: true
+
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        script: |
+          xcodegen generate
+
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+
+      - name: Increment build number
+        script: |
+          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_CONNECT_ISSUER_ID" || echo "0")
+          NEW_BUILD=$((LATEST_BUILD + 1))
+          echo "Setting build number to $NEW_BUILD"
+          cd $CM_BUILD_DIR
+          agvtool new-version -all $NEW_BUILD
+
+      - name: Build iOS app
+        script: |
+          xcode-project build-ipa \
+            --project "LiDARScanner.xcodeproj" \
+            --scheme "LiDARScanner" \
+            --config "Release"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        beta_groups:
+          - "Internal Testers"
+      email:
+        recipients:
+          - your-email@example.com  # Update this
+        notify:
+          success: true
+          failure: true
