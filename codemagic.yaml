@@ -10,7 +10,7 @@ workflows:
         BUNDLE_ID: "com.lidarscanner.LiDarScanner"
         CERTIFICATE_PASSWORD: "codemagic123"
       groups:
-        - app_store
+        - App_Store
       xcode: latest
 
     triggering:
