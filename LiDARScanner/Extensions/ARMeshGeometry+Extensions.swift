@@ -34,7 +34,7 @@ extension ARMeshGeometry {
 }
 
 extension MeshResource {
-    /// Generate MeshResource from ARMeshGeometry for visualization
+    /// Generate MeshResource from ARMeshGeometry for visualization (solid mesh)
     static func generate(from arGeometry: ARMeshGeometry) throws -> MeshResource {
         var descriptor = MeshDescriptor()
 
@@ -59,6 +59,45 @@ extension MeshResource {
             indices.append(contentsOf: face)
         }
         descriptor.primitives = .triangles(indices)
+
+        return try MeshResource.generate(from: [descriptor])
+    }
+
+    /// Generate wireframe MeshResource from ARMeshGeometry (edge lines only)
+    static func generateWireframe(from arGeometry: ARMeshGeometry) throws -> MeshResource {
+        var descriptor = MeshDescriptor()
+
+        // Extract positions
+        var positions: [SIMD3<Float>] = []
+        for i in 0..<arGeometry.vertices.count {
+            positions.append(arGeometry.vertex(at: i))
+        }
+        descriptor.positions = MeshBuffer(positions)
+
+        // Convert triangles to line segments (edges)
+        // Each triangle has 3 edges: (0,1), (1,2), (2,0)
+        var lineIndices: [UInt32] = []
+        var edgeSet = Set<String>()
+
+        for i in 0..<arGeometry.faces.count {
+            let face = arGeometry.faceIndices(at: i)
+            let edges = [
+                (min(face[0], face[1]), max(face[0], face[1])),
+                (min(face[1], face[2]), max(face[1], face[2])),
+                (min(face[2], face[0]), max(face[2], face[0]))
+            ]
+
+            for edge in edges {
+                let key = "\(edge.0)-\(edge.1)"
+                if !edgeSet.contains(key) {
+                    edgeSet.insert(key)
+                    lineIndices.append(edge.0)
+                    lineIndices.append(edge.1)
+                }
+            }
+        }
+
+        descriptor.primitives = .lines(lineIndices)
 
         return try MeshResource.generate(from: [descriptor])
     }

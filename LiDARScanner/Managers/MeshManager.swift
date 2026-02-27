@@ -19,12 +19,10 @@ class MeshManager: NSObject, ObservableObject {
     private var lastMeshUpdateTime: Date = .distantPast
     private let meshUpdateInterval: TimeInterval = 0.3
 
-    // Semi-transparent material for mesh overlay
-    private lazy var meshMaterial: SimpleMaterial = {
-        var material = SimpleMaterial()
-        material.color = .init(tint: .systemBlue.withAlphaComponent(0.5))
-        material.metallic = 0.0
-        material.roughness = 0.8
+    // Wireframe material (unlit for clear edge visibility)
+    private lazy var wireframeMaterial: UnlitMaterial = {
+        var material = UnlitMaterial()
+        material.color = .init(tint: .systemGreen)
         return material
     }()
 
@@ -133,8 +131,8 @@ class MeshManager: NSObject, ObservableObject {
     private func updateMeshVisualization(for anchor: ARMeshAnchor) {
         guard let arView = arView else { return }
 
-        // Generate MeshResource from ARMeshGeometry
-        guard let meshResource = try? MeshResource.generate(from: anchor.geometry) else { return }
+        // Generate wireframe MeshResource (edge lines)
+        guard let meshResource = try? MeshResource.generateWireframe(from: anchor.geometry) else { return }
 
         if let existingAnchor = meshAnchors[anchor.identifier] {
             // Update existing mesh
@@ -142,8 +140,8 @@ class MeshManager: NSObject, ObservableObject {
                 modelEntity.model?.mesh = meshResource
             }
         } else {
-            // Create new mesh entity
-            let modelEntity = ModelEntity(mesh: meshResource, materials: [meshMaterial])
+            // Create new wireframe entity
+            let modelEntity = ModelEntity(mesh: meshResource, materials: [wireframeMaterial])
 
             let anchorEntity = AnchorEntity(world: anchor.transform)
             anchorEntity.addChild(modelEntity)
