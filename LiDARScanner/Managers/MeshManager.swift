@@ -148,8 +148,8 @@ class MeshManager: NSObject, ObservableObject {
 
         // Build summary
         var summary = "\(vertexCount) vertices"
-        if let roomSummary = surfaceClassifier.statistics.summary, !roomSummary.isEmpty {
-            summary += " | \(roomSummary)"
+        if !surfaceClassifier.statistics.summary.isEmpty {
+            summary += " | \(surfaceClassifier.statistics.summary)"
         }
         scanStatus = "Scan complete - \(summary)"
 
