@@ -46,9 +46,11 @@ class MeshManager: NSObject, ObservableObject {
         scanStatus = mode.guidanceText
     }
 
-    private func wireframeMaterial(for mode: ScanMode) -> UnlitMaterial {
-        var material = UnlitMaterial()
-        material.color = .init(tint: UIColor(mode.color))
+    private func meshMaterial(for mode: ScanMode) -> SimpleMaterial {
+        var material = SimpleMaterial()
+        material.color = .init(tint: UIColor(mode.color).withAlphaComponent(0.4))
+        material.metallic = 0.0
+        material.roughness = 0.9
         return material
     }
 
@@ -254,9 +256,9 @@ class MeshManager: NSObject, ObservableObject {
     private func updateMeshVisualization(for anchor: ARMeshAnchor) {
         guard let arView = arView else { return }
 
-        guard let meshResource = try? MeshResource.generateWireframe(from: anchor.geometry) else { return }
+        guard let meshResource = try? MeshResource.generate(from: anchor.geometry) else { return }
 
-        let material = wireframeMaterial(for: currentMode)
+        let material = meshMaterial(for: currentMode)
 
         if let existingAnchor = meshAnchors[anchor.identifier] {
             if let modelEntity = existingAnchor.children.first as? ModelEntity {
@@ -275,9 +277,9 @@ class MeshManager: NSObject, ObservableObject {
     private func updateFaceVisualization(for anchor: ARFaceAnchor) {
         guard let arView = arView else { return }
 
-        guard let meshResource = try? MeshResource.generateWireframe(from: anchor.geometry) else { return }
+        guard let meshResource = try? MeshResource.generate(from: anchor.geometry) else { return }
 
-        let material = wireframeMaterial(for: currentMode)
+        let material = meshMaterial(for: currentMode)
 
         if let existingAnchor = faceAnchors[anchor.identifier] {
             if let modelEntity = existingAnchor.children.first as? ModelEntity {
