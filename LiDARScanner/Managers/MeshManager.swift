@@ -102,17 +102,19 @@ class MeshManager: NSObject, ObservableObject {
         // Reset surface classifier and sync with app settings
         surfaceClassifier.reset()
         surfaceClassificationEnabled = AppSettings.shared.surfaceClassificationEnabled
-        surfaceClassifier.classificationEnabled = surfaceClassificationEnabled
 
         // Setup guided scanning for room mode
         if currentMode == .walls {
             currentPhase = .floor
             phaseProgress = 0
             useEdgeVisualization = true
+            // Always enable classification for guided room mode (needed for edge detection)
+            surfaceClassifier.classificationEnabled = true
             scanStatus = currentPhase.instruction
         } else {
             currentPhase = .ready
             useEdgeVisualization = false
+            surfaceClassifier.classificationEnabled = surfaceClassificationEnabled
         }
 
         // Configure based on mode
@@ -245,6 +247,11 @@ class MeshManager: NSObject, ObservableObject {
 
         // Update visualization with surface-appropriate color
         updateMeshVisualization(for: anchor, surfaceType: classifiedSurface.surfaceType)
+
+        // Update edge visualization in room mode
+        if useEdgeVisualization && currentMode == .walls {
+            edgeVisualizer.updateEdges(surfaceClassifier.statistics.detectedEdges)
+        }
 
         // Store for export
         if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
@@ -409,9 +416,9 @@ class MeshManager: NSObject, ObservableObject {
         // Get surface classification
         let surfaceType = surfaceTypes[anchor.identifier]
 
-        // Get per-face classifications if enabled
+        // Get per-face classifications if enabled (or if using edge visualization)
         var faceClassifications: [SurfaceType]? = nil
-        if surfaceClassificationEnabled {
+        if surfaceClassificationEnabled || useEdgeVisualization {
             faceClassifications = surfaceClassifier.classifyMesh(
                 vertices: vertices,
                 normals: normals,

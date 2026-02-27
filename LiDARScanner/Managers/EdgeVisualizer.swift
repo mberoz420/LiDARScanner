@@ -137,6 +137,11 @@ class EdgeVisualizer {
         }
     }
 
+    /// Get count of currently visualized edges
+    var edgeCount: Int {
+        edgeEntities.count
+    }
+
     // MARK: - Room Dimension Overlay
 
     /// Create dimension labels for room measurements

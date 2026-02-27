@@ -257,21 +257,37 @@ struct ScanStatistics {
     var detectedWindows: [DetectedWindow] = []
     var surfaceCounts: [SurfaceType: Int] = [:]
 
+    // MARK: - Detected Planes (for guided scanning)
+
+    /// Detected floor plane (infinite plane at floor height)
+    var floorPlane: (height: Float, normal: SIMD3<Float>)? {
+        guard let h = floorHeight else { return nil }
+        return (h, SIMD3<Float>(0, 1, 0))  // Floor faces up
+    }
+
+    /// Detected ceiling plane (infinite plane at ceiling height)
+    var ceilingPlane: (height: Float, normal: SIMD3<Float>)? {
+        guard let h = ceilingHeight else { return nil }
+        return (h, SIMD3<Float>(0, -1, 0))  // Ceiling faces down
+    }
+
     // MARK: - Phase Confidence Metrics (for guided scanning)
 
     /// Confidence that floor plane has been detected (0-1)
+    /// Once ANY floor is detected, confidence is high (plane is extrapolated)
     var floorConfidence: Float {
         guard floorHeight != nil else { return 0 }
-        // Higher confidence with more floor area detected
-        let areaConfidence = min(floorArea / 2.0, 1.0)  // 2m² = full confidence
+        // Even small floor detection = high confidence (we extrapolate the plane)
+        let areaConfidence = min(floorArea / 0.5, 1.0)  // 0.5m² = full confidence
         return areaConfidence
     }
 
     /// Confidence that ceiling has been detected (0-1)
+    /// Once ANY ceiling is detected, confidence is high (plane is extrapolated)
     var ceilingConfidence: Float {
         guard ceilingHeight != nil else { return 0 }
-        // Need ceiling and room height
-        let areaConfidence = min(ceilingArea / 1.5, 1.0)  // 1.5m² = full confidence
+        // Even small ceiling detection = high confidence (we extrapolate the plane)
+        let areaConfidence = min(ceilingArea / 0.3, 1.0)  // 0.3m² = full confidence
         let heightConfidence: Float = estimatedRoomHeight != nil ? 1.0 : 0.5
         return (areaConfidence + heightConfidence) / 2
     }
@@ -733,7 +749,7 @@ class SurfaceClassifier: ObservableObject {
         }
     }
 
-    /// Merge nearby edge segments into longer edges
+    /// Merge nearby edge segments into longer edges and extend to floor/ceiling
     private func mergeEdgeSegments(_ segments: [(start: SIMD3<Float>, end: SIMD3<Float>, type: WallEdge.EdgeType, angle: Float)]) {
         // Simple approach: keep significant edges, limit total count
         let significantEdges = segments.filter { segment in
@@ -745,11 +761,41 @@ class SurfaceClassifier: ObservableObject {
         let sortedEdges = significantEdges.sorted { $0.angle > $1.angle }
         let topEdges = Array(sortedEdges.prefix(50))  // Keep top 50 edges
 
+        // Extend vertical edges (corners) to floor and ceiling
         statistics.detectedEdges = topEdges.map { segment in
-            WallEdge(
+            var start = segment.start
+            var end = segment.end
+
+            // For vertical corners, extend to floor and ceiling planes
+            if segment.type == .verticalCorner {
+                if let floorH = statistics.floorHeight {
+                    // Extend to floor
+                    let lowerY = min(start.y, end.y)
+                    if lowerY > floorH {
+                        if start.y < end.y {
+                            start.y = floorH
+                        } else {
+                            end.y = floorH
+                        }
+                    }
+                }
+                if let ceilingH = statistics.ceilingHeight {
+                    // Extend to ceiling
+                    let upperY = max(start.y, end.y)
+                    if upperY < ceilingH {
+                        if start.y > end.y {
+                            start.y = ceilingH
+                        } else {
+                            end.y = ceilingH
+                        }
+                    }
+                }
+            }
+
+            return WallEdge(
                 id: UUID(),
-                startPoint: segment.start,
-                endPoint: segment.end,
+                startPoint: start,
+                endPoint: end,
                 edgeType: segment.type,
                 angle: segment.angle
             )
