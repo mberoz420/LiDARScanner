@@ -391,8 +391,8 @@ struct RoomScannerSheet: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Vertices: \(scan.vertexCount)")
                             Text("Faces: \(scan.faceCount)")
-                            if let stats = meshManager.surfaceClassifier.statistics.summary, !stats.isEmpty {
-                                Text(stats)
+                            if !meshManager.surfaceClassifier.statistics.summary.isEmpty {
+                                Text(meshManager.surfaceClassifier.statistics.summary)
                             }
                             Text("Doors: \(meshManager.surfaceClassifier.statistics.detectedDoors.count)")
                         }

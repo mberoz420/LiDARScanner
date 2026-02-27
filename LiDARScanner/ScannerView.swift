@@ -473,3 +473,30 @@ struct SurfaceTypeLegend: View {
         return Color(red: Double(c.r), green: Double(c.g), blue: Double(c.b))
     }
 }
+
+// MARK: - Quick Mode Button
+
+struct QuickModeButton: View {
+    let mode: ScanMode
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: mode.icon)
+                    .font(.title3)
+                Text(mode.rawValue)
+                    .font(.caption2)
+            }
+            .frame(width: 70, height: 60)
+            .background(isSelected ? mode.color.opacity(0.3) : Color.black.opacity(0.5))
+            .foregroundColor(isSelected ? mode.color : .white)
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? mode.color : Color.clear, lineWidth: 2)
+            )
+        }
+    }
+}

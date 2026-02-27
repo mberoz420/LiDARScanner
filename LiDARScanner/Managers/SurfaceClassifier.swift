@@ -789,12 +789,14 @@ class SurfaceClassifier: ObservableObject {
     /// Returns true if we should skip detailed processing for this surface type
     func shouldReduceDetail(for surfaceType: SurfaceType) -> Bool {
         switch surfaceType {
-        case .ceiling:
+        case .ceiling, .ceilingProtrusion:
             return true // Ceilings are usually flat, less detail needed
-        case .floor:
+        case .floor, .floorEdge:
             return false // Floors may have furniture, keep detail
-        case .wall:
+        case .wall, .wallEdge:
             return false // Walls have features
+        case .door, .doorFrame, .window, .windowFrame:
+            return false // Openings need detail
         case .object:
             return false // Objects need detail
         case .unknown:
@@ -805,10 +807,11 @@ class SurfaceClassifier: ObservableObject {
     /// Suggested update interval multiplier for surface type
     func updateIntervalMultiplier(for surfaceType: SurfaceType) -> Double {
         switch surfaceType {
-        case .ceiling: return 3.0  // Update ceiling 3x less frequently
-        case .floor: return 1.5    // Floor slightly less
-        case .wall: return 1.0     // Walls normal rate
-        case .object: return 0.5   // Objects more frequently
+        case .ceiling, .ceilingProtrusion: return 3.0  // Update ceiling 3x less frequently
+        case .floor, .floorEdge: return 1.5            // Floor slightly less
+        case .wall, .wallEdge: return 1.0              // Walls normal rate
+        case .door, .doorFrame, .window, .windowFrame: return 0.8  // Openings slightly more
+        case .object: return 0.5                       // Objects more frequently
         case .unknown: return 1.0
         }
     }
