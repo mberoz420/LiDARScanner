@@ -1,5 +1,6 @@
 import ARKit
 import RealityKit
+import simd
 
 extension ARMeshGeometry {
     /// Access individual vertices from the vertex buffer
@@ -85,6 +86,48 @@ extension MeshResource {
                 (min(face[0], face[1]), max(face[0], face[1])),
                 (min(face[1], face[2]), max(face[1], face[2])),
                 (min(face[2], face[0]), max(face[2], face[0]))
+            ]
+
+            for edge in edges {
+                let key = "\(edge.0)-\(edge.1)"
+                if !edgeSet.contains(key) {
+                    edgeSet.insert(key)
+                    lineIndices.append(edge.0)
+                    lineIndices.append(edge.1)
+                }
+            }
+        }
+
+        descriptor.primitives = .lines(lineIndices)
+
+        return try MeshResource.generate(from: [descriptor])
+    }
+
+    /// Generate wireframe MeshResource from ARFaceGeometry (edge lines only)
+    static func generateWireframe(from faceGeometry: ARFaceGeometry) throws -> MeshResource {
+        var descriptor = MeshDescriptor()
+
+        // Extract positions
+        var positions: [SIMD3<Float>] = []
+        for i in 0..<faceGeometry.vertices.count {
+            positions.append(faceGeometry.vertices[i])
+        }
+        descriptor.positions = MeshBuffer(positions)
+
+        // Convert triangles to line segments (edges)
+        var lineIndices: [UInt32] = []
+        var edgeSet = Set<String>()
+
+        let indexCount = faceGeometry.triangleCount * 3
+        for i in stride(from: 0, to: indexCount, by: 3) {
+            let i0 = UInt32(faceGeometry.triangleIndices[i])
+            let i1 = UInt32(faceGeometry.triangleIndices[i + 1])
+            let i2 = UInt32(faceGeometry.triangleIndices[i + 2])
+
+            let edges = [
+                (min(i0, i1), max(i0, i1)),
+                (min(i1, i2), max(i1, i2)),
+                (min(i2, i0), max(i2, i0))
             ]
 
             for edge in edges {
