@@ -21,6 +21,7 @@ class MeshManager: NSObject, ObservableObject {
     private var faceAnchors: [UUID: AnchorEntity] = [:]
     private var capturedScan: CapturedScan?
     private var lastMeshUpdateTime: Date = .distantPast
+    private var currentFrame: ARFrame?
 
     // MARK: - Setup
     func setup(arView: ARView) {
@@ -202,9 +203,20 @@ class MeshManager: NSObject, ObservableObject {
             faces.append(face)
         }
 
+        // Sample colors from camera frame
+        var colors: [VertexColor] = []
+        if let frame = currentFrame {
+            colors = TextureProjector.sampleColors(
+                for: vertices,
+                meshTransform: anchor.transform,
+                frame: frame
+            )
+        }
+
         return CapturedMeshData(
             vertices: vertices,
             normals: normals,
+            colors: colors,
             faces: faces,
             transform: anchor.transform,
             identifier: anchor.identifier
@@ -244,9 +256,20 @@ class MeshManager: NSObject, ObservableObject {
             }
         }
 
+        // Sample colors from camera frame
+        var colors: [VertexColor] = []
+        if let frame = currentFrame {
+            colors = TextureProjector.sampleColors(
+                for: vertices,
+                meshTransform: anchor.transform,
+                frame: frame
+            )
+        }
+
         return CapturedMeshData(
             vertices: vertices,
             normals: normals,
+            colors: colors,
             faces: faces,
             transform: anchor.transform,
             identifier: anchor.identifier
@@ -307,6 +330,12 @@ class MeshManager: NSObject, ObservableObject {
 
 // MARK: - ARSessionDelegate
 extension MeshManager: ARSessionDelegate {
+    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        Task { @MainActor in
+            currentFrame = frame
+        }
+    }
+
     nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
         Task { @MainActor in
             for anchor in anchors {

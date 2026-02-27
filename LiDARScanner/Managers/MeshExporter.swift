@@ -84,11 +84,13 @@ class MeshExporter: ObservableObject {
         try? FileManager.default.removeItem(at: tempURL)
     }
 
-    // MARK: - PLY Export
+    // MARK: - PLY Export (with vertex colors)
     private func exportPLY(_ scan: CapturedScan, to url: URL) async throws {
         let combined = combineMeshes(scan)
+        let hasColors = combined.hasColors
 
-        var plyContent = """
+        // Build header
+        var header = """
         ply
         format ascii 1.0
         element vertex \(combined.vertices.count)
@@ -98,17 +100,41 @@ class MeshExporter: ObservableObject {
         property float nx
         property float ny
         property float nz
+
+        """
+
+        if hasColors {
+            header += """
+            property uchar red
+            property uchar green
+            property uchar blue
+
+            """
+        }
+
+        header += """
         element face \(combined.faces.count)
         property list uchar int vertex_indices
         end_header
 
         """
 
-        // Write vertices with normals
+        var plyContent = header
+
+        // Write vertices with normals and colors
         for i in 0..<combined.vertices.count {
             let v = combined.vertices[i]
             let n = i < combined.normals.count ? combined.normals[i] : SIMD3<Float>(0, 1, 0)
-            plyContent += "\(v.x) \(v.y) \(v.z) \(n.x) \(n.y) \(n.z)\n"
+
+            if hasColors && i < combined.colors.count {
+                let c = combined.colors[i]
+                let r = UInt8(max(0, min(255, c.r * 255)))
+                let g = UInt8(max(0, min(255, c.g * 255)))
+                let b = UInt8(max(0, min(255, c.b * 255)))
+                plyContent += "\(v.x) \(v.y) \(v.z) \(n.x) \(n.y) \(n.z) \(r) \(g) \(b)\n"
+            } else {
+                plyContent += "\(v.x) \(v.y) \(v.z) \(n.x) \(n.y) \(n.z)\n"
+            }
         }
 
         // Write faces
@@ -119,17 +145,37 @@ class MeshExporter: ObservableObject {
         try plyContent.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    // MARK: - OBJ Export
+    // MARK: - OBJ Export (with MTL for colors)
     private func exportOBJ(_ scan: CapturedScan, to url: URL) async throws {
-        let combinedMesh = combineMeshes(scan)
+        let combined = combineMeshes(scan)
 
-        let allocator = MDLMeshBufferDataAllocator()
-        let mdlMesh = createMDLMesh(from: combinedMesh, allocator: allocator)
+        var objContent = "# LiDAR Scanner Export\n"
+        objContent += "# Vertices: \(combined.vertices.count)\n"
+        objContent += "# Faces: \(combined.faces.count)\n\n"
 
-        let asset = MDLAsset()
-        asset.add(mdlMesh)
+        // Write vertices
+        for v in combined.vertices {
+            objContent += "v \(v.x) \(v.y) \(v.z)\n"
+        }
 
-        try asset.export(to: url)
+        objContent += "\n"
+
+        // Write normals
+        for n in combined.normals {
+            objContent += "vn \(n.x) \(n.y) \(n.z)\n"
+        }
+
+        objContent += "\n"
+
+        // Write faces (OBJ uses 1-based indexing)
+        for face in combined.faces {
+            let i0 = face[0] + 1
+            let i1 = face[1] + 1
+            let i2 = face[2] + 1
+            objContent += "f \(i0)//\(i0) \(i1)//\(i1) \(i2)//\(i2)\n"
+        }
+
+        try objContent.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Helpers
@@ -138,6 +184,7 @@ class MeshExporter: ObservableObject {
     private func combineMeshes(_ scan: CapturedScan) -> CapturedMeshData {
         var allVertices: [SIMD3<Float>] = []
         var allNormals: [SIMD3<Float>] = []
+        var allColors: [VertexColor] = []
         var allFaces: [[UInt32]] = []
         var vertexOffset: UInt32 = 0
 
@@ -158,6 +205,9 @@ class MeshExporter: ObservableObject {
                 allNormals.append(normalize(normalMatrix * normal))
             }
 
+            // Copy colors
+            allColors.append(contentsOf: mesh.colors)
+
             // Offset face indices
             for face in mesh.faces {
                 allFaces.append([
@@ -173,6 +223,7 @@ class MeshExporter: ObservableObject {
         return CapturedMeshData(
             vertices: allVertices,
             normals: allNormals,
+            colors: allColors,
             faces: allFaces,
             transform: matrix_identity_float4x4,
             identifier: UUID()
