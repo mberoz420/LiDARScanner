@@ -5,6 +5,9 @@ workflows:
     instance_type: mac_mini_m2
 
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.lidarscanner.LiDarScanner
       vars:
         XCODE_SCHEME: "LiDARScanner"
         BUNDLE_ID: "com.lidarscanner.LiDarScanner"
@@ -30,41 +33,15 @@ workflows:
         script: |
           xcodegen generate
 
-      - name: Fetch signing files
-        script: |
-          keychain initialize
-
-          # Generate a new RSA key for certificate creation
-          openssl genrsa -out "$HOME/cert_key.pem" 2048
-
-          # Debug: show what we have
-          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
-          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
-          echo "Private key length: ${#APP_STORE_CONNECT_PRIVATE_KEY} chars"
-
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@env:APP_STORE_CONNECT_PRIVATE_KEY" \
-            --certificate-key "@file:$HOME/cert_key.pem" \
-            --create
-          keychain add-certificates
-
-      - name: Set up provisioning profile
+      - name: Set up code signing
         script: |
           xcode-project use-profiles
 
       - name: Increment build number
         script: |
-          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID" \
-            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8" \
-            2>/dev/null || echo "0")
-          NEW_BUILD=$((LATEST_BUILD + 1))
-          echo "Setting build number to $NEW_BUILD"
-          agvtool new-version -all $NEW_BUILD || true
+          BUILD_NUMBER=$(($(date +%s)/60))
+          echo "Setting build number to $BUILD_NUMBER"
+          agvtool new-version -all $BUILD_NUMBER || true
 
       - name: Build archive
         script: |
@@ -90,9 +67,7 @@ workflows:
 
     publishing:
       app_store_connect:
-        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
-        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
-        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        auth: integration
         submit_to_testflight: true
       email:
         recipients:
