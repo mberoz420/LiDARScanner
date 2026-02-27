@@ -30,19 +30,6 @@ workflows:
         script: |
           xcodegen generate
 
-      - name: Set up App Store Connect
-        script: |
-          mkdir -p "$HOME/.appstoreconnect/private_keys"
-          KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
-          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
-          echo "=== DEBUG: Key file contents ==="
-          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
-          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
-          echo "Key file size: $(wc -c < "$KEY_FILE") bytes"
-          echo "First line: $(head -1 "$KEY_FILE")"
-          echo "Last line: $(tail -1 "$KEY_FILE")"
-          echo "================================"
-
       - name: Fetch signing files
         script: |
           keychain initialize
@@ -50,11 +37,16 @@ workflows:
           # Generate a new RSA key for certificate creation
           openssl genrsa -out "$HOME/cert_key.pem" 2048
 
+          # Debug: show what we have
+          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
+          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
+          echo "Private key length: ${#APP_STORE_CONNECT_PRIVATE_KEY} chars"
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
+            --private-key "@env:APP_STORE_CONNECT_PRIVATE_KEY" \
             --certificate-key "@file:$HOME/cert_key.pem" \
             --create
           keychain add-certificates
