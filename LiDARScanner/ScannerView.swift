@@ -16,38 +16,75 @@ struct ScannerView: View {
             VStack {
                 // Top bar with stats and mode
                 HStack {
-                    // Stats overlay
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Image(systemName: meshManager.currentMode.icon)
-                                .foregroundColor(meshManager.currentMode.color)
-                            Text(meshManager.currentMode.rawValue)
-                                .font(.caption)
-                                .fontWeight(.bold)
+                    // Stats overlay - tap to change mode when not scanning
+                    Button(action: {
+                        if !meshManager.isScanning {
+                            showModeSelector = true
                         }
-                        Text(meshManager.scanStatus)
-                            .font(.caption2)
-                        if meshManager.isScanning {
-                            Text("Vertices: \(meshManager.vertexCount)")
+                    }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: meshManager.currentMode.icon)
+                                    .foregroundColor(meshManager.currentMode.color)
+                                Text(meshManager.currentMode.rawValue)
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                if !meshManager.isScanning {
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
+                            }
+                            Text(meshManager.scanStatus)
                                 .font(.caption2)
+                                .lineLimit(2)
+                            if meshManager.isScanning {
+                                HStack(spacing: 8) {
+                                    Text("Vertices: \(meshManager.vertexCount)")
+                                        .font(.caption2)
+                                    // Show device orientation indicator
+                                    DeviceOrientationIndicator(orientation: meshManager.deviceOrientation)
+                                }
+                            } else {
+                                Text("Tap to change mode")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
                         }
+                        .padding(10)
+                        .background(Color.black.opacity(0.7))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
                     }
-                    .padding(10)
-                    .background(Color.black.opacity(0.7))
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
+                    .disabled(meshManager.isScanning)
 
                     Spacer()
 
-                    // Camera toggle for organic mode
-                    if meshManager.currentMode == .organic && meshManager.faceTrackingAvailable {
-                        Button(action: { meshManager.toggleCamera() }) {
-                            Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 44, height: 44)
-                                .background(Color.black.opacity(0.7))
-                                .cornerRadius(22)
+                    VStack(spacing: 8) {
+                        // Camera toggle for organic mode
+                        if meshManager.currentMode == .organic && meshManager.faceTrackingAvailable {
+                            Button(action: { meshManager.toggleCamera() }) {
+                                Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(22)
+                            }
+                        }
+
+                        // Surface classification toggle
+                        if meshManager.isScanning && meshManager.currentMode == .walls {
+                            Button(action: {
+                                meshManager.surfaceClassificationEnabled.toggle()
+                            }) {
+                                Image(systemName: meshManager.surfaceClassificationEnabled ? "square.3.layers.3d.top.filled" : "square.3.layers.3d")
+                                    .font(.title3)
+                                    .foregroundColor(meshManager.surfaceClassificationEnabled ? .cyan : .white)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(22)
+                            }
                         }
                     }
                 }
@@ -55,16 +92,46 @@ struct ScannerView: View {
 
                 Spacer()
 
+                // Surface type legend (when classification is enabled)
+                if meshManager.isScanning && meshManager.surfaceClassificationEnabled && meshManager.currentMode == .walls {
+                    HStack {
+                        SurfaceTypeLegend()
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                }
+
+                // Quick mode selector (when not scanning)
+                if !meshManager.isScanning {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(ScanMode.allCases) { mode in
+                                QuickModeButton(
+                                    mode: mode,
+                                    isSelected: mode == meshManager.currentMode,
+                                    action: { meshManager.currentMode = mode }
+                                )
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    .padding(.bottom, 8)
+                }
+
                 // Controls
                 HStack(spacing: 16) {
                     // Mode selector button
                     Button(action: { showModeSelector = true }) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
-                            .background(Color.gray.opacity(0.8))
-                            .cornerRadius(25)
+                        VStack(spacing: 4) {
+                            Image(systemName: meshManager.currentMode.icon)
+                                .font(.title2)
+                            Text("Mode")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.white)
+                        .frame(width: 60, height: 60)
+                        .background(meshManager.isScanning ? Color.gray.opacity(0.5) : meshManager.currentMode.color)
+                        .cornerRadius(12)
                     }
                     .disabled(meshManager.isScanning)
 
@@ -121,40 +188,30 @@ struct ScannerView: View {
 struct ModeSelectorView: View {
     @Binding var selectedMode: ScanMode
     @Environment(\.dismiss) private var dismiss
+    @State private var expandedMode: ScanMode?
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(ScanMode.allCases) { mode in
-                    Button(action: {
-                        selectedMode = mode
-                        dismiss()
-                    }) {
-                        HStack(spacing: 16) {
-                            Image(systemName: mode.icon)
-                                .font(.title2)
-                                .foregroundColor(mode.color)
-                                .frame(width: 40)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(mode.rawValue)
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                                Text(mode.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(ScanMode.allCases) { mode in
+                        ModeCard(
+                            mode: mode,
+                            isSelected: mode == selectedMode,
+                            isExpanded: mode == expandedMode,
+                            onSelect: {
+                                selectedMode = mode
+                                dismiss()
+                            },
+                            onToggleExpand: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    expandedMode = expandedMode == mode ? nil : mode
+                                }
                             }
-
-                            Spacer()
-
-                            if mode == selectedMode {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                            }
-                        }
-                        .padding(.vertical, 8)
+                        )
                     }
                 }
+                .padding()
             }
             .navigationTitle("Scan Mode")
             .navigationBarTitleDisplayMode(.inline)
@@ -164,6 +221,143 @@ struct ModeSelectorView: View {
                 }
             }
         }
+    }
+}
+
+struct ModeCard: View {
+    let mode: ScanMode
+    let isSelected: Bool
+    let isExpanded: Bool
+    let onSelect: () -> Void
+    let onToggleExpand: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main row
+            Button(action: onSelect) {
+                HStack(spacing: 16) {
+                    Image(systemName: mode.icon)
+                        .font(.title2)
+                        .foregroundColor(mode.color)
+                        .frame(width: 40)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(mode.rawValue)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        Text(mode.description)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    }
+                }
+                .padding()
+            }
+
+            // Info toggle button
+            Button(action: onToggleExpand) {
+                HStack {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                    Text(isExpanded ? "Hide Details" : "Show Details")
+                        .font(.caption)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                }
+                .foregroundColor(.blue)
+                .padding(.horizontal)
+                .padding(.bottom, isExpanded ? 8 : 12)
+            }
+
+            // Expanded details
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    Divider()
+
+                    // Specs grid
+                    HStack(spacing: 16) {
+                        SpecItem(title: "Object Size", value: mode.sizeRange, icon: "ruler")
+                        SpecItem(title: "Distance", value: mode.optimalDistance, icon: "arrow.left.and.right")
+                    }
+
+                    HStack(spacing: 16) {
+                        SpecItem(title: "Accuracy", value: mode.accuracy, icon: "scope")
+                        SpecItem(title: "Min Detail", value: mode.minFeatureSize, icon: "magnifyingglass")
+                    }
+
+                    Divider()
+
+                    // Tips
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Tips")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+
+                        ForEach(mode.tips, id: \.self) { tip in
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "lightbulb.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.yellow)
+                                Text(tip)
+                                    .font(.caption)
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                    }
+
+                    // Guidance
+                    HStack(spacing: 8) {
+                        Image(systemName: "hand.point.up.left.fill")
+                            .foregroundColor(mode.color)
+                        Text(mode.guidanceText)
+                            .font(.caption)
+                            .italic()
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 16)
+            }
+        }
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? mode.color : Color.clear, lineWidth: 2)
+        )
+    }
+}
+
+struct SpecItem: View {
+    let title: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text(value)
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -190,4 +384,92 @@ struct ARViewContainer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {}
+}
+
+// MARK: - Device Orientation Indicator
+
+struct DeviceOrientationIndicator: View {
+    let orientation: DeviceOrientation
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: iconName)
+                .font(.caption2)
+                .foregroundColor(iconColor)
+            Text(shortLabel)
+                .font(.caption2)
+                .foregroundColor(iconColor)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(iconColor.opacity(0.2))
+        .cornerRadius(4)
+    }
+
+    private var iconName: String {
+        switch orientation {
+        case .lookingUp:
+            return "arrow.up.circle.fill"
+        case .lookingSlightlyUp:
+            return "arrow.up.right.circle"
+        case .lookingHorizontal:
+            return "arrow.right.circle"
+        case .lookingSlightlyDown:
+            return "arrow.down.right.circle"
+        case .lookingDown:
+            return "arrow.down.circle.fill"
+        }
+    }
+
+    private var shortLabel: String {
+        switch orientation {
+        case .lookingUp: return "Ceiling"
+        case .lookingSlightlyUp: return "Up"
+        case .lookingHorizontal: return "Level"
+        case .lookingSlightlyDown: return "Down"
+        case .lookingDown: return "Floor"
+        }
+    }
+
+    private var iconColor: Color {
+        switch orientation {
+        case .lookingUp:
+            return .yellow
+        case .lookingDown:
+            return .green
+        default:
+            return .blue
+        }
+    }
+}
+
+// MARK: - Surface Type Legend
+
+struct SurfaceTypeLegend: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Surfaces")
+                .font(.caption2)
+                .fontWeight(.bold)
+
+            ForEach([SurfaceType.floor, .ceiling, .ceilingProtrusion, .wall, .door, .window, .object], id: \.rawValue) { type in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(colorFor(type))
+                        .frame(width: 8, height: 8)
+                    Text(type.rawValue)
+                        .font(.caption2)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.7))
+        .foregroundColor(.white)
+        .cornerRadius(8)
+    }
+
+    private func colorFor(_ type: SurfaceType) -> Color {
+        let c = type.color
+        return Color(red: Double(c.r), green: Double(c.g), blue: Double(c.b))
+    }
 }

@@ -4,6 +4,14 @@ workflows:
     name: iOS Ad-Hoc (Quick Test)
     max_build_duration: 60
     instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+        - pattern: develop
+          include: true
 
     environment:
       vars:
@@ -12,6 +20,7 @@ workflows:
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
+        - Diawi
       xcode: latest
 
     scripts:
@@ -70,8 +79,99 @@ workflows:
             -exportOptionsPlist ~/export_options.plist \
             | xcpretty
 
+      - name: Get version info
+        script: |
+          # Extract version and build number
+          MARKETING_VERSION=$(xcodebuild -showBuildSettings -project LiDARScanner.xcodeproj -scheme "$XCODE_SCHEME" | grep MARKETING_VERSION | tr -d ' ' | cut -d= -f2)
+          BUILD_NUMBER=$(xcodebuild -showBuildSettings -project LiDARScanner.xcodeproj -scheme "$XCODE_SCHEME" | grep CURRENT_PROJECT_VERSION | tr -d ' ' | cut -d= -f2)
+          echo "Version: $MARKETING_VERSION, Build: $BUILD_NUMBER"
+          echo "MARKETING_VERSION=$MARKETING_VERSION" >> $CM_ENV
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $CM_ENV
+
+      - name: Upload to Diawi
+        script: |
+          IPA_PATH=$(find build/ipa -name "*.ipa" | head -1)
+          echo "Uploading $IPA_PATH to Diawi..."
+
+          # Upload to Diawi
+          UPLOAD_RESPONSE=$(curl -s -X POST "https://upload.diawi.com/" \
+            -F "token=$DIAWI_TOKEN" \
+            -F "file=@$IPA_PATH" \
+            -F "find_by_udid=0" \
+            -F "callback_emails=$DIAWI_EMAIL")
+
+          JOB_ID=$(echo $UPLOAD_RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin).get('job', ''))")
+          echo "Job ID: $JOB_ID"
+
+          # Wait for processing and get download URL
+          sleep 10
+          for i in {1..30}; do
+            STATUS_RESPONSE=$(curl -s "https://upload.diawi.com/status?token=$DIAWI_TOKEN&job=$JOB_ID")
+            STATUS=$(echo $STATUS_RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', 0))")
+
+            if [ "$STATUS" = "2000" ]; then
+              DIAWI_HASH=$(echo $STATUS_RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin).get('hash', ''))")
+              DIAWI_URL="https://i.diawi.com/$DIAWI_HASH"
+              echo "Diawi URL: $DIAWI_URL"
+              echo "DIAWI_URL=$DIAWI_URL" >> $CM_ENV
+              break
+            elif [ "$STATUS" = "4000" ]; then
+              echo "Diawi upload failed"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Update version.json
+        script: |
+          # Create version.json for in-app update checking
+          cat > version.json << EOF
+          {
+            "latest_version": "$MARKETING_VERSION",
+            "build_number": $BUILD_NUMBER,
+            "diawi_url": "$DIAWI_URL",
+            "release_notes": "New build available. Auto-published from Codemagic.",
+            "required": false
+          }
+          EOF
+
+          echo "Generated version.json:"
+          cat version.json
+
+          # Upload to GitHub Pages (if configured)
+          if [ -n "$GITHUB_TOKEN" ] && [ -n "$VERSION_JSON_REPO" ]; then
+            echo "Uploading version.json to GitHub..."
+
+            # Base64 encode the content
+            CONTENT_BASE64=$(base64 -i version.json | tr -d '\n')
+
+            # Get current file SHA if exists
+            SHA=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$VERSION_JSON_REPO/contents/version.json" \
+              | python3 -c "import sys, json; print(json.load(sys.stdin).get('sha', ''))" 2>/dev/null || echo "")
+
+            # Prepare update payload
+            if [ -n "$SHA" ]; then
+              PAYLOAD="{\"message\":\"Update version.json to $MARKETING_VERSION ($BUILD_NUMBER)\",\"content\":\"$CONTENT_BASE64\",\"sha\":\"$SHA\"}"
+            else
+              PAYLOAD="{\"message\":\"Add version.json for $MARKETING_VERSION ($BUILD_NUMBER)\",\"content\":\"$CONTENT_BASE64\"}"
+            fi
+
+            # Update file via GitHub API
+            curl -s -X PUT -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://api.github.com/repos/$VERSION_JSON_REPO/contents/version.json"
+
+            echo "version.json uploaded to GitHub"
+          else
+            echo "GitHub token not configured - version.json not uploaded"
+            echo "Set GITHUB_TOKEN and VERSION_JSON_REPO in Codemagic environment"
+          fi
+
     artifacts:
       - build/ipa/*.ipa
+      - version.json
 
     publishing:
       email:
@@ -86,6 +186,12 @@ workflows:
     name: iOS Build & TestFlight
     max_build_duration: 60
     instance_type: mac_mini_m2
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
 
     environment:
       vars:
@@ -94,6 +200,7 @@ workflows:
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
+        - Diawi
       xcode: latest
 
     scripts:
@@ -152,9 +259,50 @@ workflows:
             -exportOptionsPlist ~/export_options.plist \
             | xcpretty
 
+      - name: Get version info
+        script: |
+          MARKETING_VERSION=$(xcodebuild -showBuildSettings -project LiDARScanner.xcodeproj -scheme "$XCODE_SCHEME" | grep MARKETING_VERSION | tr -d ' ' | cut -d= -f2)
+          BUILD_NUMBER=$(xcodebuild -showBuildSettings -project LiDARScanner.xcodeproj -scheme "$XCODE_SCHEME" | grep CURRENT_PROJECT_VERSION | tr -d ' ' | cut -d= -f2)
+          echo "Version: $MARKETING_VERSION, Build: $BUILD_NUMBER"
+          echo "MARKETING_VERSION=$MARKETING_VERSION" >> $CM_ENV
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $CM_ENV
+
+      - name: Update version.json for TestFlight
+        script: |
+          # Create version.json pointing to TestFlight
+          cat > version.json << EOF
+          {
+            "latest_version": "$MARKETING_VERSION",
+            "build_number": $BUILD_NUMBER,
+            "diawi_url": null,
+            "testflight": true,
+            "release_notes": "New TestFlight build available!",
+            "required": false
+          }
+          EOF
+
+          if [ -n "$GITHUB_TOKEN" ] && [ -n "$VERSION_JSON_REPO" ]; then
+            CONTENT_BASE64=$(base64 -i version.json | tr -d '\n')
+            SHA=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$VERSION_JSON_REPO/contents/version.json" \
+              | python3 -c "import sys, json; print(json.load(sys.stdin).get('sha', ''))" 2>/dev/null || echo "")
+
+            if [ -n "$SHA" ]; then
+              PAYLOAD="{\"message\":\"Update version.json to $MARKETING_VERSION ($BUILD_NUMBER) - TestFlight\",\"content\":\"$CONTENT_BASE64\",\"sha\":\"$SHA\"}"
+            else
+              PAYLOAD="{\"message\":\"Add version.json for $MARKETING_VERSION ($BUILD_NUMBER)\",\"content\":\"$CONTENT_BASE64\"}"
+            fi
+
+            curl -s -X PUT -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://api.github.com/repos/$VERSION_JSON_REPO/contents/version.json"
+          fi
+
     artifacts:
       - build/ipa/*.ipa
       - build/LiDARScanner.xcarchive
+      - version.json
 
     publishing:
       app_store_connect:

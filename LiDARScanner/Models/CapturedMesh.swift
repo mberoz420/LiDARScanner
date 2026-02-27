@@ -36,9 +36,31 @@ struct CapturedMeshData {
     let faces: [[UInt32]]
     let transform: simd_float4x4
     let identifier: UUID
+    var surfaceType: SurfaceType?
+    var faceClassifications: [SurfaceType]?  // Per-face classification
 
     var hasColors: Bool {
         !colors.isEmpty && colors.count == vertices.count
+    }
+
+    init(
+        vertices: [SIMD3<Float>],
+        normals: [SIMD3<Float>],
+        colors: [VertexColor] = [],
+        faces: [[UInt32]],
+        transform: simd_float4x4,
+        identifier: UUID,
+        surfaceType: SurfaceType? = nil,
+        faceClassifications: [SurfaceType]? = nil
+    ) {
+        self.vertices = vertices
+        self.normals = normals
+        self.colors = colors
+        self.faces = faces
+        self.transform = transform
+        self.identifier = identifier
+        self.surfaceType = surfaceType
+        self.faceClassifications = faceClassifications
     }
 }
 
@@ -47,6 +69,7 @@ struct CapturedScan {
     var meshes: [CapturedMeshData] = []
     let startTime: Date
     var endTime: Date?
+    var statistics: ScanStatistics?
 
     var vertexCount: Int {
         meshes.reduce(0) { $0 + $1.vertices.count }
@@ -58,5 +81,30 @@ struct CapturedScan {
 
     var hasColors: Bool {
         meshes.first?.hasColors ?? false
+    }
+
+    // Surface type breakdown
+    var floorMeshCount: Int {
+        meshes.filter { $0.surfaceType == .floor }.count
+    }
+
+    var ceilingMeshCount: Int {
+        meshes.filter { $0.surfaceType == .ceiling }.count
+    }
+
+    var wallMeshCount: Int {
+        meshes.filter { $0.surfaceType == .wall }.count
+    }
+
+    var protrusionCount: Int {
+        statistics?.detectedProtrusions.count ?? 0
+    }
+
+    var edgeCount: Int {
+        statistics?.detectedEdges.count ?? 0
+    }
+
+    var roomSummary: String? {
+        statistics?.summary
     }
 }

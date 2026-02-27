@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct ExportView: View {
     let scan: CapturedScan
     @StateObject private var exporter = MeshExporter()
+    @StateObject private var roomSimplifier = RoomSimplifier()
     @ObservedObject var settings = AppSettings.shared
     @State private var exportedURLs: [ExportFormat: URL] = [:]
     @State private var selectedFormat: ExportFormat = .usdz
@@ -11,32 +12,130 @@ struct ExportView: View {
     @State private var showFilePicker = false
     @State private var fileToSave: URL?
     @State private var showSaveSuccess = false
+    @State private var showGoogleDriveAlert = false
+    @State private var googleDriveInstruction = ""
+    @State private var pendingShareURL: URL?
+    @State private var useSimplifiedExport = false
+    @State private var simplifiedRoom: SimplifiedRoom?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                // Scan summary
+                // Scan summary with simplification toggle
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Scan Summary")
-                        .font(.headline)
+                    HStack {
+                        Text("Export Mode")
+                            .font(.headline)
+                        Spacer()
+                    }
+
+                    // Full mesh vs Simplified toggle
+                    Picker("Export Type", selection: $useSimplifiedExport) {
+                        Text("Full Mesh").tag(false)
+                        Text("Simplified Room").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: useSimplifiedExport) { newValue in
+                        if newValue && simplifiedRoom == nil {
+                            generateSimplifiedRoom()
+                        }
+                    }
+
+                    // Stats comparison
                     HStack {
                         VStack(alignment: .leading) {
-                            Text("Vertices: \(scan.vertexCount)")
-                            Text("Faces: \(scan.faceCount)")
+                            if useSimplifiedExport, let room = simplifiedRoom {
+                                Text("Vertices: \(room.vertexCount)")
+                                    .foregroundColor(.green)
+                                Text("Walls: \(room.wallCount)")
+                            } else {
+                                Text("Vertices: \(scan.vertexCount)")
+                                Text("Faces: \(scan.faceCount)")
+                            }
                         }
                         Spacer()
                         VStack(alignment: .trailing) {
-                            Text("Meshes: \(scan.meshes.count)")
-                            if scan.hasColors {
-                                Label("With Colors", systemImage: "paintpalette.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
+                            if useSimplifiedExport, let room = simplifiedRoom {
+                                Text(String(format: "%.1f m²", room.floorArea))
+                                Text(String(format: "Height: %.2f m", room.roomHeight))
+                            } else {
+                                Text("Meshes: \(scan.meshes.count)")
+                                if scan.hasColors {
+                                    Label("With Colors", systemImage: "paintpalette.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                }
                             }
                         }
                     }
                     .font(.subheadline)
                     .foregroundColor(.secondary)
+
+                    // Reduction info
+                    if useSimplifiedExport, let room = simplifiedRoom {
+                        let reduction = 100.0 - (Float(room.vertexCount) / Float(max(1, scan.vertexCount)) * 100)
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(.green)
+                            Text(String(format: "%.0f%% reduction (%d → %d vertices)",
+                                        reduction, scan.vertexCount, room.vertexCount))
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+
+                    // Surface breakdown if available
+                    if let stats = scan.statistics {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Surfaces Detected")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+
+                            HStack(spacing: 16) {
+                                SurfaceStatItem(label: "Floor", value: String(format: "%.1fm²", stats.floorArea), color: .green)
+                                SurfaceStatItem(label: "Walls", value: String(format: "%.1fm²", stats.wallArea), color: .blue)
+                                SurfaceStatItem(label: "Ceiling", value: String(format: "%.1fm²", stats.ceilingArea), color: .yellow)
+                            }
+
+                            if let roomHeight = stats.estimatedRoomHeight {
+                                HStack {
+                                    Image(systemName: "ruler")
+                                    Text(String(format: "Room height: %.2fm", roomHeight))
+                                }
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            }
+
+                            if !stats.detectedProtrusions.isEmpty {
+                                HStack {
+                                    Image(systemName: "rectangle.split.3x1")
+                                        .foregroundColor(.orange)
+                                    Text("\(stats.detectedProtrusions.count) ceiling protrusions")
+                                }
+                                .font(.caption)
+                            }
+
+                            if !stats.detectedDoors.isEmpty {
+                                HStack {
+                                    Image(systemName: "door.left.hand.open")
+                                        .foregroundColor(.brown)
+                                    Text("\(stats.detectedDoors.count) doors detected")
+                                }
+                                .font(.caption)
+                            }
+
+                            if !stats.detectedWindows.isEmpty {
+                                HStack {
+                                    Image(systemName: "window.horizontal")
+                                        .foregroundColor(.cyan)
+                                    Text("\(stats.detectedWindows.count) windows detected")
+                                }
+                                .font(.caption)
+                            }
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
@@ -114,6 +213,16 @@ struct ExportView: View {
             .sheet(item: $shareItem) { item in
                 ShareSheet(url: item.url)
             }
+            .alert("Save to Google Drive", isPresented: $showGoogleDriveAlert) {
+                Button("Open Share Sheet") {
+                    if let url = pendingShareURL {
+                        shareItem = ShareItem(url: url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(googleDriveInstruction)
+            }
             .fileExporter(
                 isPresented: $showFilePicker,
                 document: fileToSave.map { FileDocument(url: $0) },
@@ -139,14 +248,16 @@ struct ExportView: View {
 
     private func exportAndHandle(_ format: ExportFormat) async {
         selectedFormat = format
-        if let url = await exporter.export(scan, format: format) {
+        let exportScan = getExportScan()
+        if let url = await exporter.export(exportScan, format: format) {
             exportedURLs[format] = url
             handleExportedFile(url: url)
         }
     }
 
     private func exportAllAndHandle() async {
-        let results = await exporter.exportAll(scan)
+        let exportScan = getExportScan()
+        let results = await exporter.exportAll(exportScan)
         exportedURLs = results
 
         // Handle based on settings
@@ -158,15 +269,103 @@ struct ExportView: View {
     private func handleExportedFile(url: URL, isMultiple: Bool = false, allURLs: [URL] = []) {
         switch settings.defaultDestination {
         case .shareSheet:
-            if isMultiple && allURLs.count > 1 {
-                shareItem = ShareItem(url: url) // Share first, user can share others individually
-            } else {
-                shareItem = ShareItem(url: url)
-            }
+            shareItem = ShareItem(url: url)
 
-        case .files, .googleDrive, .iCloud:
+        case .files:
             fileToSave = url
             showFilePicker = true
+
+        case .googleDrive:
+            // Google Drive: Save to app's documents then share to Google Drive via share sheet
+            // User selects "Save to Files" in share sheet, then navigates to Google Drive
+            saveToGoogleDrive(url: url)
+
+        case .iCloud:
+            // iCloud: Save directly to iCloud Drive container
+            saveToiCloud(url: url)
+        }
+    }
+
+    private func saveToGoogleDrive(url: URL) {
+        let folderName = settings.googleDriveFolderName
+
+        // Use share sheet - user should select "Save to Files" then navigate to Google Drive > folderName
+        // Show instruction as alert
+        googleDriveInstruction = "Tap 'Save to Files' → Browse → Google Drive → \(folderName)"
+        showGoogleDriveAlert = true
+        pendingShareURL = url
+    }
+
+    private func generateSimplifiedRoom() {
+        guard let stats = scan.statistics else {
+            exporter.lastError = "No room statistics available for simplification"
+            useSimplifiedExport = false
+            return
+        }
+
+        // Configure simplifier from settings
+        roomSimplifier.gridResolution = Float(settings.simplificationGridSize) / 100.0
+        roomSimplifier.minWallLength = Float(settings.minWallLength) / 100.0
+
+        simplifiedRoom = roomSimplifier.extractSimplifiedRoom(from: scan, statistics: stats)
+
+        if simplifiedRoom == nil {
+            exporter.lastError = "Could not simplify room (need floor/ceiling detection)"
+            useSimplifiedExport = false
+        }
+    }
+
+    private func getExportScan() -> CapturedScan {
+        if useSimplifiedExport, let room = simplifiedRoom {
+            // Create scan with simplified mesh
+            let simplifiedMesh = roomSimplifier.generateMesh(from: room)
+            var simplifiedScan = CapturedScan(startTime: scan.startTime)
+            simplifiedScan.meshes = [simplifiedMesh]
+            simplifiedScan.endTime = scan.endTime
+            simplifiedScan.statistics = scan.statistics
+            return simplifiedScan
+        }
+        return scan
+    }
+
+    private func saveToiCloud(url: URL) {
+        // Get iCloud container URL
+        guard let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)?
+            .appendingPathComponent("Documents") else {
+            // iCloud not available, fall back to share sheet
+            exporter.lastError = "iCloud not available. Using share sheet instead."
+            shareItem = ShareItem(url: url)
+            return
+        }
+
+        // Create Documents folder if needed
+        do {
+            if !FileManager.default.fileExists(atPath: iCloudURL.path) {
+                try FileManager.default.createDirectory(at: iCloudURL, withIntermediateDirectories: true)
+            }
+
+            // Copy file to iCloud
+            let destinationURL = iCloudURL.appendingPathComponent(url.lastPathComponent)
+
+            // Remove existing file if present
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+
+            try FileManager.default.copyItem(at: url, to: destinationURL)
+
+            withAnimation {
+                showSaveSuccess = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation {
+                    showSaveSuccess = false
+                }
+            }
+        } catch {
+            exporter.lastError = "iCloud save failed: \(error.localizedDescription)"
+            // Fall back to share sheet
+            shareItem = ShareItem(url: url)
         }
     }
 }
@@ -247,4 +446,24 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+struct SurfaceStatItem: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Circle()
+                .fill(color.opacity(0.6))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.caption)
+                .fontWeight(.medium)
+        }
+    }
 }

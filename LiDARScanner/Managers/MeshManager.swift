@@ -14,11 +14,17 @@ class MeshManager: NSObject, ObservableObject {
     @Published var faceTrackingAvailable = false
     @Published var currentMode: ScanMode = .largeObjects
     @Published var usingFrontCamera = false
+    @Published var surfaceClassificationEnabled = true
+    @Published var deviceOrientation: DeviceOrientation = .lookingHorizontal
+
+    // Surface classifier for floor/ceiling/wall detection
+    let surfaceClassifier = SurfaceClassifier()
 
     // MARK: - Properties
     private weak var arView: ARView?
     private var meshAnchors: [UUID: AnchorEntity] = [:]
     private var faceAnchors: [UUID: AnchorEntity] = [:]
+    private var surfaceTypes: [UUID: SurfaceType] = [:]  // Track surface type per mesh
     private var capturedScan: CapturedScan?
     private var lastMeshUpdateTime: Date = .distantPast
     private var currentFrame: ARFrame?
@@ -55,6 +61,20 @@ class MeshManager: NSObject, ObservableObject {
         return material
     }
 
+    private func meshMaterial(for surfaceType: SurfaceType) -> SimpleMaterial {
+        var material = SimpleMaterial()
+        let color = surfaceType.color
+        material.color = .init(tint: UIColor(
+            red: CGFloat(color.r),
+            green: CGFloat(color.g),
+            blue: CGFloat(color.b),
+            alpha: CGFloat(color.a)
+        ))
+        material.metallic = 0.0
+        material.roughness = 0.9
+        return material
+    }
+
     // MARK: - Scanning Control
     func startScanning() {
         guard let arView = arView else { return }
@@ -64,6 +84,12 @@ class MeshManager: NSObject, ObservableObject {
         capturedScan = CapturedScan(startTime: Date())
         meshUpdateCount = 0
         vertexCount = 0
+        surfaceTypes.removeAll()
+
+        // Reset surface classifier and sync with app settings
+        surfaceClassifier.reset()
+        surfaceClassificationEnabled = AppSettings.shared.surfaceClassificationEnabled
+        surfaceClassifier.classificationEnabled = surfaceClassificationEnabled
 
         // Configure based on mode
         if currentMode == .organic && faceTrackingAvailable && usingFrontCamera {
@@ -118,7 +144,15 @@ class MeshManager: NSObject, ObservableObject {
     func stopScanning() -> CapturedScan? {
         isScanning = false
         capturedScan?.endTime = Date()
-        scanStatus = "Scan complete - \(vertexCount) vertices"
+        capturedScan?.statistics = surfaceClassifier.statistics
+
+        // Build summary
+        var summary = "\(vertexCount) vertices"
+        if let roomSummary = surfaceClassifier.statistics.summary, !roomSummary.isEmpty {
+            summary += " | \(roomSummary)"
+        }
+        scanStatus = "Scan complete - \(summary)"
+
         return capturedScan
     }
 
@@ -138,16 +172,53 @@ class MeshManager: NSObject, ObservableObject {
     private func processMeshAnchor(_ anchor: ARMeshAnchor) {
         guard isScanning else { return }
 
-        // Throttle updates based on mode
+        // Classify the surface
+        let classifiedSurface = surfaceClassifier.classifyMeshAnchor(anchor)
+        surfaceTypes[anchor.identifier] = classifiedSurface.surfaceType
+
+        // Check if this surface should be filtered (room layout mode)
+        let shouldFilter = surfaceClassifier.shouldFilterSurface(classifiedSurface)
+
+        if shouldFilter {
+            // Remove visualization if it exists (object was previously visible)
+            removeMeshVisualization(for: anchor.identifier)
+            // Remove from captured scan
+            capturedScan?.meshes.removeAll { $0.identifier == anchor.identifier }
+            return
+        }
+
+        // Adaptive throttling based on surface type
+        let baseInterval = currentMode.updateInterval
+        let multiplier = surfaceClassifier.updateIntervalMultiplier(for: classifiedSurface.surfaceType)
+        let adjustedInterval = baseInterval * multiplier
+
         let now = Date()
-        guard now.timeIntervalSince(lastMeshUpdateTime) > currentMode.updateInterval else { return }
+        guard now.timeIntervalSince(lastMeshUpdateTime) > adjustedInterval else { return }
         lastMeshUpdateTime = now
 
         // Extract geometry data
         let meshData = extractMeshData(from: anchor)
 
-        // Update visualization
-        updateMeshVisualization(for: anchor)
+        // Detect protrusions if ceiling-related
+        if classifiedSurface.surfaceType == .ceilingProtrusion {
+            surfaceClassifier.detectProtrusion(
+                meshID: anchor.identifier,
+                vertices: meshData.vertices,
+                transform: anchor.transform,
+                surfaceType: classifiedSurface.surfaceType
+            )
+        }
+
+        // Detect doors/windows in wall meshes
+        if classifiedSurface.surfaceType == .wall && AppSettings.shared.detectDoorsWindows {
+            surfaceClassifier.detectOpenings(
+                in: meshData,
+                wallNormal: classifiedSurface.averageNormal
+            )
+        }
+
+        // Update visualization with surface-appropriate color
+        updateMeshVisualization(for: anchor, surfaceType: classifiedSurface.surfaceType)
 
         // Store for export
         if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
@@ -158,6 +229,18 @@ class MeshManager: NSObject, ObservableObject {
 
         vertexCount = capturedScan?.vertexCount ?? 0
         meshUpdateCount += 1
+
+        // Update status with room info
+        updateScanStatus()
+    }
+
+    private func updateScanStatus() {
+        let stats = surfaceClassifier.statistics
+        if !stats.summary.isEmpty {
+            scanStatus = "\(currentMode.guidanceText) | \(stats.summary)"
+        } else {
+            scanStatus = currentMode.guidanceText
+        }
     }
 
     private func processFaceAnchor(_ anchor: ARFaceAnchor) {
@@ -203,13 +286,27 @@ class MeshManager: NSObject, ObservableObject {
             faces.append(face)
         }
 
-        // Sample colors from camera frame
+        // Sample colors from camera frame (skip for Walls mode - geometry only)
         var colors: [VertexColor] = []
-        if let frame = currentFrame {
+        if currentMode != .walls, let frame = currentFrame {
             colors = TextureProjector.sampleColors(
                 for: vertices,
                 meshTransform: anchor.transform,
                 frame: frame
+            )
+        }
+
+        // Get surface classification
+        let surfaceType = surfaceTypes[anchor.identifier]
+
+        // Get per-face classifications if enabled
+        var faceClassifications: [SurfaceType]? = nil
+        if surfaceClassificationEnabled {
+            faceClassifications = surfaceClassifier.classifyMesh(
+                vertices: vertices,
+                normals: normals,
+                faces: faces,
+                transform: anchor.transform
             )
         }
 
@@ -219,7 +316,9 @@ class MeshManager: NSObject, ObservableObject {
             colors: colors,
             faces: faces,
             transform: anchor.transform,
-            identifier: anchor.identifier
+            identifier: anchor.identifier,
+            surfaceType: surfaceType,
+            faceClassifications: faceClassifications
         )
     }
 
@@ -276,12 +375,18 @@ class MeshManager: NSObject, ObservableObject {
         )
     }
 
-    private func updateMeshVisualization(for anchor: ARMeshAnchor) {
+    private func updateMeshVisualization(for anchor: ARMeshAnchor, surfaceType: SurfaceType? = nil) {
         guard let arView = arView else { return }
 
         guard let meshResource = try? MeshResource.generate(from: anchor.geometry) else { return }
 
-        let material = meshMaterial(for: currentMode)
+        // Use surface-based color if classification is enabled, otherwise mode color
+        let material: SimpleMaterial
+        if surfaceClassificationEnabled, let type = surfaceType {
+            material = meshMaterial(for: type)
+        } else {
+            material = meshMaterial(for: currentMode)
+        }
 
         if let existingAnchor = meshAnchors[anchor.identifier] {
             if let modelEntity = existingAnchor.children.first as? ModelEntity {
@@ -333,6 +438,10 @@ extension MeshManager: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         Task { @MainActor in
             currentFrame = frame
+
+            // Update device orientation from gyroscope/accelerometer
+            surfaceClassifier.updateDeviceOrientation(from: frame)
+            deviceOrientation = surfaceClassifier.deviceOrientation
         }
     }
 

@@ -74,9 +74,111 @@ enum ScanMode: String, CaseIterable, Identifiable {
         case .largeObjects:
             return "Circle around the object slowly"
         case .smallObjects:
-            return "Hold steady, move very slowly"
+            return "Hold steady 15-30cm away, move very slowly"
         case .organic:
             return "Keep subject still, move around them"
+        }
+    }
+
+    // Recommended object size range
+    var sizeRange: String {
+        switch self {
+        case .fast:
+            return "Any size"
+        case .walls:
+            return "Rooms 2m - 20m"
+        case .largeObjects:
+            return "50cm - 5m"
+        case .smallObjects:
+            return "2cm - 15cm"
+        case .organic:
+            return "30cm - 2m"
+        }
+    }
+
+    // Optimal scanning distance
+    var optimalDistance: String {
+        switch self {
+        case .fast:
+            return "1 - 5m"
+        case .walls:
+            return "1 - 5m"
+        case .largeObjects:
+            return "0.5 - 3m"
+        case .smallObjects:
+            return "15 - 30cm"
+        case .organic:
+            return "0.5 - 2m"
+        }
+    }
+
+    // Expected accuracy
+    var accuracy: String {
+        switch self {
+        case .fast:
+            return "±3-5cm"
+        case .walls:
+            return "±2-3cm"
+        case .largeObjects:
+            return "±1-2cm"
+        case .smallObjects:
+            return "±0.5-1cm"
+        case .organic:
+            return "±0.5-1cm (face), ±1-2cm (body)"
+        }
+    }
+
+    // Minimum detectable feature size
+    var minFeatureSize: String {
+        switch self {
+        case .fast:
+            return "~5cm"
+        case .walls:
+            return "~3cm"
+        case .largeObjects:
+            return "~2cm"
+        case .smallObjects:
+            return "~1cm"
+        case .organic:
+            return "~0.5cm (face)"
+        }
+    }
+
+    // Tips for best results
+    var tips: [String] {
+        switch self {
+        case .fast:
+            return [
+                "Good for quick area overview",
+                "Move at walking pace",
+                "Don't expect fine details"
+            ]
+        case .walls:
+            return [
+                "Start in a corner",
+                "Pan slowly along walls",
+                "Include ceiling and floor edges"
+            ]
+        case .largeObjects:
+            return [
+                "Walk slowly around the object",
+                "Maintain consistent distance",
+                "Overlap coverage areas"
+            ]
+        case .smallObjects:
+            return [
+                "Objects must be >2cm to capture",
+                "Hold device very steady",
+                "Good lighting helps",
+                "Place object on contrasting surface"
+            ]
+        case .organic:
+            return [
+                "Subject must stay completely still",
+                "Use front camera for face detail",
+                "Use back camera for full body",
+                "Multiple slow passes improve quality"
+            ]
         }
     }
 }

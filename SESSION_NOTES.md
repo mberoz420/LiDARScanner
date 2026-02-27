@@ -52,6 +52,51 @@
 - `LiDARScanner/Info.plist` - App configuration
 - `LiDARScanner/Assets.xcassets/` - App icons
 
+## Auto-Publish & Update Alerts Setup
+
+### Triggers
+- **Ad-Hoc (Diawi)**: Auto-triggers on push to `main` or `develop` branches
+- **TestFlight**: Auto-triggers on version tags (e.g., `v1.0.0`, `v1.1.0`)
+
+### Required: Codemagic Environment Variables
+
+**Add a new group called `Diawi`** with these variables:
+
+| Variable | Description |
+|----------|-------------|
+| `DIAWI_TOKEN` | Your Diawi API token (get from https://dashboard.diawi.com/profile/api) |
+| `DIAWI_EMAIL` | Email to receive Diawi notifications |
+| `GITHUB_TOKEN` | GitHub Personal Access Token with `repo` scope |
+| `VERSION_JSON_REPO` | GitHub repo for hosting version.json (e.g., `mberoz420/LiDARScanner`) |
+
+### How to Get Diawi Token
+1. Go to https://www.diawi.com and sign up/login
+2. Go to Profile → API → Generate API Token
+3. Copy the token to Codemagic
+
+### How to Set Up GitHub Token
+1. Go to https://github.com/settings/tokens
+2. Generate new token (classic) with `repo` scope
+3. Copy to Codemagic as `GITHUB_TOKEN`
+4. Set `VERSION_JSON_REPO` to `mberoz420/LiDARScanner`
+
+### Configure In-App Update URL
+After first successful build, your version.json will be at:
+```
+https://raw.githubusercontent.com/mberoz420/LiDARScanner/main/version.json
+```
+
+1. Open the app → Settings → Updates
+2. Enter the URL above in "Version Check URL"
+3. Enable "Auto Check for Updates"
+
+### How It Works
+1. Push to `main` → Codemagic builds & uploads to Diawi
+2. Diawi URL is captured and written to `version.json`
+3. `version.json` is pushed to GitHub repo
+4. App checks `version.json` and shows update alert if newer version available
+5. User taps "Download" → Opens Diawi install page
+
 ## If Build Fails
 - Check Codemagic build logs for specific error
 - Common issues: code signing, provisioning profile mismatch
