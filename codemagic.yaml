@@ -5,16 +5,13 @@ workflows:
     instance_type: mac_mini_m2
 
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.lidarscanner.LiDarScanner
       vars:
-        XCODE_WORKSPACE: "LiDARScanner.xcodeproj/project.xcworkspace"
         XCODE_SCHEME: "LiDARScanner"
+        BUNDLE_ID: "com.lidarscanner.LiDarScanner"
+        CERTIFICATE_PASSWORD: "codemagic123"
       groups:
         - app_store
       xcode: 15.4
-      cocoapods: default
 
     triggering:
       events:
@@ -32,23 +29,36 @@ workflows:
         script: |
           xcodegen generate
 
-      - name: Set up code signing
+      - name: Set up keychain and certificate
         script: |
-          xcode-project use-profiles
+          # Create keychain
+          keychain initialize
+
+          # Decode and import certificate
+          echo $CM_CERTIFICATE | base64 --decode > /tmp/distribution.p12
+          keychain add-certificates --certificate /tmp/distribution.p12 --certificate-password "$CERTIFICATE_PASSWORD"
+
+          # Decode and install provisioning profile
+          echo $CM_PROVISIONING_PROFILE | base64 --decode > /tmp/profile.mobileprovision
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp /tmp/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Set up code signing settings
+        script: |
+          xcode-project use-profiles --project "LiDARScanner.xcodeproj"
 
       - name: Increment build number
         script: |
-          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_CONNECT_ISSUER_ID" || echo "0")
+          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID" || echo "0")
           NEW_BUILD=$((LATEST_BUILD + 1))
           echo "Setting build number to $NEW_BUILD"
-          cd $CM_BUILD_DIR
           agvtool new-version -all $NEW_BUILD
 
       - name: Build iOS app
         script: |
           xcode-project build-ipa \
             --project "LiDARScanner.xcodeproj" \
-            --scheme "LiDARScanner" \
+            --scheme "$XCODE_SCHEME" \
             --config "Release"
 
     artifacts:
@@ -62,11 +72,9 @@ workflows:
         key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true
-        beta_groups:
-          - "Internal Testers"
       email:
         recipients:
-          - your-email@example.com  # Update this
+          - mberoz61@gmail.com
         notify:
           success: true
           failure: true
