@@ -26,36 +26,31 @@ workflows:
         script: |
           keychain initialize
 
-          # Save API key to file
+          # Save API key to file (preserve newlines)
           mkdir -p ~/.private_keys
-          echo -n "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.private_keys/AuthKey.p8
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.private_keys/AuthKey.p8
 
           # Show debug info
           echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
           echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
-          cat ~/.private_keys/AuthKey.p8 | head -1
-          cat ~/.private_keys/AuthKey.p8 | tail -1
-          wc -l ~/.private_keys/AuthKey.p8
+          echo "=== Key file debug ==="
+          echo "Line count: $(wc -l < ~/.private_keys/AuthKey.p8)"
+          echo "Char count: $(wc -c < ~/.private_keys/AuthKey.p8)"
+          head -1 ~/.private_keys/AuthKey.p8
+          tail -1 ~/.private_keys/AuthKey.p8
+          echo "======================"
 
           # Generate RSA key for new certificate
           openssl genrsa -out ~/.private_keys/cert_key.pem 2048
+          echo "RSA key generated: $(wc -c < ~/.private_keys/cert_key.pem) bytes"
 
-          # Create certificate and fetch signing files
-          app-store-connect certificates create \
-            --type DISTRIBUTION \
-            --certificate-key ~/.private_keys/cert_key.pem \
-            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
-            --save || echo "Certificate might already exist"
-
-          # Fetch signing files
+          # Fetch signing files (will create cert if needed)
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
-            --certificate-key ~/.private_keys/cert_key.pem \
+            --certificate-key "@file:$HOME/.private_keys/cert_key.pem" \
             --create
 
           keychain add-certificates
