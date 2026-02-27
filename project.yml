@@ -2,7 +2,7 @@ name: LiDARScanner
 options:
   bundleIdPrefix: com.lidarscanner
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
 
 settings:
   base:
