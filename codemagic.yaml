@@ -8,9 +8,9 @@ workflows:
       events:
         - push
       branch_patterns:
-        - pattern: main
+        - pattern: master
           include: true
-        - pattern: develop
+        - pattern: main
           include: true
 
     environment:
