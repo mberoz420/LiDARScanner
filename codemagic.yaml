@@ -31,8 +31,8 @@ workflows:
           mkdir -p ~/.private_keys
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
 
-          # Generate RSA key for certificate
-          openssl genrsa -out ~/.private_keys/cert_key.pem 2048
+          # Use stored certificate key (consistent across builds)
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 --decode > ~/.private_keys/cert_key.pem
 
           # Fetch signing files for ad-hoc
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
@@ -113,8 +113,8 @@ workflows:
           mkdir -p ~/.private_keys
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
 
-          # Generate RSA key for certificate
-          openssl genrsa -out ~/.private_keys/cert_key.pem 2048
+          # Use stored certificate key (consistent across builds)
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 --decode > ~/.private_keys/cert_key.pem
 
           # Fetch signing files for App Store
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
