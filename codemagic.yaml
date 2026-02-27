@@ -15,12 +15,13 @@ workflows:
         - Test
       xcode: latest
 
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: master
-          include: true
+    # triggering disabled - manual builds only
+    # triggering:
+    #   events:
+    #     - push
+    #   branch_patterns:
+    #     - pattern: master
+    #       include: true
 
     scripts:
       - name: Install XcodeGen
