@@ -30,9 +30,11 @@ workflows:
           mkdir -p ~/.private_keys
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
 
-          # Show debug info
-          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
-          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
+          # Show debug info (partial values for verification)
+          echo "Key ID first 4 chars: ${APP_STORE_CONNECT_KEY_IDENTIFIER:0:4}"
+          echo "Key ID length: ${#APP_STORE_CONNECT_KEY_IDENTIFIER}"
+          echo "Issuer ID first 8 chars: ${APP_STORE_CONNECT_ISSUER_ID:0:8}"
+          echo "Issuer ID length: ${#APP_STORE_CONNECT_ISSUER_ID}"
           echo "=== Key file debug ==="
           echo "Line count: $(wc -l < ~/.private_keys/AuthKey.p8)"
           echo "Char count: $(wc -c < ~/.private_keys/AuthKey.p8)"
