@@ -20,7 +20,6 @@ workflows:
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
-        - Diawi
       xcode: latest
 
     scripts:
@@ -200,7 +199,6 @@ workflows:
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
-        - Diawi
       xcode: latest
 
     scripts:
