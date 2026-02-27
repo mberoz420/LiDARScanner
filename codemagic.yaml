@@ -11,8 +11,6 @@ workflows:
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
-        - lidar
-        - Test
       xcode: latest
 
     # triggering disabled - manual builds only
@@ -37,7 +35,13 @@ workflows:
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
-          echo "Created key file at $KEY_FILE"
+          echo "=== DEBUG: Key file contents ==="
+          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
+          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
+          echo "Key file size: $(wc -c < "$KEY_FILE") bytes"
+          echo "First line: $(head -1 "$KEY_FILE")"
+          echo "Last line: $(tail -1 "$KEY_FILE")"
+          echo "================================"
 
       - name: Fetch signing files
         script: |
