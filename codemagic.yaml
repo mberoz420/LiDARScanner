@@ -13,9 +13,6 @@ workflows:
         - App_Store
       xcode: latest
 
-    integrations:
-      app_store_connect: App_Store
-
     triggering:
       events:
         - push
@@ -32,10 +29,20 @@ workflows:
         script: |
           xcodegen generate
 
-      - name: Set up code signing
+      - name: Set up App Store Connect
+        script: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
+
+      - name: Fetch signing files
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8" \
+            --create
           keychain add-certificates
 
       - name: Set up provisioning profile
@@ -44,7 +51,11 @@ workflows:
 
       - name: Increment build number
         script: |
-          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID" 2>/dev/null || echo "0")
+          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID" \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8" \
+            2>/dev/null || echo "0")
           NEW_BUILD=$((LATEST_BUILD + 1))
           echo "Setting build number to $NEW_BUILD"
           agvtool new-version -all $NEW_BUILD || true
@@ -57,7 +68,6 @@ workflows:
             -configuration Release \
             -archivePath build/LiDARScanner.xcarchive \
             -destination "generic/platform=iOS" \
-            CODE_SIGN_STYLE="Manual" \
             | xcpretty
 
       - name: Export IPA
