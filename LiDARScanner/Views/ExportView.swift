@@ -1,11 +1,16 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ExportView: View {
     let scan: CapturedScan
     @StateObject private var exporter = MeshExporter()
+    @ObservedObject var settings = AppSettings.shared
     @State private var exportedURLs: [ExportFormat: URL] = [:]
     @State private var selectedFormat: ExportFormat = .usdz
     @State private var shareItem: ShareItem?
+    @State private var showFilePicker = false
+    @State private var fileToSave: URL?
+    @State private var showSaveSuccess = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -23,6 +28,11 @@ struct ExportView: View {
                         Spacer()
                         VStack(alignment: .trailing) {
                             Text("Meshes: \(scan.meshes.count)")
+                            if scan.hasColors {
+                                Label("With Colors", systemImage: "paintpalette.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
                         }
                     }
                     .font(.subheadline)
@@ -35,8 +45,14 @@ struct ExportView: View {
 
                 // Export format selection
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Export Format")
-                        .font(.headline)
+                    HStack {
+                        Text("Export Format")
+                            .font(.headline)
+                        Spacer()
+                        Text(settings.defaultDestination.rawValue)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
                     ForEach(ExportFormat.allCases) { format in
                         ExportFormatRow(
@@ -44,10 +60,10 @@ struct ExportView: View {
                             isExported: exportedURLs[format] != nil,
                             isExporting: exporter.isExporting && selectedFormat == format
                         ) {
-                            Task { await exportSingle(format) }
+                            Task { await exportAndHandle(format) }
                         } onShare: {
                             if let url = exportedURLs[format] {
-                                shareItem = ShareItem(url: url)
+                                handleExportedFile(url: url)
                             }
                         }
                     }
@@ -57,7 +73,7 @@ struct ExportView: View {
                 .cornerRadius(10)
 
                 // Export all button
-                Button(action: { Task { await exportAllFormats() } }) {
+                Button(action: { Task { await exportAllAndHandle() } }) {
                     HStack {
                         if exporter.isExporting {
                             ProgressView()
@@ -79,6 +95,12 @@ struct ExportView: View {
                         .font(.caption)
                 }
 
+                if showSaveSuccess {
+                    Label("Saved successfully!", systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .transition(.opacity)
+                }
+
                 Spacer()
             }
             .padding()
@@ -92,19 +114,79 @@ struct ExportView: View {
             .sheet(item: $shareItem) { item in
                 ShareSheet(url: item.url)
             }
+            .fileExporter(
+                isPresented: $showFilePicker,
+                document: fileToSave.map { FileDocument(url: $0) },
+                contentType: .data,
+                defaultFilename: fileToSave?.lastPathComponent ?? "scan"
+            ) { result in
+                switch result {
+                case .success:
+                    withAnimation {
+                        showSaveSuccess = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation {
+                            showSaveSuccess = false
+                        }
+                    }
+                case .failure(let error):
+                    exporter.lastError = error.localizedDescription
+                }
+            }
         }
     }
 
-    private func exportSingle(_ format: ExportFormat) async {
+    private func exportAndHandle(_ format: ExportFormat) async {
         selectedFormat = format
         if let url = await exporter.export(scan, format: format) {
             exportedURLs[format] = url
+            handleExportedFile(url: url)
         }
     }
 
-    private func exportAllFormats() async {
+    private func exportAllAndHandle() async {
         let results = await exporter.exportAll(scan)
         exportedURLs = results
+
+        // Handle based on settings
+        if let firstURL = results.values.first {
+            handleExportedFile(url: firstURL, isMultiple: true, allURLs: Array(results.values))
+        }
+    }
+
+    private func handleExportedFile(url: URL, isMultiple: Bool = false, allURLs: [URL] = []) {
+        switch settings.defaultDestination {
+        case .shareSheet:
+            if isMultiple && allURLs.count > 1 {
+                shareItem = ShareItem(url: url) // Share first, user can share others individually
+            } else {
+                shareItem = ShareItem(url: url)
+            }
+
+        case .files, .googleDrive, .iCloud:
+            fileToSave = url
+            showFilePicker = true
+        }
+    }
+}
+
+// File document wrapper for file exporter
+struct FileDocument: SwiftUI.FileDocument {
+    static var readableContentTypes: [UTType] { [.data] }
+
+    let url: URL
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        url = URL(fileURLWithPath: "")
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        try FileWrapper(url: url)
     }
 }
 
@@ -150,7 +232,7 @@ struct ExportFormatRow: View {
         case .usdz:
             return "Apple 3D format"
         case .ply:
-            return "Point cloud format"
+            return "Point cloud with colors"
         case .obj:
             return "Universal 3D mesh"
         }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var versionTracker = VersionTracker()
+    @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
@@ -42,14 +43,28 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 40)
 
+                // Settings button
+                Button(action: { showSettings = true }) {
+                    HStack {
+                        Image(systemName: "gear")
+                        Text("Settings")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.blue)
+                }
+                .padding(.top, 10)
+
                 Spacer()
-                    .frame(height: 60)
+                    .frame(height: 40)
             }
         }
         .sheet(isPresented: $versionTracker.shouldShowWhatsNew, onDismiss: {
             versionTracker.markAsSeen()
         }) {
             WhatsNewView(version: versionTracker.fullVersion)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
     }
 }
