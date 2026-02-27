@@ -47,7 +47,30 @@ workflows:
           openssl genrsa -out ~/.private_keys/cert_key.pem 2048
           echo "RSA key generated: $(wc -c < ~/.private_keys/cert_key.pem) bytes"
 
-          # Fetch signing files (will create cert if needed)
+          # List and revoke existing distribution certificates
+          echo "Listing existing certificates..."
+          app-store-connect certificates list \
+            --type DISTRIBUTION \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.private_keys/AuthKey.p8" || true
+
+          # Revoke old certificates to make room for new one
+          echo "Revoking old certificates..."
+          for cert_id in $(app-store-connect certificates list \
+            --type DISTRIBUTION \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
+            --json 2>/dev/null | jq -r '.[].id' 2>/dev/null); do
+            echo "Revoking certificate: $cert_id"
+            app-store-connect certificates revoke "$cert_id" \
+              --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+              --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+              --private-key "@file:$HOME/.private_keys/AuthKey.p8" || true
+          done
+
+          # Fetch signing files (will create new cert)
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
