@@ -32,47 +32,43 @@ workflows:
 
       - name: Set up keychain and certificate
         script: |
-          # Create keychain
           keychain initialize
 
-          # Decode and import certificate
           echo $CM_CERTIFICATE | base64 --decode > /tmp/distribution.p12
           keychain add-certificates --certificate /tmp/distribution.p12 --certificate-password "$CERTIFICATE_PASSWORD"
 
-          # Decode and install provisioning profile
-          echo $CM_PROVISIONING_PROFILE | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          PROFILE_PATH=~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+          echo $CM_PROVISIONING_PROFILE | base64 --decode > "$PROFILE_PATH"
 
-      - name: Get provisioning profile UUID
-        script: |
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision))
-          echo "Profile UUID: $PROFILE_UUID"
+          # Extract UUID
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i "$PROFILE_PATH"))
           echo "PROVISIONING_PROFILE_UUID=$PROFILE_UUID" >> $CM_ENV
+          echo "Using profile UUID: $PROFILE_UUID"
 
       - name: Increment build number
         script: |
-          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID" || echo "0")
+          LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$BUNDLE_ID" 2>/dev/null || echo "0")
           NEW_BUILD=$((LATEST_BUILD + 1))
           echo "Setting build number to $NEW_BUILD"
-          cd $CM_BUILD_DIR
-          agvtool new-version -all $NEW_BUILD
+          agvtool new-version -all $NEW_BUILD || true
 
-      - name: Build iOS app
+      - name: Build archive
         script: |
-          xcodebuild -project "LiDARScanner.xcodeproj" \
+          xcodebuild archive \
+            -project "LiDARScanner.xcodeproj" \
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
             -archivePath build/LiDARScanner.xcarchive \
             -destination "generic/platform=iOS" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" \
-            clean archive
+            CODE_SIGN_STYLE="Manual" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" | xcpretty
 
       - name: Export IPA
         script: |
-          cat > exportOptions.plist <<EOF
+          cat > exportOptions.plist << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -81,12 +77,12 @@ workflows:
               <string>app-store</string>
               <key>teamID</key>
               <string>$TEAM_ID</string>
-              <key>uploadSymbols</key>
-              <true/>
+              <key>signingStyle</key>
+              <string>manual</string>
               <key>provisioningProfiles</key>
               <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>LiDARScanner AppStore</string>
+                  <key>com.lidarscanner.LiDarScanner</key>
+                  <string>$PROVISIONING_PROFILE_UUID</string>
               </dict>
           </dict>
           </plist>
@@ -95,11 +91,10 @@ workflows:
           xcodebuild -exportArchive \
             -archivePath build/LiDARScanner.xcarchive \
             -exportPath build/ipa \
-            -exportOptionsPlist exportOptions.plist
+            -exportOptionsPlist exportOptions.plist | xcpretty
 
     artifacts:
       - build/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
       - build/LiDARScanner.xcarchive
 
     publishing:
