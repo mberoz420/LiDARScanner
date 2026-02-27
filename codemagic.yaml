@@ -26,9 +26,9 @@ workflows:
         script: |
           keychain initialize
 
-          # Save API key to file and clean up Windows line endings
+          # Save API key to file and clean up whitespace
           mkdir -p ~/.private_keys
-          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
 
           # Show debug info
           echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
