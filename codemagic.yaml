@@ -11,7 +11,7 @@ workflows:
         CERTIFICATE_PASSWORD: "codemagic123"
       groups:
         - app_store
-      xcode: 15.2
+      xcode: latest
 
     triggering:
       events:
