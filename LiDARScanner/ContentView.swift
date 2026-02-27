@@ -32,7 +32,7 @@ struct ContentView: View {
 
                         // Update status indicator
                         if let update = updateChecker.updateAvailable {
-                            Button(action: { updateChecker.showUpdateAlert = true }) {
+                            Button(action: { updateChecker.showUpdateProgress = true }) {
                                 HStack(spacing: 4) {
                                     Image(systemName: "arrow.down.circle.fill")
                                     Text("v\(update.newVersion) Available")
@@ -172,6 +172,10 @@ struct ContentView: View {
         .sheet(isPresented: $showTextureOverlay) {
             TextureOverlayView()
         }
+        .sheet(isPresented: $updateChecker.showUpdateProgress) {
+            UpdateProgressView(updateChecker: updateChecker)
+        }
+        .updateCompleteAlert(isPresented: $updateChecker.showUpdateComplete, version: versionTracker.fullVersion)
         .checkForUpdates(using: updateChecker)
         .task {
             await updateChecker.checkForUpdates()

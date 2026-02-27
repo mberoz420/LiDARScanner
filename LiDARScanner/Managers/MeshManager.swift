@@ -2,6 +2,7 @@ import Foundation
 import ARKit
 import RealityKit
 import Combine
+import UIKit
 
 @MainActor
 class MeshManager: NSObject, ObservableObject {
@@ -17,8 +18,16 @@ class MeshManager: NSObject, ObservableObject {
     @Published var surfaceClassificationEnabled = true
     @Published var deviceOrientation: DeviceOrientation = .lookingHorizontal
 
+    // MARK: - Guided Room Scanning
+    @Published var currentPhase: RoomScanPhase = .ready
+    @Published var phaseProgress: Double = 0
+    @Published var useEdgeVisualization = false  // Edge lines instead of mesh overlay
+
     // Surface classifier for floor/ceiling/wall detection
     let surfaceClassifier = SurfaceClassifier()
+
+    // Edge visualizer for room mode
+    let edgeVisualizer = EdgeVisualizer()
 
     // MARK: - Properties
     private weak var arView: ARView?
@@ -39,6 +48,9 @@ class MeshManager: NSObject, ObservableObject {
 
         // Check face tracking availability (TrueDepth camera)
         faceTrackingAvailable = ARFaceTrackingConfiguration.isSupported
+
+        // Setup edge visualizer
+        edgeVisualizer.setup(arView: arView)
 
         if lidarAvailable {
             scanStatus = "LiDAR ready"
@@ -81,6 +93,7 @@ class MeshManager: NSObject, ObservableObject {
 
         // Clear previous scan
         clearMeshVisualization()
+        edgeVisualizer.clearEdges()
         capturedScan = CapturedScan(startTime: Date())
         meshUpdateCount = 0
         vertexCount = 0
@@ -91,6 +104,17 @@ class MeshManager: NSObject, ObservableObject {
         surfaceClassificationEnabled = AppSettings.shared.surfaceClassificationEnabled
         surfaceClassifier.classificationEnabled = surfaceClassificationEnabled
 
+        // Setup guided scanning for room mode
+        if currentMode == .walls {
+            currentPhase = .floor
+            phaseProgress = 0
+            useEdgeVisualization = true
+            scanStatus = currentPhase.instruction
+        } else {
+            currentPhase = .ready
+            useEdgeVisualization = false
+        }
+
         // Configure based on mode
         if currentMode == .organic && faceTrackingAvailable && usingFrontCamera {
             startFaceTracking(arView: arView)
@@ -99,7 +123,9 @@ class MeshManager: NSObject, ObservableObject {
         }
 
         isScanning = true
-        scanStatus = currentMode.guidanceText
+        if currentMode != .walls {
+            scanStatus = currentMode.guidanceText
+        }
     }
 
     private func startLiDARTracking(arView: ARView) {
@@ -236,11 +262,95 @@ class MeshManager: NSObject, ObservableObject {
 
     private func updateScanStatus() {
         let stats = surfaceClassifier.statistics
+
+        // Handle guided room scanning
+        if currentMode == .walls && useEdgeVisualization {
+            updateRoomScanPhase()
+            return
+        }
+
         if !stats.summary.isEmpty {
             scanStatus = "\(currentMode.guidanceText) | \(stats.summary)"
         } else {
             scanStatus = currentMode.guidanceText
         }
+    }
+
+    // MARK: - Guided Room Scanning
+
+    private func updateRoomScanPhase() {
+        let stats = surfaceClassifier.statistics
+
+        switch currentPhase {
+        case .ready:
+            scanStatus = currentPhase.instruction
+            phaseProgress = 0
+
+        case .floor:
+            phaseProgress = Double(stats.floorConfidence)
+            if stats.floorHeight != nil {
+                scanStatus = String(format: "Floor detected at %.2fm", stats.floorHeight!)
+            } else {
+                scanStatus = currentPhase.instruction
+            }
+            // Auto-advance when floor is detected with high confidence
+            if stats.floorConfidence >= Float(currentPhase.completionThreshold) {
+                advancePhase()
+            }
+
+        case .ceiling:
+            phaseProgress = Double(stats.ceilingConfidence)
+            if let height = stats.estimatedRoomHeight {
+                scanStatus = String(format: "Room height: %.2fm", height)
+            } else if stats.ceilingHeight != nil {
+                scanStatus = "Ceiling detected - measuring height..."
+            } else {
+                scanStatus = currentPhase.instruction
+            }
+            // Auto-advance when ceiling is detected
+            if stats.ceilingConfidence >= Float(currentPhase.completionThreshold) {
+                advancePhase()
+            }
+
+        case .walls:
+            phaseProgress = Double(stats.wallCoveragePercent)
+            let corners = stats.cornerCount
+            scanStatus = "\(corners) corners detected | Turn to scan more"
+            // Update edge visualization
+            edgeVisualizer.updateEdges(stats.detectedEdges)
+            // Check for completion
+            if stats.wallCoveragePercent >= Float(currentPhase.completionThreshold) {
+                advancePhase()
+            }
+
+        case .complete:
+            phaseProgress = 1.0
+            if let dims = stats.roomDimensions {
+                scanStatus = String(format: "Room: %.1fm x %.1fm x %.1fm",
+                                    dims.width, dims.depth, dims.height)
+            } else {
+                scanStatus = "Room captured!"
+            }
+        }
+    }
+
+    /// Advance to the next phase
+    func advancePhase() {
+        guard let next = currentPhase.nextPhase else { return }
+        currentPhase = next
+        phaseProgress = 0
+
+        // Play haptic feedback
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+
+        // Update status
+        scanStatus = currentPhase.instruction
+    }
+
+    /// Skip current phase (manual override)
+    func skipPhase() {
+        advancePhase()
     }
 
     private func processFaceAnchor(_ anchor: ARFaceAnchor) {
@@ -377,6 +487,12 @@ class MeshManager: NSObject, ObservableObject {
 
     private func updateMeshVisualization(for anchor: ARMeshAnchor, surfaceType: SurfaceType? = nil) {
         guard let arView = arView else { return }
+
+        // Skip mesh overlay when using edge visualization (room mode)
+        if useEdgeVisualization {
+            // Don't render mesh surfaces - only edges are shown
+            return
+        }
 
         guard let meshResource = try? MeshResource.generate(from: anchor.geometry) else { return }
 

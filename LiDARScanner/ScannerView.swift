@@ -92,8 +92,18 @@ struct ScannerView: View {
 
                 Spacer()
 
-                // Surface type legend (when classification is enabled)
-                if meshManager.isScanning && meshManager.surfaceClassificationEnabled && meshManager.currentMode == .walls {
+                // Guided room scanning UI
+                if meshManager.isScanning && meshManager.currentMode == .walls && meshManager.useEdgeVisualization {
+                    RoomScanPhaseIndicator(
+                        phase: meshManager.currentPhase,
+                        progress: meshManager.phaseProgress,
+                        stats: meshManager.surfaceClassifier.statistics,
+                        onSkip: { meshManager.skipPhase() }
+                    )
+                    .padding(.horizontal)
+                }
+                // Surface type legend (when classification is enabled but NOT in guided mode)
+                else if meshManager.isScanning && meshManager.surfaceClassificationEnabled && meshManager.currentMode == .walls && !meshManager.useEdgeVisualization {
                     HStack {
                         SurfaceTypeLegend()
                         Spacer()
@@ -498,5 +508,191 @@ struct QuickModeButton: View {
                     .stroke(isSelected ? mode.color : Color.clear, lineWidth: 2)
             )
         }
+    }
+}
+
+// MARK: - Room Scan Phase Indicator
+
+struct RoomScanPhaseIndicator: View {
+    let phase: RoomScanPhase
+    let progress: Double
+    let stats: ScanStatistics
+    let onSkip: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            // Phase progress steps
+            HStack(spacing: 4) {
+                ForEach(RoomScanPhase.allCases.filter { $0 != .ready }, id: \.id) { p in
+                    PhaseStep(
+                        phase: p,
+                        isActive: p == phase,
+                        isComplete: phaseIndex(p) < phaseIndex(phase)
+                    )
+                }
+            }
+
+            // Current phase info
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: phase.icon)
+                            .foregroundColor(phase.color)
+                        Text(phase.rawValue)
+                            .font(.subheadline)
+                            .fontWeight(.bold)
+                    }
+
+                    Text(phase.detailedHint)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+
+                    // Progress bar
+                    if phase != .complete && phase != .ready {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.2))
+                                Rectangle()
+                                    .fill(phase.color)
+                                    .frame(width: geo.size.width * CGFloat(progress))
+                            }
+                        }
+                        .frame(height: 4)
+                        .cornerRadius(2)
+                    }
+                }
+
+                Spacer()
+
+                // Skip button (except for complete phase)
+                if phase != .complete && phase != .ready {
+                    Button(action: onSkip) {
+                        Text("Skip")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.gray.opacity(0.5))
+                            .cornerRadius(12)
+                    }
+                }
+            }
+
+            // Room dimensions (when complete)
+            if phase == .complete, let dims = stats.roomDimensions {
+                HStack(spacing: 16) {
+                    DimensionLabel(label: "Width", value: dims.width)
+                    DimensionLabel(label: "Depth", value: dims.depth)
+                    DimensionLabel(label: "Height", value: dims.height)
+                }
+                .padding(.top, 4)
+            }
+
+            // Stats summary
+            if phase == .walls || phase == .complete {
+                HStack(spacing: 16) {
+                    StatBadge(icon: "square.dashed", value: "\(stats.cornerCount)", label: "Corners")
+                    if !stats.detectedDoors.isEmpty {
+                        StatBadge(icon: "door.left.hand.open", value: "\(stats.detectedDoors.count)", label: "Doors")
+                    }
+                    if !stats.detectedWindows.isEmpty {
+                        StatBadge(icon: "window.horizontal", value: "\(stats.detectedWindows.count)", label: "Windows")
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.black.opacity(0.8))
+        .foregroundColor(.white)
+        .cornerRadius(12)
+    }
+
+    private func phaseIndex(_ p: RoomScanPhase) -> Int {
+        switch p {
+        case .ready: return 0
+        case .floor: return 1
+        case .ceiling: return 2
+        case .walls: return 3
+        case .complete: return 4
+        }
+    }
+}
+
+struct PhaseStep: View {
+    let phase: RoomScanPhase
+    let isActive: Bool
+    let isComplete: Bool
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ZStack {
+                Circle()
+                    .fill(isComplete ? Color.green : (isActive ? phase.color : Color.gray.opacity(0.3)))
+                    .frame(width: 24, height: 24)
+
+                if isComplete {
+                    Image(systemName: "checkmark")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                } else {
+                    Image(systemName: phase.icon)
+                        .font(.caption2)
+                }
+            }
+            .foregroundColor(.white)
+
+            Text(shortLabel)
+                .font(.system(size: 8))
+                .foregroundColor(isActive ? .white : .gray)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var shortLabel: String {
+        switch phase {
+        case .ready: return "Ready"
+        case .floor: return "Floor"
+        case .ceiling: return "Ceiling"
+        case .walls: return "Walls"
+        case .complete: return "Done"
+        }
+    }
+}
+
+struct DimensionLabel: View {
+    let label: String
+    let value: Float
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(String(format: "%.1fm", value))
+                .font(.headline)
+                .fontWeight(.bold)
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+struct StatBadge: View {
+    let icon: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption)
+            Text(value)
+                .font(.caption)
+                .fontWeight(.bold)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.15))
+        .cornerRadius(8)
     }
 }

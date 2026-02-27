@@ -182,3 +182,87 @@ enum ScanMode: String, CaseIterable, Identifiable {
         }
     }
 }
+
+// MARK: - Room Scan Phase
+
+/// Guided scanning phases for room/walls mode
+enum RoomScanPhase: String, CaseIterable, Identifiable {
+    case ready = "Ready"
+    case floor = "Scan Floor"
+    case ceiling = "Scan Ceiling"
+    case walls = "Scan Walls"
+    case complete = "Complete"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .ready: return "hand.tap"
+        case .floor: return "arrow.down.circle"
+        case .ceiling: return "arrow.up.circle"
+        case .walls: return "arrow.triangle.2.circlepath"
+        case .complete: return "checkmark.circle.fill"
+        }
+    }
+
+    var instruction: String {
+        switch self {
+        case .ready:
+            return "Tap Start to begin guided room scan"
+        case .floor:
+            return "Point device toward the floor"
+        case .ceiling:
+            return "Point toward ceiling along an uncluttered wall"
+        case .walls:
+            return "Turn slowly to scan all walls and corners"
+        case .complete:
+            return "Room captured!"
+        }
+    }
+
+    var detailedHint: String {
+        switch self {
+        case .ready:
+            return "Stand in the middle of the room for best results"
+        case .floor:
+            return "This establishes the floor plane - a quick glance is enough"
+        case .ceiling:
+            return "This measures room height - scan across to a wall"
+        case .walls:
+            return "Capture edges and corners - white lines will appear"
+        case .complete:
+            return "Review dimensions or continue to next room"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .ready: return .gray
+        case .floor: return .green
+        case .ceiling: return .yellow
+        case .walls: return .cyan
+        case .complete: return .green
+        }
+    }
+
+    /// Threshold progress (0-1) to advance to next phase
+    var completionThreshold: Double {
+        switch self {
+        case .ready: return 0
+        case .floor: return 0.8  // 80% confident floor detected
+        case .ceiling: return 0.7  // 70% confident ceiling detected
+        case .walls: return 0.6  // 60% wall coverage
+        case .complete: return 1.0
+        }
+    }
+
+    var nextPhase: RoomScanPhase? {
+        switch self {
+        case .ready: return .floor
+        case .floor: return .ceiling
+        case .ceiling: return .walls
+        case .walls: return .complete
+        case .complete: return nil
+        }
+    }
+}

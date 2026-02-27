@@ -38,18 +38,64 @@ class UpdateChecker: ObservableObject {
         AppSettings.shared.versionCheckURL
     }
 
+    // MARK: - UserDefaults Keys
+    private let attemptedUpdateVersionKey = "attemptedUpdateVersion"
+    private let lastKnownVersionKey = "lastKnownVersion"
+
     // MARK: - Published State
     @Published var isChecking = false
     @Published var updateAvailable: UpdateAvailable?
     @Published var lastError: String?
     @Published var showUpdateAlert = false
     @Published var lastCheckResult: CheckResult?
+    @Published var showUpdateProgress = false
+    @Published var showUpdateComplete = false
 
     enum CheckResult {
         case upToDate
         case updateAvailable
         case error(String)
         case notConfigured
+    }
+
+    // MARK: - Initialization
+
+    init() {
+        checkIfUpdateCompleted()
+    }
+
+    // MARK: - Update Completion Detection
+
+    /// Called on app launch to check if user successfully updated
+    func checkIfUpdateCompleted() {
+        let currentVersion = currentAppVersion
+        let currentBuild = currentBuildNumber
+        let currentFullVersion = "\(currentVersion) (\(currentBuild))"
+
+        // Get the version user attempted to update to
+        let attemptedVersion = UserDefaults.standard.string(forKey: attemptedUpdateVersionKey)
+        let lastKnown = UserDefaults.standard.string(forKey: lastKnownVersionKey)
+
+        // If we have an attempted update and version changed
+        if let attempted = attemptedVersion, !attempted.isEmpty {
+            // Check if current version is different from what we had before
+            if lastKnown != currentFullVersion {
+                // Update completed!
+                showUpdateComplete = true
+            }
+            // Clear the attempted version
+            UserDefaults.standard.removeObject(forKey: attemptedUpdateVersionKey)
+        }
+
+        // Save current version as last known
+        UserDefaults.standard.set(currentFullVersion, forKey: lastKnownVersionKey)
+    }
+
+    /// Mark that user is attempting to update to the available version
+    func markUpdateAttempted() {
+        if let update = updateAvailable {
+            UserDefaults.standard.set(update.newVersion, forKey: attemptedUpdateVersionKey)
+        }
     }
 
     // MARK: - Check for Updates

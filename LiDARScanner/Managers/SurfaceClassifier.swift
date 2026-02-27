@@ -257,6 +257,72 @@ struct ScanStatistics {
     var detectedWindows: [DetectedWindow] = []
     var surfaceCounts: [SurfaceType: Int] = [:]
 
+    // MARK: - Phase Confidence Metrics (for guided scanning)
+
+    /// Confidence that floor plane has been detected (0-1)
+    var floorConfidence: Float {
+        guard floorHeight != nil else { return 0 }
+        // Higher confidence with more floor area detected
+        let areaConfidence = min(floorArea / 2.0, 1.0)  // 2m² = full confidence
+        return areaConfidence
+    }
+
+    /// Confidence that ceiling has been detected (0-1)
+    var ceilingConfidence: Float {
+        guard ceilingHeight != nil else { return 0 }
+        // Need ceiling and room height
+        let areaConfidence = min(ceilingArea / 1.5, 1.0)  // 1.5m² = full confidence
+        let heightConfidence: Float = estimatedRoomHeight != nil ? 1.0 : 0.5
+        return (areaConfidence + heightConfidence) / 2
+    }
+
+    /// Estimated wall coverage percentage (0-1)
+    var wallCoveragePercent: Float {
+        // Based on detected corners - 4 corners = good rectangular room coverage
+        let cornerCount = detectedEdges.filter { $0.edgeType == .verticalCorner }.count
+        let cornerScore = min(Float(cornerCount) / 4.0, 1.0)
+
+        // Also consider wall area
+        let areaScore = min(wallArea / 10.0, 1.0)  // 10m² wall area = good
+
+        return (cornerScore * 0.6 + areaScore * 0.4)
+    }
+
+    /// Number of vertical corners detected
+    var cornerCount: Int {
+        detectedEdges.filter { $0.edgeType == .verticalCorner }.count
+    }
+
+    /// Room dimensions if fully captured
+    var roomDimensions: (width: Float, depth: Float, height: Float)? {
+        guard let height = estimatedRoomHeight,
+              let floor = floorHeight else { return nil }
+
+        // Calculate from floor edges
+        let floorEdges = detectedEdges.filter { $0.edgeType == .floorWall }
+        guard floorEdges.count >= 4 else { return nil }
+
+        // Get bounds from floor edge points
+        var minX: Float = .greatestFiniteMagnitude
+        var maxX: Float = -.greatestFiniteMagnitude
+        var minZ: Float = .greatestFiniteMagnitude
+        var maxZ: Float = -.greatestFiniteMagnitude
+
+        for edge in floorEdges {
+            minX = min(minX, edge.startPoint.x, edge.endPoint.x)
+            maxX = max(maxX, edge.startPoint.x, edge.endPoint.x)
+            minZ = min(minZ, edge.startPoint.z, edge.endPoint.z)
+            maxZ = max(maxZ, edge.startPoint.z, edge.endPoint.z)
+        }
+
+        let width = maxX - minX
+        let depth = maxZ - minZ
+
+        guard width > 0.5, depth > 0.5 else { return nil }
+
+        return (width, depth, height)
+    }
+
     var minClearanceHeight: Float? {
         guard let ceiling = ceilingHeight, let floor = floorHeight else { return nil }
         let maxProtrusionDepth = detectedProtrusions.map { $0.depth }.max() ?? 0
