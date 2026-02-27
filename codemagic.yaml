@@ -51,7 +51,7 @@ workflows:
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
-            --certificate-key "$HOME/cert_key.pem" \
+            --certificate-key "@file:$HOME/cert_key.pem" \
             --create
           keychain add-certificates
 
