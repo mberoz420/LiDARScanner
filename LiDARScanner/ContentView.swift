@@ -18,7 +18,7 @@ struct ContentView: View {
                     .foregroundColor(.blue)
 
                 VStack(spacing: 8) {
-                    Text("LiDAR Scanner")
+                    Text("LiDarScanner-Wizard")
                         .font(.largeTitle)
                         .bold()
 
