@@ -63,8 +63,8 @@ workflows:
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
             --json 2>/dev/null | jq -r '.[].id' 2>/dev/null); do
-            echo "Revoking certificate: $cert_id"
-            app-store-connect certificates revoke "$cert_id" \
+            echo "Deleting certificate: $cert_id"
+            app-store-connect certificates delete "$cert_id" \
               --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
               --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
               --private-key "@file:$HOME/.private_keys/AuthKey.p8" || true
