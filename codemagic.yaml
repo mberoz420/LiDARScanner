@@ -11,6 +11,8 @@ workflows:
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
+        - lidar
+        - Test
       xcode: latest
 
     triggering:
