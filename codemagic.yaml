@@ -62,13 +62,18 @@ workflows:
 
       - name: Build archive
         script: |
+          echo "Building archive..."
           xcodebuild archive \
             -project "LiDARScanner.xcodeproj" \
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
             -archivePath build/LiDARScanner.xcarchive \
             -destination "generic/platform=iOS" \
-            | xcpretty
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            -allowProvisioningUpdates
+
+          echo "Archive result:"
+          ls -la build/ || echo "Build folder not found"
 
       - name: Create export options
         script: |
