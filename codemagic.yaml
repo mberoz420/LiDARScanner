@@ -1,4 +1,87 @@
 workflows:
+  # Quick testing workflow - installs directly on device
+  ios-adhoc:
+    name: iOS Ad-Hoc (Quick Test)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      vars:
+        XCODE_SCHEME: "LiDARScanner"
+        BUNDLE_ID: "com.lidarscanner.LiDarScanner"
+        TEAM_ID: "J4FK2D7585"
+      groups:
+        - App_Store
+      xcode: latest
+
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        script: |
+          xcodegen generate
+
+      - name: Set up signing
+        script: |
+          keychain initialize
+
+          # Save API key to file and clean up whitespace
+          mkdir -p ~/.private_keys
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
+
+          # Generate RSA key for certificate
+          openssl genrsa -out ~/.private_keys/cert_key.pem 2048
+
+          # Fetch signing files for ad-hoc
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_ADHOC \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
+            --certificate-key "@file:$HOME/.private_keys/cert_key.pem" \
+            --create
+
+          keychain add-certificates
+          xcode-project use-profiles
+
+      - name: Increment build number
+        script: |
+          BUILD_NUMBER=$(($(date +%s)/60))
+          echo "Setting build number to $BUILD_NUMBER"
+          agvtool new-version -all $BUILD_NUMBER || true
+
+      - name: Build archive
+        script: |
+          xcodebuild archive \
+            -project "LiDARScanner.xcodeproj" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -archivePath build/LiDARScanner.xcarchive \
+            -destination "generic/platform=iOS" \
+            | xcpretty
+
+      - name: Export IPA
+        script: |
+          xcodebuild -exportArchive \
+            -archivePath build/LiDARScanner.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist ~/export_options.plist \
+            | xcpretty
+
+    artifacts:
+      - build/ipa/*.ipa
+
+    publishing:
+      email:
+        recipients:
+          - mberoz61@gmail.com
+        notify:
+          success: true
+          failure: true
+
+  # App Store / TestFlight workflow
   ios-workflow:
     name: iOS Build & TestFlight
     max_build_duration: 60
@@ -30,47 +113,10 @@ workflows:
           mkdir -p ~/.private_keys
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
 
-          # Show debug info (partial values for verification)
-          echo "Key ID first 4 chars: ${APP_STORE_CONNECT_KEY_IDENTIFIER:0:4}"
-          echo "Key ID length: ${#APP_STORE_CONNECT_KEY_IDENTIFIER}"
-          echo "Issuer ID first 8 chars: ${APP_STORE_CONNECT_ISSUER_ID:0:8}"
-          echo "Issuer ID length: ${#APP_STORE_CONNECT_ISSUER_ID}"
-          echo "=== Key file debug ==="
-          echo "Line count: $(wc -l < ~/.private_keys/AuthKey.p8)"
-          echo "Char count: $(wc -c < ~/.private_keys/AuthKey.p8)"
-          head -1 ~/.private_keys/AuthKey.p8
-          tail -1 ~/.private_keys/AuthKey.p8
-          hexdump -C ~/.private_keys/AuthKey.p8 | head -3
-          echo "======================"
-
-          # Generate RSA key for new certificate
+          # Generate RSA key for certificate
           openssl genrsa -out ~/.private_keys/cert_key.pem 2048
-          echo "RSA key generated: $(wc -c < ~/.private_keys/cert_key.pem) bytes"
 
-          # List and revoke existing distribution certificates
-          echo "Listing existing certificates..."
-          app-store-connect certificates list \
-            --type DISTRIBUTION \
-            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@file:$HOME/.private_keys/AuthKey.p8" || true
-
-          # Revoke old certificates to make room for new one
-          echo "Revoking old certificates..."
-          for cert_id in $(app-store-connect certificates list \
-            --type DISTRIBUTION \
-            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
-            --json 2>/dev/null | jq -r '.[].id' 2>/dev/null); do
-            echo "Deleting certificate: $cert_id"
-            app-store-connect certificates delete "$cert_id" \
-              --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-              --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-              --private-key "@file:$HOME/.private_keys/AuthKey.p8" || true
-          done
-
-          # Fetch signing files (will create new cert)
+          # Fetch signing files for App Store
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
