@@ -26,9 +26,9 @@ workflows:
         script: |
           keychain initialize
 
-          # Save API key to file (preserve newlines)
+          # Save API key to file and clean up Windows line endings
           mkdir -p ~/.private_keys
-          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.private_keys/AuthKey.p8
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" | tr -d '\r' | sed 's/[[:space:]]*$//' > ~/.private_keys/AuthKey.p8
 
           # Show debug info
           echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
@@ -38,6 +38,7 @@ workflows:
           echo "Char count: $(wc -c < ~/.private_keys/AuthKey.p8)"
           head -1 ~/.private_keys/AuthKey.p8
           tail -1 ~/.private_keys/AuthKey.p8
+          hexdump -C ~/.private_keys/AuthKey.p8 | head -3
           echo "======================"
 
           # Generate RSA key for new certificate
