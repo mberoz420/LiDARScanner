@@ -8,11 +8,13 @@ workflows:
       vars:
         XCODE_SCHEME: "LiDARScanner"
         BUNDLE_ID: "com.lidarscanner.LiDarScanner"
-        CERTIFICATE_PASSWORD: "codemagic123"
         TEAM_ID: "J4FK2D7585"
       groups:
         - App_Store
       xcode: latest
+
+    integrations:
+      app_store_connect: App_Store
 
     triggering:
       events:
@@ -30,21 +32,15 @@ workflows:
         script: |
           xcodegen generate
 
-      - name: Set up keychain and certificate
+      - name: Set up code signing
         script: |
           keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          keychain add-certificates
 
-          echo $CM_CERTIFICATE | base64 --decode > /tmp/distribution.p12
-          keychain add-certificates --certificate /tmp/distribution.p12 --certificate-password "$CERTIFICATE_PASSWORD"
-
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          PROFILE_PATH=~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
-          echo $CM_PROVISIONING_PROFILE | base64 --decode > "$PROFILE_PATH"
-
-          # Extract UUID
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i "$PROFILE_PATH"))
-          echo "PROVISIONING_PROFILE_UUID=$PROFILE_UUID" >> $CM_ENV
-          echo "Using profile UUID: $PROFILE_UUID"
+      - name: Set up provisioning profile
+        script: |
+          xcode-project use-profiles
 
       - name: Increment build number
         script: |
@@ -61,37 +57,16 @@ workflows:
             -configuration Release \
             -archivePath build/LiDARScanner.xcarchive \
             -destination "generic/platform=iOS" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE="Manual" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" | xcpretty
+            | xcpretty
 
       - name: Export IPA
         script: |
-          cat > exportOptions.plist << EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>teamID</key>
-              <string>$TEAM_ID</string>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>com.lidarscanner.LiDarScanner</key>
-                  <string>$PROVISIONING_PROFILE_UUID</string>
-              </dict>
-          </dict>
-          </plist>
-          EOF
-
           xcodebuild -exportArchive \
             -archivePath build/LiDARScanner.xcarchive \
             -exportPath build/ipa \
-            -exportOptionsPlist exportOptions.plist | xcpretty
+            -exportOptionsPlist ~/export_options.plist \
+            | xcpretty
 
     artifacts:
       - build/ipa/*.ipa
