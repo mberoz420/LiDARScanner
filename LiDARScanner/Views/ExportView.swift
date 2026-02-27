@@ -5,8 +5,7 @@ struct ExportView: View {
     @StateObject private var exporter = MeshExporter()
     @State private var exportedURLs: [ExportFormat: URL] = [:]
     @State private var selectedFormat: ExportFormat = .usdz
-    @State private var showShareSheet = false
-    @State private var shareURL: URL?
+    @State private var shareItem: ShareItem?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -48,8 +47,7 @@ struct ExportView: View {
                             Task { await exportSingle(format) }
                         } onShare: {
                             if let url = exportedURLs[format] {
-                                shareURL = url
-                                showShareSheet = true
+                                shareItem = ShareItem(url: url)
                             }
                         }
                     }
@@ -91,10 +89,8 @@ struct ExportView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showShareSheet) {
-                if let url = shareURL {
-                    ShareSheet(items: [url])
-                }
+            .sheet(item: $shareItem) { item in
+                ShareSheet(url: item.url)
             }
         }
     }
@@ -110,6 +106,12 @@ struct ExportView: View {
         let results = await exporter.exportAll(scan)
         exportedURLs = results
     }
+}
+
+// Wrapper for share sheet item binding
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
 }
 
 struct ExportFormatRow: View {
@@ -156,10 +158,10 @@ struct ExportFormatRow: View {
 }
 
 struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
+    let url: URL
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
