@@ -93,11 +93,18 @@ workflows:
 
       - name: Export IPA
         script: |
+          echo "Checking archive exists..."
+          ls -la build/LiDARScanner.xcarchive || echo "Archive not found!"
+
+          echo "Exporting IPA..."
           xcodebuild -exportArchive \
             -archivePath build/LiDARScanner.xcarchive \
             -exportPath build/ipa \
             -exportOptionsPlist ~/export_options.plist \
-            | xcpretty
+            -allowProvisioningUpdates
+
+          echo "Checking IPA created..."
+          ls -la build/ipa/ || echo "IPA folder not found!"
 
       - name: Get version info
         script: |
