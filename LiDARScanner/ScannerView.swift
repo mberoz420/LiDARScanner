@@ -3,60 +3,105 @@ import ARKit
 import RealityKit
 
 struct ScannerView: View {
-    @State private var isScanning = false
-    @State private var scanStatus = "Point camera at an object"
+    @StateObject private var meshManager = MeshManager()
+    @State private var showExport = false
+    @State private var capturedScan: CapturedScan?
 
     var body: some View {
         ZStack {
-            ARViewContainer(isScanning: $isScanning, scanStatus: $scanStatus)
+            ARViewContainer(meshManager: meshManager)
                 .edgesIgnoringSafeArea(.all)
 
             VStack {
-                Spacer()
-
-                Text(scanStatus)
-                    .font(.headline)
-                    .padding()
+                // Stats overlay
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(meshManager.scanStatus)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        if meshManager.isScanning {
+                            Text("Vertices: \(meshManager.vertexCount)")
+                                .font(.caption2)
+                            Text("Updates: \(meshManager.meshUpdateCount)")
+                                .font(.caption2)
+                        }
+                    }
+                    .padding(10)
                     .background(Color.black.opacity(0.7))
                     .foregroundColor(.white)
-                    .cornerRadius(10)
+                    .cornerRadius(8)
 
-                Button(action: {
-                    isScanning.toggle()
-                    scanStatus = isScanning ? "Scanning..." : "Scan paused"
-                }) {
-                    Text(isScanning ? "Stop Scan" : "Start Scan")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(width: 150, height: 50)
-                        .background(isScanning ? Color.red : Color.green)
-                        .cornerRadius(25)
+                    Spacer()
+                }
+                .padding()
+
+                Spacer()
+
+                // Controls
+                HStack(spacing: 20) {
+                    Button(action: toggleScanning) {
+                        Text(meshManager.isScanning ? "Stop Scan" : "Start Scan")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(width: 140, height: 50)
+                            .background(meshManager.isScanning ? Color.red : Color.green)
+                            .cornerRadius(25)
+                    }
+
+                    if capturedScan != nil && !meshManager.isScanning {
+                        Button(action: { showExport = true }) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .frame(width: 50, height: 50)
+                                .background(Color.blue)
+                                .cornerRadius(25)
+                        }
+                    }
                 }
                 .padding(.bottom, 50)
             }
         }
         .navigationTitle("Scanner")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showExport) {
+            if let scan = capturedScan {
+                ExportView(scan: scan)
+            }
+        }
+    }
+
+    private func toggleScanning() {
+        if meshManager.isScanning {
+            capturedScan = meshManager.stopScanning()
+        } else {
+            capturedScan = nil
+            meshManager.startScanning()
+        }
     }
 }
 
 struct ARViewContainer: UIViewRepresentable {
-    @Binding var isScanning: Bool
-    @Binding var scanStatus: String
+    let meshManager: MeshManager
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
 
+        // Configure AR session with mesh reconstruction
         let config = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             config.sceneReconstruction = .mesh
-            scanStatus = "LiDAR ready"
-        } else {
-            scanStatus = "LiDAR not available"
         }
         config.planeDetection = [.horizontal, .vertical]
 
+        // Run session
         arView.session.run(config)
+
+        // Connect mesh manager
+        Task { @MainActor in
+            meshManager.setup(arView: arView)
+        }
+
         return arView
     }
 
