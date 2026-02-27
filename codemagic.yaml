@@ -5,9 +5,6 @@ workflows:
     instance_type: mac_mini_m2
 
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.lidarscanner.LiDarScanner
       vars:
         XCODE_SCHEME: "LiDARScanner"
         BUNDLE_ID: "com.lidarscanner.LiDarScanner"
@@ -15,14 +12,6 @@ workflows:
       groups:
         - App_Store
       xcode: latest
-
-    # triggering disabled - manual builds only
-    # triggering:
-    #   events:
-    #     - push
-    #   branch_patterns:
-    #     - pattern: master
-    #       include: true
 
     scripts:
       - name: Install XcodeGen
@@ -33,8 +22,43 @@ workflows:
         script: |
           xcodegen generate
 
-      - name: Set up code signing
+      - name: Set up signing
         script: |
+          keychain initialize
+
+          # Save API key to file
+          mkdir -p ~/.private_keys
+          echo -n "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.private_keys/AuthKey.p8
+
+          # Show debug info
+          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
+          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
+          cat ~/.private_keys/AuthKey.p8 | head -1
+          cat ~/.private_keys/AuthKey.p8 | tail -1
+          wc -l ~/.private_keys/AuthKey.p8
+
+          # Generate RSA key for new certificate
+          openssl genrsa -out ~/.private_keys/cert_key.pem 2048
+
+          # Create certificate and fetch signing files
+          app-store-connect certificates create \
+            --type DISTRIBUTION \
+            --certificate-key ~/.private_keys/cert_key.pem \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
+            --save || echo "Certificate might already exist"
+
+          # Fetch signing files
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "@file:$HOME/.private_keys/AuthKey.p8" \
+            --certificate-key ~/.private_keys/cert_key.pem \
+            --create
+
+          keychain add-certificates
           xcode-project use-profiles
 
       - name: Increment build number
@@ -67,7 +91,9 @@ workflows:
 
     publishing:
       app_store_connect:
-        auth: integration
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true
       email:
         recipients:
