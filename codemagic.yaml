@@ -42,11 +42,16 @@ workflows:
       - name: Fetch signing files
         script: |
           keychain initialize
+
+          # Generate a new RSA key for certificate creation
+          openssl genrsa -out "$HOME/cert_key.pem" 2048
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8" \
+            --private-key "@file:$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8" \
+            --certificate-key "$HOME/cert_key.pem" \
             --create
           keychain add-certificates
 
