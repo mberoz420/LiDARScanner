@@ -36,3 +36,10 @@ Carthage/Build/
 
 # Build artifacts
 build/
+
+# Certificates
+*.p12
+*.csr
+*.crt
+*.key
+*_base64.txt
