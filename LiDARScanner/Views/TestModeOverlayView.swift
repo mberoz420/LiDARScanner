@@ -9,7 +9,7 @@ struct TestModeOverlayView: View {
             // Reticle in center
             TestModeReticle(
                 hasCeiling: detector.ceilingPlane != nil,
-                edgeCount: detector.detectedEdges.count
+                edgeCount: detector.edgeCount
             )
 
             VStack {
@@ -47,7 +47,7 @@ struct TestModeOverlayView: View {
                         Text("Ceiling")
                         Spacer()
                         if let ceiling = detector.ceilingPlane {
-                            Text(String(format: "Y: %.2fm", ceiling.center.y))
+                            Text(String(format: "Y: %.2fm", ceiling.y))
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -59,17 +59,17 @@ struct TestModeOverlayView: View {
                             .foregroundColor(.cyan)
                         Text("Walls detected")
                         Spacer()
-                        Text("\(detector.wallPlanes.count)")
+                        Text("\(detector.wallCount)")
                             .fontWeight(.bold)
                     }
 
-                    // Edge count
+                    // Boundary points count
                     HStack {
                         Image(systemName: "line.diagonal")
                             .foregroundColor(.yellow)
-                        Text("Boundary edges")
+                        Text("Boundary points")
                         Spacer()
-                        Text("\(detector.detectedEdges.count)")
+                        Text("\(detector.edgeCount)")
                             .fontWeight(.bold)
                     }
 
