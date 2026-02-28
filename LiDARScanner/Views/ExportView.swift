@@ -33,268 +33,332 @@ struct ExportView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                // Scan summary with simplification toggle
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Export Mode")
-                            .font(.headline)
-                        Spacer()
-                    }
-
-                    // Full mesh vs Simplified toggle
-                    Picker("Export Type", selection: $useSimplifiedExport) {
-                        Text("Full Mesh").tag(false)
-                        Text("Simplified Room").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: useSimplifiedExport) { newValue in
-                        if newValue && simplifiedRoom == nil {
-                            generateSimplifiedRoom()
-                        }
-                    }
-
-                    // Stats comparison
-                    HStack {
-                        VStack(alignment: .leading) {
-                            if useSimplifiedExport, let room = simplifiedRoom {
-                                Text("Vertices: \(room.vertexCount)")
-                                    .foregroundColor(.green)
-                                Text("Walls: \(room.wallCount)")
-                            } else {
-                                Text("Vertices: \(scan.vertexCount)")
-                                Text("Faces: \(scan.faceCount)")
-                            }
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing) {
-                            if useSimplifiedExport, let room = simplifiedRoom {
-                                Text(String(format: "%.1f m²", room.floorArea))
-                                Text(String(format: "Height: %.2f m", room.roomHeight))
-                            } else {
-                                Text("Meshes: \(scan.meshes.count)")
-                                if scan.hasColors {
-                                    Label("With Colors", systemImage: "paintpalette.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                }
-                            }
-                        }
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
-                    // Reduction info
-                    if useSimplifiedExport, let room = simplifiedRoom {
-                        let reduction = 100.0 - (Float(room.vertexCount) / Float(max(1, scan.vertexCount)) * 100)
-                        HStack {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .foregroundColor(.green)
-                            Text(String(format: "%.0f%% reduction (%d → %d vertices)",
-                                        reduction, scan.vertexCount, room.vertexCount))
-                                .font(.caption)
-                                .foregroundColor(.green)
-                        }
-                    }
-
-                    // Surface breakdown if available
-                    if let stats = scan.statistics {
-                        Divider()
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Surfaces Detected")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-
-                            HStack(spacing: 16) {
-                                SurfaceStatItem(label: "Floor", value: String(format: "%.1fm²", stats.floorArea), color: .green)
-                                SurfaceStatItem(label: "Walls", value: String(format: "%.1fm²", stats.wallArea), color: .blue)
-                                SurfaceStatItem(label: "Ceiling", value: String(format: "%.1fm²", stats.ceilingArea), color: .yellow)
-                            }
-
-                            if let roomHeight = stats.estimatedRoomHeight {
-                                HStack {
-                                    Image(systemName: "ruler")
-                                    Text(String(format: "Room height: %.2fm", roomHeight))
-                                }
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            }
-
-                            if !stats.detectedProtrusions.isEmpty {
-                                HStack {
-                                    Image(systemName: "rectangle.split.3x1")
-                                        .foregroundColor(.orange)
-                                    Text("\(stats.detectedProtrusions.count) ceiling protrusions")
-                                }
-                                .font(.caption)
-                            }
-
-                            if !stats.detectedDoors.isEmpty {
-                                HStack {
-                                    Image(systemName: "door.left.hand.open")
-                                        .foregroundColor(.brown)
-                                    Text("\(stats.detectedDoors.count) doors detected")
-                                }
-                                .font(.caption)
-                            }
-
-                            if !stats.detectedWindows.isEmpty {
-                                HStack {
-                                    Image(systemName: "window.horizontal")
-                                        .foregroundColor(.cyan)
-                                    Text("\(stats.detectedWindows.count) windows detected")
-                                }
-                                .font(.caption)
-                            }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            mainContent
                 .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(10)
-
-                // Export format selection
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Export Format")
-                            .font(.headline)
-                        Spacer()
-                        Text(settings.defaultDestination.rawValue)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    ForEach(ExportFormat.allCases) { format in
-                        ExportFormatRow(
-                            format: format,
-                            isExported: exportedURLs[format] != nil,
-                            isExporting: exporter.isExporting && selectedFormat == format
-                        ) {
-                            Task { await exportAndHandle(format) }
-                        } onShare: {
-                            if let url = exportedURLs[format] {
-                                handleExportedFile(url: url)
-                            }
-                        }
-                    }
+                .navigationTitle("Export Scan")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbarContent }
+                .sheet(item: $shareItem) { item in
+                    ShareSheet(url: item.url)
                 }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(10)
-
-                // Export all button
-                Button(action: { Task { await exportAllAndHandle() } }) {
-                    HStack {
-                        if exporter.isExporting {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        }
-                        Text("Export All Formats")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+                .alert("Save to Google Drive", isPresented: $showGoogleDriveAlert) {
+                    googleDriveAlertButtons
+                } message: {
+                    Text(googleDriveInstruction)
                 }
-                .disabled(exporter.isExporting)
-
-                // Save Session button
-                Button(action: {
-                    sessionName = sessionManager.generateDefaultName()
-                    showSaveSession = true
-                }) {
-                    HStack {
-                        Image(systemName: "square.and.arrow.down")
-                        Text("Save Session")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.green)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+                .alert("Save Session", isPresented: $showSaveSession) {
+                    saveSessionAlertButtons
+                } message: {
+                    Text("Save this scan to continue editing later.")
                 }
-                .disabled(isSavingSession)
-
-                if let error = exporter.lastError {
-                    Text("Error: \(error)")
-                        .foregroundColor(.red)
-                        .font(.caption)
+                .fileExporter(
+                    isPresented: $showFilePicker,
+                    document: fileToSave.map { FileDocument(url: $0) },
+                    contentType: .data,
+                    defaultFilename: fileToSave?.lastPathComponent ?? "scan"
+                ) { result in
+                    handleFileExportResult(result)
                 }
+        }
+    }
 
-                if showSaveSuccess {
-                    Label("Saved successfully!", systemImage: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .transition(.opacity)
-                }
+    // MARK: - Main Content
 
-                if sessionSaveSuccess {
-                    Label("Session saved! Find it in Saved Scans.", systemImage: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .transition(.opacity)
-                }
+    private var mainContent: some View {
+        VStack(spacing: 20) {
+            exportModeSection
+            exportFormatSection
+            actionButtonsSection
+            statusMessagesSection
+            Spacer()
+        }
+    }
 
-                if isSavingSession {
-                    HStack {
-                        ProgressView()
-                        Text("Saving session...")
-                            .foregroundColor(.secondary)
-                    }
-                }
+    // MARK: - Export Mode Section
 
+    private var exportModeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Export Mode")
+                    .font(.headline)
                 Spacer()
             }
+
+            Picker("Export Type", selection: $useSimplifiedExport) {
+                Text("Full Mesh").tag(false)
+                Text("Simplified Room").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: useSimplifiedExport) { newValue in
+                if newValue && simplifiedRoom == nil {
+                    generateSimplifiedRoom()
+                }
+            }
+
+            statsComparisonView
+            reductionInfoView
+            surfaceBreakdownView
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(10)
+    }
+
+    private var statsComparisonView: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                if useSimplifiedExport, let room = simplifiedRoom {
+                    Text("Vertices: \(room.vertexCount)")
+                        .foregroundColor(.green)
+                    Text("Walls: \(room.wallCount)")
+                } else {
+                    Text("Vertices: \(scan.vertexCount)")
+                    Text("Faces: \(scan.faceCount)")
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing) {
+                if useSimplifiedExport, let room = simplifiedRoom {
+                    Text(String(format: "%.1f m²", room.floorArea))
+                    Text(String(format: "Height: %.2f m", room.roomHeight))
+                } else {
+                    Text("Meshes: \(scan.meshes.count)")
+                    if scan.hasColors {
+                        Label("With Colors", systemImage: "paintpalette.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                }
+            }
+        }
+        .font(.subheadline)
+        .foregroundColor(.secondary)
+    }
+
+    @ViewBuilder
+    private var reductionInfoView: some View {
+        if useSimplifiedExport, let room = simplifiedRoom {
+            let reduction = 100.0 - (Float(room.vertexCount) / Float(max(1, scan.vertexCount)) * 100)
+            HStack {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundColor(.green)
+                Text(String(format: "%.0f%% reduction (%d → %d vertices)",
+                            reduction, scan.vertexCount, room.vertexCount))
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var surfaceBreakdownView: some View {
+        if let stats = scan.statistics {
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Surfaces Detected")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+
+                HStack(spacing: 16) {
+                    SurfaceStatItem(label: "Floor", value: String(format: "%.1fm²", stats.floorArea), color: .green)
+                    SurfaceStatItem(label: "Walls", value: String(format: "%.1fm²", stats.wallArea), color: .blue)
+                    SurfaceStatItem(label: "Ceiling", value: String(format: "%.1fm²", stats.ceilingArea), color: .yellow)
+                }
+
+                surfaceDetailsView(stats: stats)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func surfaceDetailsView(stats: ScanStatistics) -> some View {
+        if let roomHeight = stats.estimatedRoomHeight {
+            HStack {
+                Image(systemName: "ruler")
+                Text(String(format: "Room height: %.2fm", roomHeight))
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+
+        if !stats.detectedProtrusions.isEmpty {
+            HStack {
+                Image(systemName: "rectangle.split.3x1")
+                    .foregroundColor(.orange)
+                Text("\(stats.detectedProtrusions.count) ceiling protrusions")
+            }
+            .font(.caption)
+        }
+
+        if !stats.detectedDoors.isEmpty {
+            HStack {
+                Image(systemName: "door.left.hand.open")
+                    .foregroundColor(.brown)
+                Text("\(stats.detectedDoors.count) doors detected")
+            }
+            .font(.caption)
+        }
+
+        if !stats.detectedWindows.isEmpty {
+            HStack {
+                Image(systemName: "window.horizontal")
+                    .foregroundColor(.cyan)
+                Text("\(stats.detectedWindows.count) windows detected")
+            }
+            .font(.caption)
+        }
+    }
+
+    // MARK: - Export Format Section
+
+    private var exportFormatSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Export Format")
+                    .font(.headline)
+                Spacer()
+                Text(settings.defaultDestination.rawValue)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            ForEach(ExportFormat.allCases) { format in
+                ExportFormatRow(
+                    format: format,
+                    isExported: exportedURLs[format] != nil,
+                    isExporting: exporter.isExporting && selectedFormat == format
+                ) {
+                    Task { await exportAndHandle(format) }
+                } onShare: {
+                    if let url = exportedURLs[format] {
+                        handleExportedFile(url: url)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(10)
+    }
+
+    // MARK: - Action Buttons Section
+
+    private var actionButtonsSection: some View {
+        VStack(spacing: 12) {
+            exportAllButton
+            saveSessionButton
+        }
+    }
+
+    private var exportAllButton: some View {
+        Button(action: { Task { await exportAllAndHandle() } }) {
+            HStack {
+                if exporter.isExporting {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                }
+                Text("Export All Formats")
+            }
+            .frame(maxWidth: .infinity)
             .padding()
-            .navigationTitle("Export Scan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") { dismiss() }
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+        }
+        .disabled(exporter.isExporting)
+    }
+
+    private var saveSessionButton: some View {
+        Button(action: {
+            sessionName = sessionManager.generateDefaultName()
+            showSaveSession = true
+        }) {
+            HStack {
+                Image(systemName: "square.and.arrow.down")
+                Text("Save Session")
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color.green)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+        }
+        .disabled(isSavingSession)
+    }
+
+    // MARK: - Status Messages Section
+
+    @ViewBuilder
+    private var statusMessagesSection: some View {
+        if let error = exporter.lastError {
+            Text("Error: \(error)")
+                .foregroundColor(.red)
+                .font(.caption)
+        }
+
+        if showSaveSuccess {
+            Label("Saved successfully!", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .transition(.opacity)
+        }
+
+        if sessionSaveSuccess {
+            Label("Session saved! Find it in Saved Scans.", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .transition(.opacity)
+        }
+
+        if isSavingSession {
+            HStack {
+                ProgressView()
+                Text("Saving session...")
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Toolbar & Alerts
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("Done") { dismiss() }
+        }
+    }
+
+    @ViewBuilder
+    private var googleDriveAlertButtons: some View {
+        Button("Open Share Sheet") {
+            if let url = pendingShareURL {
+                shareItem = ShareItem(url: url)
+            }
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    @ViewBuilder
+    private var saveSessionAlertButtons: some View {
+        TextField("Session Name", text: $sessionName)
+        Button("Save") {
+            Task { await saveSession() }
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    private func handleFileExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success:
+            withAnimation {
+                showSaveSuccess = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation {
+                    showSaveSuccess = false
                 }
             }
-            .sheet(item: $shareItem) { item in
-                ShareSheet(url: item.url)
-            }
-            .alert("Save to Google Drive", isPresented: $showGoogleDriveAlert) {
-                Button("Open Share Sheet") {
-                    if let url = pendingShareURL {
-                        shareItem = ShareItem(url: url)
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(googleDriveInstruction)
-            }
-            .alert("Save Session", isPresented: $showSaveSession) {
-                TextField("Session Name", text: $sessionName)
-                Button("Save") {
-                    Task { await saveSession() }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Save this scan to continue editing later.")
-            }
-            .fileExporter(
-                isPresented: $showFilePicker,
-                document: fileToSave.map { FileDocument(url: $0) },
-                contentType: .data,
-                defaultFilename: fileToSave?.lastPathComponent ?? "scan"
-            ) { result in
-                switch result {
-                case .success:
-                    withAnimation {
-                        showSaveSuccess = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation {
-                            showSaveSuccess = false
-                        }
-                    }
-                case .failure(let error):
-                    exporter.lastError = error.localizedDescription
-                }
-            }
+        case .failure(let error):
+            exporter.lastError = error.localizedDescription
         }
     }
 
