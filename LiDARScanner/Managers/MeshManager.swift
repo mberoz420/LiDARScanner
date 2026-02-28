@@ -531,10 +531,28 @@ class MeshManager: NSObject, ObservableObject {
     /// Register a door at the given position
     private func registerDoor(at position: SIMD3<Float>, frame: ARFrame) {
         let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+        let width: Float = 0.9   // Default door width ~90cm
+        let height: Float = 2.1  // Default door height ~210cm
+
+        // Estimate wall normal from camera direction (perpendicular to viewing direction)
+        let cameraForward = frame.camera.transform.columns.2
+        let wallNormal = SIMD3<Float>(-cameraForward.x, 0, -cameraForward.z)
+        let normalizedWallNormal = simd_normalize(wallNormal)
+
+        // Calculate bounding box centered on position, from floor up
+        let halfWidth = width / 2
+        let boundingBox = (
+            min: SIMD3<Float>(position.x - halfWidth, floorY, position.z - 0.1),
+            max: SIMD3<Float>(position.x + halfWidth, floorY + height, position.z + 0.1)
+        )
+
         let door = DetectedDoor(
+            id: UUID(),
             position: position,
-            width: 0.9,  // Default door width ~90cm
-            height: 2.1, // Default door height ~210cm
+            width: width,
+            height: height,
+            wallNormal: normalizedWallNormal,
+            boundingBox: boundingBox,
             confidence: 1.0  // User-confirmed = high confidence
         )
         surfaceClassifier.statistics.detectedDoors.append(door)
@@ -543,12 +561,32 @@ class MeshManager: NSObject, ObservableObject {
     /// Register a window at the given position
     private func registerWindow(at position: SIMD3<Float>, frame: ARFrame) {
         let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+        let width: Float = 1.0           // Default window width ~100cm
+        let height: Float = 1.2          // Default window height ~120cm
+        let heightFromFloor: Float = 0.9 // Default sill height ~90cm
+
+        // Estimate wall normal from camera direction (perpendicular to viewing direction)
+        let cameraForward = frame.camera.transform.columns.2
+        let wallNormal = SIMD3<Float>(-cameraForward.x, 0, -cameraForward.z)
+        let normalizedWallNormal = simd_normalize(wallNormal)
+
+        // Calculate bounding box for window
+        let halfWidth = width / 2
+        let windowBottomY = floorY + heightFromFloor
+        let boundingBox = (
+            min: SIMD3<Float>(position.x - halfWidth, windowBottomY, position.z - 0.1),
+            max: SIMD3<Float>(position.x + halfWidth, windowBottomY + height, position.z + 0.1)
+        )
+
         let window = DetectedWindow(
+            id: UUID(),
             position: position,
-            width: 1.0,           // Default window width ~100cm
-            height: 1.2,          // Default window height ~120cm
-            heightFromFloor: 0.9, // Default sill height ~90cm
-            confidence: 1.0       // User-confirmed = high confidence
+            width: width,
+            height: height,
+            heightFromFloor: heightFromFloor,
+            wallNormal: normalizedWallNormal,
+            boundingBox: boundingBox,
+            confidence: 1.0  // User-confirmed = high confidence
         )
         surfaceClassifier.statistics.detectedWindows.append(window)
     }
