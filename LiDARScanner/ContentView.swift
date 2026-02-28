@@ -254,7 +254,61 @@ struct ScanModeView: View {
 
             // Edge detection reticle (center of screen)
             if meshManager.isScanning && mode == .walls {
-                EdgeTargetReticle(edgeDetected: meshManager.edgeInReticle)
+                VStack {
+                    // Active input methods + confirmed corners
+                    HStack(spacing: 8) {
+                        // Active input method icons
+                        InputMethodIndicator()
+
+                        if meshManager.isListening {
+                            HStack(spacing: 4) {
+                                Image(systemName: "mic.fill")
+                                    .foregroundColor(.red)
+                                Text("Listening")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.6))
+                            .cornerRadius(12)
+                        }
+
+                        if meshManager.confirmedCornerCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                Text("\(meshManager.confirmedCornerCount) corners")
+                            }
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.yellow)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.6))
+                            .cornerRadius(12)
+                        }
+                    }
+                    .offset(y: -60)
+
+                    EdgeTargetReticle(
+                        edgeDetected: meshManager.edgeInReticle,
+                        edgeConfirmed: meshManager.edgeConfirmed,
+                        isPaused: meshManager.isPaused
+                    )
+
+                    // Last voice command indicator
+                    if let command = meshManager.lastVoiceCommand {
+                        Text("Voice: \"\(command)\"")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.6))
+                            .cornerRadius(12)
+                            .offset(y: 60)
+                            .transition(.opacity)
+                    }
+                }
             }
 
             VStack {
@@ -525,10 +579,61 @@ struct WallsModeSettings: View {
     @AppStorage("surfaceClassificationEnabled") private var surfaceClassification = true
     @AppStorage("detectDoorsWindows") private var detectDoorsWindows = true
 
+    // Input methods
+    @AppStorage("autoDetectionEnabled") private var autoDetection = true
+    @AppStorage("pauseGestureEnabled") private var pauseGesture = true
+    @AppStorage("voiceCommandsEnabled") private var voiceCommands = true
+
+    // Feedback
+    @AppStorage("speechFeedbackEnabled") private var speechFeedback = true
+    @AppStorage("hapticFeedbackEnabled") private var hapticFeedback = true
+
     var body: some View {
         Section("Room Scanning") {
             Toggle("Surface Classification", isOn: $surfaceClassification)
             Toggle("Detect Doors & Windows", isOn: $detectDoorsWindows)
+        }
+
+        Section {
+            Toggle(isOn: $autoDetection) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Auto Detection", systemImage: "eye")
+                    Text("Automatically detect edges and corners")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Toggle(isOn: $pauseGesture) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Pause Gesture", systemImage: "hand.raised")
+                    Text("Hold phone still over edge to confirm")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Toggle(isOn: $voiceCommands) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Voice Commands", systemImage: "mic.fill")
+                    Text("Say: edge, corner, door, window, furniture")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        } header: {
+            Text("Input Methods")
+        } footer: {
+            Text("Enable one or more methods to mark corners and features. Try different combinations to find what works best.")
+        }
+
+        Section("Feedback") {
+            Toggle(isOn: $speechFeedback) {
+                Label("Voice Feedback", systemImage: "speaker.wave.2")
+            }
+            Toggle(isOn: $hapticFeedback) {
+                Label("Haptic Feedback", systemImage: "iphone.radiowaves.left.and.right")
+            }
         }
     }
 }
@@ -656,35 +761,81 @@ struct ScanStatusBar: View {
 
 struct EdgeTargetReticle: View {
     let edgeDetected: Bool
+    var edgeConfirmed: Bool = false
+    var isPaused: Bool = false
+
+    @AppStorage("autoDetectionEnabled") private var autoDetection = true
+    @AppStorage("pauseGestureEnabled") private var pauseGesture = true
+
+    // Colors based on state
+    private var mainColor: Color {
+        if edgeConfirmed {
+            return .yellow  // Confirmed - strong feedback
+        } else if edgeDetected {
+            return .green   // Edge in view (auto-detection)
+        } else if isPaused && pauseGesture {
+            if autoDetection {
+                return .orange  // Paused but no edge detected
+            } else {
+                return .cyan    // Manual mode - ready to mark
+            }
+        } else {
+            return .white.opacity(0.5)  // Scanning
+        }
+    }
+
+    private var lineWidth: CGFloat {
+        edgeConfirmed ? 3 : 2
+    }
 
     var body: some View {
         ZStack {
             // Outer ring
             Circle()
-                .stroke(edgeDetected ? Color.green : Color.white.opacity(0.5), lineWidth: 2)
+                .stroke(mainColor, lineWidth: lineWidth)
                 .frame(width: 80, height: 80)
 
             // Inner crosshair
             Group {
                 // Horizontal line
                 Rectangle()
-                    .fill(edgeDetected ? Color.green : Color.white.opacity(0.7))
+                    .fill(mainColor)
                     .frame(width: 30, height: 2)
 
                 // Vertical line
                 Rectangle()
-                    .fill(edgeDetected ? Color.green : Color.white.opacity(0.7))
+                    .fill(mainColor)
                     .frame(width: 2, height: 30)
             }
 
             // Corner brackets
             ForEach(0..<4, id: \.self) { i in
-                CornerBracket(edgeDetected: edgeDetected)
+                CornerBracket(color: mainColor, lineWidth: lineWidth)
                     .rotationEffect(.degrees(Double(i) * 90))
             }
 
-            // Center dot when edge detected
-            if edgeDetected {
+            // Center indicator based on state
+            if edgeConfirmed {
+                // Confirmed - solid yellow with checkmark feel
+                Circle()
+                    .fill(Color.yellow)
+                    .frame(width: 16, height: 16)
+
+                // Expanding ring animation for confirmation
+                Circle()
+                    .stroke(Color.yellow, lineWidth: 3)
+                    .frame(width: 60, height: 60)
+                    .scaleEffect(1.3)
+                    .opacity(0.6)
+
+                // "LOCKED" text indicator
+                Text("EDGE")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.yellow)
+                    .offset(y: 55)
+
+            } else if edgeDetected {
+                // Edge in view - green dot
                 Circle()
                     .fill(Color.green)
                     .frame(width: 8, height: 8)
@@ -694,15 +845,45 @@ struct EdgeTargetReticle: View {
                     .stroke(Color.green, lineWidth: 2)
                     .frame(width: 60, height: 60)
                     .opacity(0.5)
-                    .scaleEffect(edgeDetected ? 1.2 : 1.0)
+                    .scaleEffect(1.2)
                     .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: edgeDetected)
+
+                // Instruction
+                Text("Hold still")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.green)
+                    .offset(y: 55)
+
+            } else if isPaused && pauseGesture {
+                if autoDetection {
+                    // Paused but no edge detected
+                    Circle()
+                        .stroke(Color.orange, lineWidth: 1)
+                        .frame(width: 12, height: 12)
+
+                    Text("No edge")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.orange)
+                        .offset(y: 55)
+                } else {
+                    // Manual mode - will mark on pause
+                    Circle()
+                        .fill(Color.cyan)
+                        .frame(width: 12, height: 12)
+
+                    Text("Marking...")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.cyan)
+                        .offset(y: 55)
+                }
             }
         }
     }
 }
 
 struct CornerBracket: View {
-    let edgeDetected: Bool
+    let color: Color
+    var lineWidth: CGFloat = 2
 
     var body: some View {
         Path { path in
@@ -710,8 +891,38 @@ struct CornerBracket: View {
             path.addLine(to: CGPoint(x: 35, y: -10))
             path.addLine(to: CGPoint(x: 25, y: -10))
         }
-        .stroke(edgeDetected ? Color.green : Color.white.opacity(0.7), lineWidth: 2)
+        .stroke(color, lineWidth: lineWidth)
         .offset(y: -35)
+    }
+}
+
+// MARK: - Input Method Indicator
+
+struct InputMethodIndicator: View {
+    @AppStorage("autoDetectionEnabled") private var autoDetection = true
+    @AppStorage("pauseGestureEnabled") private var pauseGesture = true
+    @AppStorage("voiceCommandsEnabled") private var voiceCommands = true
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if autoDetection {
+                Image(systemName: "eye")
+                    .foregroundColor(.green)
+            }
+            if pauseGesture {
+                Image(systemName: "hand.raised")
+                    .foregroundColor(.cyan)
+            }
+            if voiceCommands {
+                Image(systemName: "mic")
+                    .foregroundColor(.orange)
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.6))
+        .cornerRadius(12)
     }
 }
 

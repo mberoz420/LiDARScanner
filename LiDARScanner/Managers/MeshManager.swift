@@ -3,6 +3,8 @@ import ARKit
 import RealityKit
 import Combine
 import UIKit
+import AVFoundation
+import Speech
 
 @MainActor
 class MeshManager: NSObject, ObservableObject {
@@ -23,6 +25,51 @@ class MeshManager: NSObject, ObservableObject {
     @Published var phaseProgress: Double = 0
     @Published var useEdgeVisualization = false  // Edge lines instead of mesh overlay
     @Published var edgeInReticle = false  // True when edge is detected in center of screen
+    @Published var isPaused = false  // True when device movement has stopped
+    @Published var edgeConfirmed = false  // True when paused over an edge (confirmed detection)
+    @Published var confirmedCornerCount = 0  // Number of user-confirmed corners
+
+    // User-confirmed corners (high confidence from pause gesture)
+    private(set) var userConfirmedCorners: [SIMD3<Float>] = []
+
+    // Movement tracking for pause detection
+    private var lastCameraPosition: SIMD3<Float>?
+    private var lastCameraUpdateTime: Date = .distantPast
+    private var movementSamples: [Float] = []  // Recent movement speeds
+    private let pauseThreshold: Float = 0.008  // Movement below this = paused (8mm/frame)
+    private let pauseDuration: TimeInterval = 0.3  // Must be still for this long
+    private var pauseStartTime: Date?
+    private let hapticGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private var lastConfirmedPosition: SIMD3<Float>?  // Prevent duplicate confirmations
+    private let speechSynthesizer = AVSpeechSynthesizer()
+
+    // Speech recognition for voice commands
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private let audioEngine = AVAudioEngine()
+    @Published var isListening = false
+    @Published var lastVoiceCommand: String?
+
+    // Voice command types
+    enum VoiceCommand: String, CaseIterable {
+        case edge = "edge"
+        case corner = "corner"
+        case door = "door"
+        case window = "window"
+        case furniture = "furniture"
+        case wall = "wall"
+
+        var confirmationMessage: String {
+            switch self {
+            case .edge, .corner: return "Corner"
+            case .door: return "Door"
+            case .window: return "Window"
+            case .furniture: return "Furniture"
+            case .wall: return "Wall"
+            }
+        }
+    }
 
     // Surface classifier for floor/ceiling/wall detection
     let surfaceClassifier = SurfaceClassifier()
@@ -109,6 +156,15 @@ class MeshManager: NSObject, ObservableObject {
         vertexCount = 0
         surfaceTypes.removeAll()
 
+        // Reset user-confirmed corners
+        userConfirmedCorners.removeAll()
+        confirmedCornerCount = 0
+        lastConfirmedPosition = nil
+        movementSamples.removeAll()
+        pauseStartTime = nil
+        isPaused = false
+        edgeConfirmed = false
+
         // Reset surface classifier and sync with app settings
         surfaceClassifier.reset()
         surfaceClassificationEnabled = AppSettings.shared.surfaceClassificationEnabled
@@ -121,6 +177,9 @@ class MeshManager: NSObject, ObservableObject {
             // Always enable classification for guided room mode (needed for edge detection)
             surfaceClassifier.classificationEnabled = true
             scanStatus = currentPhase.instruction
+
+            // Start voice commands for walls mode
+            startVoiceCommands()
         } else {
             currentPhase = .ready
             useEdgeVisualization = false
@@ -233,12 +292,22 @@ class MeshManager: NSObject, ObservableObject {
     func stopScanning() -> CapturedScan? {
         isScanning = false
         capturedScan?.endTime = Date()
-        capturedScan?.statistics = surfaceClassifier.statistics
+
+        // Stop voice commands
+        stopVoiceCommands()
+
+        // Include user-confirmed corners in statistics
+        var stats = surfaceClassifier.statistics
+        stats.userConfirmedCorners = userConfirmedCorners
+        capturedScan?.statistics = stats
 
         // Build summary
         var summary = "\(vertexCount) vertices"
         if !surfaceClassifier.statistics.summary.isEmpty {
             summary += " | \(surfaceClassifier.statistics.summary)"
+        }
+        if !userConfirmedCorners.isEmpty {
+            summary += " | \(userConfirmedCorners.count) confirmed corners"
         }
         scanStatus = "Scan complete - \(summary)"
 
@@ -255,6 +324,295 @@ class MeshManager: NSObject, ObservableObject {
             anchor.removeFromParent()
         }
         faceAnchors.removeAll()
+    }
+
+    // MARK: - Corner Confirmation
+
+    /// Confirm a corner at the given position (from pause gesture or voice command)
+    private func confirmCorner(at position: SIMD3<Float>, source: String) {
+        // Check if not too close to an already confirmed corner
+        let isDuplicate = userConfirmedCorners.contains { existing in
+            simd_length(existing - position) < 0.2  // 20cm threshold
+        }
+
+        guard !isDuplicate else { return }
+
+        userConfirmedCorners.append(position)
+        confirmedCornerCount = userConfirmedCorners.count
+        lastConfirmedPosition = position
+
+        // Add to edge visualizer with high priority
+        edgeVisualizer.addCorner(at: position)
+
+        // Haptic feedback
+        if AppSettings.shared.hapticFeedbackEnabled {
+            hapticGenerator.impactOccurred()
+        }
+
+        // Speech feedback
+        speakConfirmation("Corner \(userConfirmedCorners.count)")
+
+        print("[MeshManager] Corner CONFIRMED via \(source) at \(position), total: \(userConfirmedCorners.count)")
+    }
+
+    // MARK: - Speech Feedback
+
+    /// Speak a confirmation message
+    private func speakConfirmation(_ message: String) {
+        guard AppSettings.shared.speechFeedbackEnabled else { return }
+
+        // Stop any current speech
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+
+        let utterance = AVSpeechUtterance(string: message)
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 1.2  // Slightly faster
+        utterance.volume = 0.8
+        utterance.pitchMultiplier = 1.1  // Slightly higher pitch for clarity
+
+        speechSynthesizer.speak(utterance)
+    }
+
+    // MARK: - Voice Commands (Speech Recognition)
+
+    /// Start listening for voice commands
+    func startVoiceCommands() {
+        guard AppSettings.shared.voiceCommandsEnabled else { return }
+
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            DispatchQueue.main.async {
+                switch status {
+                case .authorized:
+                    self?.startListening()
+                case .denied, .restricted, .notDetermined:
+                    print("[MeshManager] Speech recognition not authorized: \(status)")
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    /// Stop listening for voice commands
+    func stopVoiceCommands() {
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest = nil
+        isListening = false
+    }
+
+    private func startListening() {
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("[MeshManager] Speech recognizer not available")
+            return
+        }
+
+        // Cancel any ongoing task
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        // Configure audio session
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("[MeshManager] Audio session setup failed: \(error)")
+            return
+        }
+
+        // Create recognition request
+        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+        guard let recognitionRequest = recognitionRequest else { return }
+
+        recognitionRequest.shouldReportPartialResults = true
+
+        // Start recognition task
+        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+            guard let self = self else { return }
+
+            if let result = result {
+                let text = result.bestTranscription.formattedString.lowercased()
+                self.processVoiceInput(text)
+            }
+
+            if error != nil || (result?.isFinal ?? false) {
+                // Restart listening if still scanning
+                if self.isScanning && self.currentMode == .walls {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.startListening()
+                    }
+                }
+            }
+        }
+
+        // Configure audio input
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            self.recognitionRequest?.append(buffer)
+        }
+
+        // Start audio engine
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+            isListening = true
+            print("[MeshManager] Voice commands listening started")
+        } catch {
+            print("[MeshManager] Audio engine start failed: \(error)")
+        }
+    }
+
+    /// Process recognized voice input and look for commands
+    private func processVoiceInput(_ text: String) {
+        // Look for command keywords in the text
+        for command in VoiceCommand.allCases {
+            if text.contains(command.rawValue) {
+                handleVoiceCommand(command)
+                // Clear recognition to avoid duplicate triggers
+                recognitionTask?.cancel()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    if self.isScanning && self.currentMode == .walls {
+                        self.startListening()
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    /// Handle a recognized voice command
+    private func handleVoiceCommand(_ command: VoiceCommand) {
+        guard let frame = currentFrame else { return }
+
+        lastVoiceCommand = command.rawValue
+
+        // Get position where user is pointing
+        guard let position = getReticleTargetPosition(frame: frame) else { return }
+
+        // Haptic feedback
+        if AppSettings.shared.hapticFeedbackEnabled {
+            hapticGenerator.impactOccurred()
+        }
+
+        switch command {
+        case .edge, .corner, .wall:
+            // Register as corner
+            confirmCorner(at: position, source: "voice:\(command.rawValue)")
+
+        case .door:
+            // Register as door
+            registerDoor(at: position, frame: frame)
+            speakConfirmation("Door marked")
+            print("[MeshManager] Voice: door at \(position)")
+
+        case .window:
+            // Register as window
+            registerWindow(at: position, frame: frame)
+            speakConfirmation("Window marked")
+            print("[MeshManager] Voice: window at \(position)")
+
+        case .furniture:
+            // Register as furniture (to exclude from clean walls)
+            registerFurniture(at: position)
+            speakConfirmation("Furniture marked")
+            print("[MeshManager] Voice: furniture at \(position)")
+        }
+    }
+
+    /// Register a door at the given position
+    private func registerDoor(at position: SIMD3<Float>, frame: ARFrame) {
+        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+        let door = DetectedDoor(
+            position: position,
+            width: 0.9,  // Default door width ~90cm
+            height: 2.1, // Default door height ~210cm
+            confidence: 1.0  // User-confirmed = high confidence
+        )
+        surfaceClassifier.statistics.detectedDoors.append(door)
+    }
+
+    /// Register a window at the given position
+    private func registerWindow(at position: SIMD3<Float>, frame: ARFrame) {
+        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+        let window = DetectedWindow(
+            position: position,
+            width: 1.0,           // Default window width ~100cm
+            height: 1.2,          // Default window height ~120cm
+            heightFromFloor: 0.9, // Default sill height ~90cm
+            confidence: 1.0       // User-confirmed = high confidence
+        )
+        surfaceClassifier.statistics.detectedWindows.append(window)
+    }
+
+    /// Register furniture to exclude from clean walls export
+    private func registerFurniture(at position: SIMD3<Float>) {
+        // Store furniture positions for exclusion during wall reconstruction
+        // For now, we just log it - can be extended later
+        print("[MeshManager] Furniture registered at \(position) - will be excluded from clean walls")
+    }
+
+    // MARK: - Reticle Target Position
+
+    /// Get the 3D world position where the reticle (center of screen) is pointing
+    private func getReticleTargetPosition(frame: ARFrame) -> SIMD3<Float>? {
+        let camera = frame.camera
+
+        // Camera position
+        let cameraPosition = SIMD3<Float>(
+            camera.transform.columns.3.x,
+            camera.transform.columns.3.y,
+            camera.transform.columns.3.z
+        )
+
+        // Camera forward direction (negative Z in camera space)
+        let cameraForward = -SIMD3<Float>(
+            camera.transform.columns.2.x,
+            camera.transform.columns.2.y,
+            camera.transform.columns.2.z
+        )
+
+        // Find the closest edge/corner entity in the reticle direction
+        // Use the edgeVisualizer's corner positions
+        var closestPosition: SIMD3<Float>?
+        var closestDistance: Float = Float.greatestFiniteMagnitude
+
+        // Check against existing detected edges from surfaceClassifier
+        for edge in surfaceClassifier.statistics.detectedEdges {
+            if edge.edgeType == .verticalCorner {
+                let midpoint = (edge.startPoint + edge.endPoint) / 2
+
+                // Vector from camera to edge
+                let toEdge = midpoint - cameraPosition
+                let distance = simd_length(toEdge)
+
+                // Check if edge is roughly in front of camera
+                let dot = simd_dot(simd_normalize(toEdge), cameraForward)
+                if dot > 0.9 && distance < closestDistance && distance < 5.0 {
+                    closestDistance = distance
+                    closestPosition = midpoint
+                }
+            }
+        }
+
+        // If no edge found, raycast to estimate position at ~1.5m ahead
+        if closestPosition == nil {
+            // Default: position 1.5m ahead at floor level
+            let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+            let targetDistance: Float = 1.5
+            let targetPoint = cameraPosition + cameraForward * targetDistance
+            closestPosition = SIMD3<Float>(targetPoint.x, floorY, targetPoint.z)
+        }
+
+        return closestPosition
     }
 
     // MARK: - Mesh Processing
@@ -772,11 +1130,67 @@ extension MeshManager: ARSessionDelegate {
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
 
-            // Check if edge is in reticle (for walls mode)
+            // Check if edge is in reticle and detect pause (for walls mode)
             if isScanning && currentMode == .walls {
-                edgeInReticle = edgeVisualizer.isEdgeInReticle(frame: frame)
+                // Only check for edges if auto-detection is enabled
+                if AppSettings.shared.autoDetectionEnabled {
+                    edgeInReticle = edgeVisualizer.isEdgeInReticle(frame: frame)
+                } else {
+                    edgeInReticle = false
+                }
+
+                // Track camera movement for pause detection
+                let currentPosition = SIMD3<Float>(
+                    frame.camera.transform.columns.3.x,
+                    frame.camera.transform.columns.3.y,
+                    frame.camera.transform.columns.3.z
+                )
+
+                if let lastPos = lastCameraPosition {
+                    let movement = simd_length(currentPosition - lastPos)
+                    movementSamples.append(movement)
+                    if movementSamples.count > 10 {
+                        movementSamples.removeFirst()
+                    }
+
+                    // Average recent movement
+                    let avgMovement = movementSamples.reduce(0, +) / Float(movementSamples.count)
+
+                    if avgMovement < pauseThreshold {
+                        // Device is still
+                        if pauseStartTime == nil {
+                            pauseStartTime = Date()
+                        } else if Date().timeIntervalSince(pauseStartTime!) >= pauseDuration {
+                            if !isPaused {
+                                isPaused = true
+                                // Check if pause gesture is enabled
+                                if AppSettings.shared.pauseGestureEnabled && !edgeConfirmed {
+                                    // If auto-detection is on, require edge to be detected
+                                    // If auto-detection is off, allow marking anywhere (manual mode)
+                                    let shouldConfirm = !AppSettings.shared.autoDetectionEnabled || edgeInReticle
+
+                                    if shouldConfirm {
+                                        // Get the 3D position where user is looking
+                                        if let cornerPosition = getReticleTargetPosition(frame: frame) {
+                                            confirmCorner(at: cornerPosition, source: "pause")
+                                        }
+                                        edgeConfirmed = true
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Device is moving
+                        isPaused = false
+                        pauseStartTime = nil
+                        edgeConfirmed = false
+                    }
+                }
+                lastCameraPosition = currentPosition
             } else {
                 edgeInReticle = false
+                isPaused = false
+                edgeConfirmed = false
             }
         }
     }

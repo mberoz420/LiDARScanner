@@ -257,6 +257,9 @@ struct ScanStatistics {
     var detectedWindows: [DetectedWindow] = []
     var surfaceCounts: [SurfaceType: Int] = [:]
 
+    /// User-confirmed corners (high confidence - user paused over these)
+    var userConfirmedCorners: [SIMD3<Float>] = []
+
     // MARK: - Detected Planes (for guided scanning)
 
     /// Detected floor plane (infinite plane at floor height)

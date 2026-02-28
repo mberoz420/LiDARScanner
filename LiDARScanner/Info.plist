@@ -49,6 +49,10 @@
     <string>This app uses the camera and LiDAR sensor to scan objects.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>This app saves scanned models to your photo library.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app uses the microphone for voice commands during scanning. Say "edge", "door", "window", or "furniture" to mark features.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>This app uses speech recognition to understand voice commands during scanning, allowing hands-free operation.</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>CFBundleURLTypes</key>

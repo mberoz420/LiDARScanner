@@ -10,7 +10,7 @@ struct ReconstructedWall: Identifiable {
     let floorY: Float
     let ceilingY: Float
     let normal: SIMD3<Float>        // Facing direction (inward)
-    var openings: [WallOpening]     // Doors/windows to cut out
+    var openings: [ReconstructedOpening]     // Doors/windows to cut out
 
     var length: Float {
         simd_length(end - start)
@@ -21,9 +21,9 @@ struct ReconstructedWall: Identifiable {
     }
 }
 
-struct WallOpening: Identifiable {
+struct ReconstructedOpening: Identifiable {
     let id = UUID()
-    let type: OpeningType
+    let type: ReconstructedOpeningType
     let bottomY: Float              // Bottom of opening
     let topY: Float                 // Top of opening
     let startOffset: Float          // Distance from wall start
@@ -38,7 +38,7 @@ struct WallOpening: Identifiable {
     }
 }
 
-enum OpeningType {
+enum ReconstructedOpeningType {
     case door
     case window
     case glassDoor
@@ -74,8 +74,11 @@ class WallReconstructor {
 
         print("[WallReconstructor] Room dimensions: floor=\(floorY), ceiling=\(ceilingY), height=\(ceilingY - floorY)")
 
-        // Extract and order corners
-        let corners = extractCorners(from: statistics.detectedEdges)
+        // Extract corners - prioritize user-confirmed corners, then detected edges
+        let corners = extractCornersWithUserConfirmed(
+            userConfirmed: statistics.userConfirmedCorners,
+            detectedEdges: statistics.detectedEdges
+        )
 
         guard corners.count >= 3 else {
             print("[WallReconstructor] Insufficient corners: \(corners.count)")
@@ -95,6 +98,39 @@ class WallReconstructor {
 
         print("[WallReconstructor] Generated \(walls.count) walls from \(corners.count) corners")
         return walls
+    }
+
+    /// Extract corners, prioritizing user-confirmed corners
+    func extractCornersWithUserConfirmed(
+        userConfirmed: [SIMD3<Float>],
+        detectedEdges: [WallEdge]
+    ) -> [SIMD2<Float>] {
+        var corners: [SIMD2<Float>] = []
+
+        // First, add all user-confirmed corners (highest priority)
+        for corner3D in userConfirmed {
+            let corner2D = SIMD2<Float>(corner3D.x, corner3D.z)
+            corners.append(corner2D)
+            print("[WallReconstructor] User-confirmed corner: (\(corner2D.x), \(corner2D.y))")
+        }
+
+        // Then add detected edges that aren't near user-confirmed ones
+        let detectedCorners = extractCorners(from: detectedEdges)
+        for detected in detectedCorners {
+            let isNearConfirmed = corners.contains { confirmed in
+                simd_length(confirmed - detected) < cornerSnapDistance * 2  // Wider threshold for user-confirmed
+            }
+            if !isNearConfirmed {
+                corners.append(detected)
+            }
+        }
+
+        // Snap and order
+        corners = snapNearbyCorners(corners)
+        corners = orderClockwise(corners)
+
+        print("[WallReconstructor] Total corners: \(corners.count) (\(userConfirmed.count) user-confirmed)")
+        return corners
     }
 
     /// Extract corner positions from detected edges
@@ -288,8 +324,8 @@ class WallReconstructor {
         doors: [DetectedDoor],
         windows: [DetectedWindow],
         floorY: Float
-    ) -> [WallOpening] {
-        var openings: [WallOpening] = []
+    ) -> [ReconstructedOpening] {
+        var openings: [ReconstructedOpening] = []
         let wallLength = simd_length(end - start)
 
         // Process doors
@@ -301,7 +337,7 @@ class WallReconstructor {
                 let startOffset = max(0, projection.offset - door.width / 2)
                 let width = min(door.width, wallLength - startOffset)
 
-                openings.append(WallOpening(
+                openings.append(ReconstructedOpening(
                     type: .door,
                     bottomY: floorY,
                     topY: floorY + door.height,
@@ -320,10 +356,14 @@ class WallReconstructor {
                 let startOffset = max(0, projection.offset - window.width / 2)
                 let width = min(window.width, wallLength - startOffset)
 
-                openings.append(WallOpening(
+                // Calculate window Y positions from heightFromFloor and height
+                let windowBottomY = floorY + window.heightFromFloor
+                let windowTopY = windowBottomY + window.height
+
+                openings.append(ReconstructedOpening(
                     type: .window,
-                    bottomY: window.bottomY,
-                    topY: window.topY,
+                    bottomY: windowBottomY,
+                    topY: windowTopY,
                     startOffset: startOffset,
                     width: width
                 ))
@@ -363,16 +403,16 @@ class WallReconstructor {
     }
 
     /// Merge overlapping openings
-    private func mergeOverlappingOpenings(_ openings: [WallOpening]) -> [WallOpening] {
+    private func mergeOverlappingOpenings(_ openings: [ReconstructedOpening]) -> [ReconstructedOpening] {
         guard openings.count > 1 else { return openings }
 
-        var result: [WallOpening] = []
+        var result: [ReconstructedOpening] = []
 
         for opening in openings {
             if let lastIndex = result.indices.last,
                result[lastIndex].endOffset >= opening.startOffset - 0.05 {
                 // Overlapping - merge
-                let merged = WallOpening(
+                let merged = ReconstructedOpening(
                     type: result[lastIndex].type,  // Keep first type
                     bottomY: min(result[lastIndex].bottomY, opening.bottomY),
                     topY: max(result[lastIndex].topY, opening.topY),

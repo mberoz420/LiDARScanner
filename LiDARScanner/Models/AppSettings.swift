@@ -112,6 +112,15 @@ class AppSettings: ObservableObject {
     // Door/window detection settings
     @AppStorage("detectDoorsWindows") var detectDoorsWindows: Bool = true
 
+    // Input methods for marking features
+    @AppStorage("pauseGestureEnabled") var pauseGestureEnabled: Bool = true   // Pause to confirm edge
+    @AppStorage("voiceCommandsEnabled") var voiceCommandsEnabled: Bool = true  // Speak to mark features
+    @AppStorage("autoDetectionEnabled") var autoDetectionEnabled: Bool = true  // Automatic edge detection
+
+    // Feedback settings
+    @AppStorage("speechFeedbackEnabled") var speechFeedbackEnabled: Bool = true
+    @AppStorage("hapticFeedbackEnabled") var hapticFeedbackEnabled: Bool = true
+
     // Update checking - default to GitHub raw file
     @AppStorage("versionCheckURL") var versionCheckURL: String = "https://raw.githubusercontent.com/mberoz420/LiDARScanner/master/version.json"
     @AppStorage("autoCheckUpdates") var autoCheckUpdates: Bool = true
