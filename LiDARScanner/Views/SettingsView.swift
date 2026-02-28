@@ -42,20 +42,72 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("• Share Sheet: Choose destination each time")
                         Text("• Files App: Opens file picker to save locally")
-                        Text("• Google Drive: Opens share sheet - select 'Save to Files' then navigate to Google Drive")
+                        Text("• Google Drive: Auto-uploads to your Google Drive (configure below)")
                         Text("• iCloud Drive: Saves directly to iCloud (requires iCloud enabled)")
                     }
                     .font(.caption2)
                 }
 
-                // Google Drive folder name
+                // Google Drive configuration
                 if settings.defaultDestination == .googleDrive {
                     Section {
+                        // Sign-in status
+                        HStack {
+                            Text("Status")
+                            Spacer()
+                            if GoogleDriveManager.shared.isSignedIn {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                    Text(GoogleDriveManager.shared.userEmail ?? "Signed In")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            } else {
+                                Text("Not signed in")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        // Sign in/out button
+                        if GoogleDriveManager.shared.isSignedIn {
+                            Button("Sign Out") {
+                                GoogleDriveManager.shared.signOut()
+                            }
+                            .foregroundColor(.red)
+                        } else {
+                            Button("Sign In to Google") {
+                                Task {
+                                    await GoogleDriveManager.shared.signIn()
+                                }
+                            }
+                            .disabled(settings.googleClientID.isEmpty)
+                        }
+
+                        // Client ID
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Google Client ID")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            TextField("xxxxx.apps.googleusercontent.com", text: $settings.googleClientID)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                                .autocapitalization(.none)
+                        }
+
+                        // Folder name
                         TextField("Folder Name", text: $settings.googleDriveFolderName)
                     } header: {
-                        Text("Google Drive Folder")
+                        Text("Google Drive")
                     } footer: {
-                        Text("Scans will be saved to this folder in Google Drive.")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("To set up Google Drive:")
+                            Text("1. Go to console.cloud.google.com")
+                            Text("2. Create a project and enable Google Drive API")
+                            Text("3. Create OAuth 2.0 Client ID (iOS app)")
+                            Text("4. Copy the Client ID and paste above")
+                        }
+                        .font(.caption2)
                     }
                 }
 

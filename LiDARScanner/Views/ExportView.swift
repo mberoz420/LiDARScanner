@@ -287,13 +287,38 @@ struct ExportView: View {
     }
 
     private func saveToGoogleDrive(url: URL) {
-        let folderName = settings.googleDriveFolderName
+        let driveManager = GoogleDriveManager.shared
 
-        // Use share sheet - user should select "Save to Files" then navigate to Google Drive > folderName
-        // Show instruction as alert
-        googleDriveInstruction = "Tap 'Save to Files' → Browse → Google Drive → \(folderName)"
-        showGoogleDriveAlert = true
-        pendingShareURL = url
+        // Check if Google Drive is configured
+        guard driveManager.isConfigured else {
+            googleDriveInstruction = "Google Drive not configured. Go to App Settings → Google Drive to set up your Client ID."
+            showGoogleDriveAlert = true
+            pendingShareURL = url
+            return
+        }
+
+        // Try automatic upload
+        Task {
+            let mimeType = driveManager.mimeType(for: url)
+            let success = await driveManager.uploadFile(at: url, mimeType: mimeType)
+
+            if success {
+                withAnimation {
+                    showSaveSuccess = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation {
+                        showSaveSuccess = false
+                    }
+                }
+            } else {
+                // Fall back to manual method
+                let folderName = settings.googleDriveFolderName
+                googleDriveInstruction = driveManager.lastError ?? "Upload failed. Tap 'Save to Files' → Browse → Google Drive → \(folderName)"
+                showGoogleDriveAlert = true
+                pendingShareURL = url
+            }
+        }
     }
 
     private func generateSimplifiedRoom() {

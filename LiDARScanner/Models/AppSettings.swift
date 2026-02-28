@@ -22,7 +22,7 @@ enum ExportDestination: String, CaseIterable, Identifiable {
         switch self {
         case .shareSheet: return "Choose destination each time"
         case .files: return "Open file picker to save locally"
-        case .googleDrive: return "Share sheet → Save to Files → Google Drive"
+        case .googleDrive: return "Auto-upload to Google Drive (requires setup)"
         case .iCloud: return "Save directly to iCloud Drive"
         }
     }
@@ -82,6 +82,9 @@ class AppSettings: ObservableObject {
     @AppStorage("autoSaveAfterScan") var autoSaveAfterScan: Bool = false
     @AppStorage("includeColorsInExport") var includeColors: Bool = true
     @AppStorage("googleDriveFolderName") var googleDriveFolderName: String = "LiDAR Scans"
+
+    // Google Drive settings
+    @AppStorage("googleClientID") var googleClientID: String = ""
 
     // Surface classification settings
     @AppStorage("surfaceClassificationEnabled") var surfaceClassificationEnabled: Bool = true
