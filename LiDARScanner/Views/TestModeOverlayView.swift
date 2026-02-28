@@ -6,11 +6,16 @@ struct TestModeOverlayView: View {
 
     var body: some View {
         ZStack {
-            // Reticle in center
-            TestModeReticle(
-                hasCeiling: detector.ceilingPlane != nil,
-                edgeCount: detector.edgeCount
-            )
+            // Reticle near top of screen (for ceiling/wall-ceiling detection)
+            VStack {
+                Spacer()
+                    .frame(height: 100)
+                TestModeReticle(
+                    hasCeiling: detector.ceilingPlane != nil,
+                    edgeCount: detector.edgeCount
+                )
+                Spacer()
+            }
 
             VStack {
                 // Top status bar

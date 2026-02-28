@@ -92,13 +92,30 @@ class TestModeDetector: ObservableObject {
 
     // MARK: - Frame Processing (ARKit Planes)
 
+    /// Camera direction for filtering planes
+    private var cameraPosition: SIMD3<Float> = .zero
+    private var cameraForward: SIMD3<Float> = .init(0, 0, -1)
+    private let reticleAngleThreshold: Float = 0.5  // ~60° cone
+
     func processFrame(_ frame: ARFrame) {
         guard !isPaused else { return }
 
-        // Method 1: ARKit plane-based detection (sharp corners)
+        // Get camera position and direction
+        let transform = frame.camera.transform
+        cameraPosition = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+
+        // Camera forward is -Z axis, but we want to point slightly UP (toward reticle at top)
+        // Reticle is near top of screen, so adjust forward direction upward
+        let rawForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+        let upBias: Float = 0.3  // Bias toward up direction
+        cameraForward = simd_normalize(rawForward + SIMD3<Float>(0, upBias, 0))
+
+        // Only process planes that are in the reticle direction
         for anchor in frame.anchors {
             if let planeAnchor = anchor as? ARPlaneAnchor {
-                processPlaneAnchor(planeAnchor)
+                if isPlaneInReticle(planeAnchor) {
+                    processPlaneAnchor(planeAnchor)
+                }
             }
         }
 
@@ -108,6 +125,26 @@ class TestModeDetector: ObservableObject {
         }
 
         updateStatus()
+    }
+
+    /// Check if plane is roughly in the direction of the reticle
+    private func isPlaneInReticle(_ anchor: ARPlaneAnchor) -> Bool {
+        let planeCenter = SIMD3<Float>(
+            anchor.transform.columns.3.x,
+            anchor.transform.columns.3.y,
+            anchor.transform.columns.3.z
+        )
+
+        // Direction from camera to plane
+        let toPlane = planeCenter - cameraPosition
+        let distance = simd_length(toPlane)
+        guard distance > 0.1 else { return false }  // Too close
+
+        let directionToPlane = simd_normalize(toPlane)
+
+        // Check if plane is in the reticle cone (dot product > threshold)
+        let alignment = simd_dot(directionToPlane, cameraForward)
+        return alignment > reticleAngleThreshold
     }
 
     // MARK: - Mesh Processing (Raw LiDAR Data)
