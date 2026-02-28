@@ -494,9 +494,9 @@ struct ScanModeView: View {
 
         do {
             _ = try await sessionManager.saveSession(
-                scan: scan,
-                mode: mode,
-                name: saveName.isEmpty ? sessionManager.generateDefaultName() : saveName
+                scan,
+                name: saveName.isEmpty ? sessionManager.generateDefaultName() : saveName,
+                mode: mode
             )
             saveSuccess = true
         } catch {
