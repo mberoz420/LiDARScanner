@@ -55,7 +55,9 @@ class WallReconstructor {
     var cornerSnapDistance: Float = 0.15  // 15cm - merge corners closer than this
     var minWallLength: Float = 0.3        // 30cm - minimum wall segment length
     var openingProximity: Float = 0.3     // 30cm - max distance to associate opening with wall
-    var defaultCeilingHeight: Float = 2.5 // Default if not detected
+    var defaultCeilingHeight: Float = 3.5 // Default if not detected (increased for tall rooms)
+    var wallThickness: Float = 0.05       // 5cm wall thickness for double-sided export
+    var doubleSidedWalls: Bool = true     // Generate both sides of walls
 
     // MARK: - Public Methods
 
@@ -63,7 +65,14 @@ class WallReconstructor {
     func reconstruct(from statistics: ScanStatistics) -> [ReconstructedWall] {
         // Get room dimensions
         let floorY = statistics.floorHeight ?? 0
-        let ceilingY = statistics.ceilingHeight ?? (floorY + defaultCeilingHeight)
+        var ceilingY = statistics.ceilingHeight ?? (floorY + defaultCeilingHeight)
+
+        // Ensure minimum room height
+        if ceilingY - floorY < 2.0 {
+            ceilingY = floorY + defaultCeilingHeight
+        }
+
+        print("[WallReconstructor] Room dimensions: floor=\(floorY), ceiling=\(ceilingY), height=\(ceilingY - floorY)")
 
         // Extract and order corners
         let corners = extractCorners(from: statistics.detectedEdges)
@@ -72,6 +81,8 @@ class WallReconstructor {
             print("[WallReconstructor] Insufficient corners: \(corners.count)")
             return []
         }
+
+        print("[WallReconstructor] Corners: \(corners.map { "(\($0.x), \($0.y))" }.joined(separator: ", "))")
 
         // Generate walls between corners
         let walls = generateWalls(
@@ -394,22 +405,39 @@ class WallReconstructor {
     /// Generate simple solid wall (no openings)
     private func generateSolidWall(_ wall: ReconstructedWall) -> (vertices: [SIMD3<Float>], normals: [SIMD3<Float>], faces: [[UInt32]]) {
 
-        // 4 corners of the wall quad
+        // 4 corners of the wall quad - front face
         let v0 = SIMD3<Float>(wall.start.x, wall.floorY, wall.start.y)   // Bottom-left
         let v1 = SIMD3<Float>(wall.end.x, wall.floorY, wall.end.y)       // Bottom-right
         let v2 = SIMD3<Float>(wall.end.x, wall.ceilingY, wall.end.y)     // Top-right
         let v3 = SIMD3<Float>(wall.start.x, wall.ceilingY, wall.start.y) // Top-left
 
-        let vertices = [v0, v1, v2, v3]
-        let normals = [wall.normal, wall.normal, wall.normal, wall.normal]
+        if doubleSidedWalls {
+            // Double-sided: add vertices for back face with reversed normals
+            let backNormal = -wall.normal
 
-        // Two triangles: 0-1-2 and 0-2-3
-        let faces: [[UInt32]] = [
-            [0, 1, 2],
-            [0, 2, 3]
-        ]
+            let vertices = [
+                v0, v1, v2, v3,  // Front face vertices (0-3)
+                v0, v1, v2, v3   // Back face vertices (4-7) - same positions, different normals
+            ]
+            let normals = [
+                wall.normal, wall.normal, wall.normal, wall.normal,      // Front normals
+                backNormal, backNormal, backNormal, backNormal           // Back normals
+            ]
 
-        return (vertices, normals, faces)
+            // Front face: 0-1-2, 0-2-3 (counter-clockwise from front)
+            // Back face: 4-6-5, 4-7-6 (clockwise from front = counter-clockwise from back)
+            let faces: [[UInt32]] = [
+                [0, 1, 2], [0, 2, 3],  // Front
+                [4, 6, 5], [4, 7, 6]   // Back (reversed winding)
+            ]
+
+            return (vertices, normals, faces)
+        } else {
+            let vertices = [v0, v1, v2, v3]
+            let normals = [wall.normal, wall.normal, wall.normal, wall.normal]
+            let faces: [[UInt32]] = [[0, 1, 2], [0, 2, 3]]
+            return (vertices, normals, faces)
+        }
     }
 
     /// Generate wall with openings cut out
@@ -421,6 +449,7 @@ class WallReconstructor {
 
         let wallDir = simd_normalize(wall.end - wall.start)
         let wallLength = wall.length
+        let backNormal = -wall.normal
 
         // Helper to create 3D point on wall
         func wallPoint(offset: Float, y: Float) -> SIMD3<Float> {
@@ -428,13 +457,29 @@ class WallReconstructor {
             return SIMD3<Float>(pos2D.x, y, pos2D.y)
         }
 
-        // Helper to add a quad (2 triangles)
+        // Helper to add a quad (2 triangles) - double-sided if enabled
         func addQuad(bl: SIMD3<Float>, br: SIMD3<Float>, tr: SIMD3<Float>, tl: SIMD3<Float>) {
             let baseIndex = UInt32(vertices.count)
-            vertices.append(contentsOf: [bl, br, tr, tl])
-            normals.append(contentsOf: [wall.normal, wall.normal, wall.normal, wall.normal])
-            faces.append([baseIndex, baseIndex + 1, baseIndex + 2])
-            faces.append([baseIndex, baseIndex + 2, baseIndex + 3])
+
+            if doubleSidedWalls {
+                // Front and back vertices
+                vertices.append(contentsOf: [bl, br, tr, tl, bl, br, tr, tl])
+                normals.append(contentsOf: [
+                    wall.normal, wall.normal, wall.normal, wall.normal,
+                    backNormal, backNormal, backNormal, backNormal
+                ])
+                // Front faces
+                faces.append([baseIndex, baseIndex + 1, baseIndex + 2])
+                faces.append([baseIndex, baseIndex + 2, baseIndex + 3])
+                // Back faces (reversed winding)
+                faces.append([baseIndex + 4, baseIndex + 6, baseIndex + 5])
+                faces.append([baseIndex + 4, baseIndex + 7, baseIndex + 6])
+            } else {
+                vertices.append(contentsOf: [bl, br, tr, tl])
+                normals.append(contentsOf: [wall.normal, wall.normal, wall.normal, wall.normal])
+                faces.append([baseIndex, baseIndex + 1, baseIndex + 2])
+                faces.append([baseIndex, baseIndex + 2, baseIndex + 3])
+            }
         }
 
         // Build wall regions around openings
@@ -499,6 +544,7 @@ class WallReconstructor {
         var faces: [[UInt32]] = []
 
         let normal = SIMD3<Float>(0, normalY, 0)
+        let backNormal = SIMD3<Float>(0, -normalY, 0)
 
         // Fan triangulation from centroid
         let center = corners.reduce(.zero, +) / Float(corners.count)
@@ -514,7 +560,9 @@ class WallReconstructor {
             normals.append(normal)
         }
 
-        // Create triangles (fan from center)
+        let vertexCount = vertices.count
+
+        // Create triangles (fan from center) - front side
         for i in 0..<corners.count {
             let next = (i + 1) % corners.count
             if normalY > 0 {
@@ -523,6 +571,31 @@ class WallReconstructor {
             } else {
                 // Ceiling - clockwise winding for downward normal
                 faces.append([0, UInt32(next + 1), UInt32(i + 1)])
+            }
+        }
+
+        // Add back side for double-sided rendering
+        if doubleSidedWalls {
+            // Duplicate vertices with opposite normals
+            vertices.append(centerVertex)
+            normals.append(backNormal)
+
+            for corner in corners {
+                vertices.append(SIMD3<Float>(corner.x, y, corner.y))
+                normals.append(backNormal)
+            }
+
+            // Back side triangles (reversed winding)
+            let offset = UInt32(vertexCount)
+            for i in 0..<corners.count {
+                let next = (i + 1) % corners.count
+                if normalY > 0 {
+                    // Back of floor
+                    faces.append([offset, offset + UInt32(next + 1), offset + UInt32(i + 1)])
+                } else {
+                    // Back of ceiling
+                    faces.append([offset, offset + UInt32(i + 1), offset + UInt32(next + 1)])
+                }
             }
         }
 
