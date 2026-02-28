@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Overlay for Test Mode - reticle and status
+/// Overlay for Test Mode - reticle, mic indicator, pause/go status
 struct TestModeOverlayView: View {
     @ObservedObject var detector: TestModeDetector
 
@@ -15,6 +15,12 @@ struct TestModeOverlayView: View {
             VStack {
                 // Top status bar
                 HStack(spacing: 12) {
+                    // Microphone indicator
+                    MicrophoneIndicator(
+                        isListening: detector.isListening,
+                        isReceiving: detector.isReceivingAudio
+                    )
+
                     // Status message
                     Text(detector.statusMessage)
                         .font(.headline)
@@ -22,23 +28,8 @@ struct TestModeOverlayView: View {
 
                     Spacer()
 
-                    // Pause/Go button
-                    Button(action: { detector.togglePause() }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: detector.isPaused ? "play.circle.fill" : "pause.circle.fill")
-                                .font(.title2)
-                            Text(detector.isPaused ? "GO" : "PAUSE")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                        }
-                        .foregroundColor(detector.isPaused ? .green : .orange)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(detector.isPaused ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
-                        )
-                    }
+                    // Pause/Go indicator
+                    PauseGoIndicator(isPaused: detector.isPaused)
                 }
                 .padding()
                 .background(Color.black.opacity(0.7))
@@ -80,6 +71,15 @@ struct TestModeOverlayView: View {
                         Spacer()
                         Text("\(detector.detectedEdges.count)")
                             .fontWeight(.bold)
+                    }
+
+                    // Voice command hint
+                    HStack {
+                        Image(systemName: "waveform")
+                            .foregroundColor(.blue)
+                        Text("Say \"Pause\" or \"Go\"")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 .padding()
@@ -153,6 +153,80 @@ struct TestModeReticle: View {
         } else {
             return "EDGES: \(edgeCount)"
         }
+    }
+}
+
+// MARK: - Microphone Indicator
+
+struct MicrophoneIndicator: View {
+    let isListening: Bool
+    let isReceiving: Bool
+
+    var body: some View {
+        ZStack {
+            // Glow when receiving
+            if isReceiving {
+                Circle()
+                    .fill(Color.green.opacity(0.4))
+                    .frame(width: 44, height: 44)
+            }
+
+            Image(systemName: micIcon)
+                .font(.title2)
+                .foregroundColor(micColor)
+                .frame(width: 36, height: 36)
+                .background(Color.black.opacity(0.5))
+                .clipShape(Circle())
+        }
+        .animation(.easeInOut(duration: 0.2), value: isReceiving)
+    }
+
+    private var micIcon: String {
+        if !isListening {
+            return "mic.slash"
+        } else if isReceiving {
+            return "mic.fill"
+        } else {
+            return "mic"
+        }
+    }
+
+    private var micColor: Color {
+        if !isListening {
+            return .gray
+        } else if isReceiving {
+            return .green
+        } else {
+            return .white
+        }
+    }
+}
+
+// MARK: - Pause/Go Indicator
+
+struct PauseGoIndicator: View {
+    let isPaused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: isPaused ? "pause.circle.fill" : "play.circle.fill")
+                .font(.title2)
+
+            Text(isPaused ? "PAUSED" : "SCANNING")
+                .font(.caption)
+                .fontWeight(.bold)
+        }
+        .foregroundColor(isPaused ? .red : .green)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isPaused ? Color.red.opacity(0.2) : Color.green.opacity(0.2))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isPaused ? Color.red : Color.green, lineWidth: 1)
+        )
     }
 }
 

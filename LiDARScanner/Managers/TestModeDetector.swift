@@ -2,8 +2,10 @@ import Foundation
 import simd
 import ARKit
 import UIKit
+import Speech
+import AVFoundation
 
-/// Test Mode: Detect ceiling plane and wall-ceiling intersections
+/// Test Mode: Detect ceiling plane and wall-ceiling intersections with voice control
 class TestModeDetector: ObservableObject {
 
     // MARK: - Published State
@@ -11,6 +13,8 @@ class TestModeDetector: ObservableObject {
     @Published var wallPlanes: [DetectedPlane] = []
     @Published var detectedEdges: [BoundaryEdge] = []
     @Published var isPaused: Bool = false
+    @Published var isListening: Bool = false
+    @Published var isReceivingAudio: Bool = false
     @Published var statusMessage: String = "Point at ceiling"
 
     // MARK: - Data Structures
@@ -40,14 +44,182 @@ class TestModeDetector: ObservableObject {
     private let ceilingNormalThreshold: Float = 0.8
     private let wallNormalThreshold: Float = 0.3
 
-    // MARK: - Control
+    // MARK: - Voice Recognition
+
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var audioEngine: AVAudioEngine?
+    private var permissionGranted: Bool = false
+
+    // MARK: - Init
+
+    init() {
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    }
+
+    // MARK: - Voice Control
 
     func startListening() {
-        // Placeholder - voice disabled for now
+        // Request permissions first
+        requestPermissions { [weak self] granted in
+            guard granted else {
+                DispatchQueue.main.async {
+                    self?.statusMessage = "Voice commands disabled"
+                    self?.isListening = false
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                self?.permissionGranted = true
+                self?.startAudioEngine()
+            }
+        }
+    }
+
+    private func requestPermissions(completion: @escaping (Bool) -> Void) {
+        // First request microphone permission
+        AVAudioApplication.requestRecordPermission { [weak self] micGranted in
+            guard micGranted else {
+                completion(false)
+                return
+            }
+
+            // Then request speech recognition permission
+            SFSpeechRecognizer.requestAuthorization { status in
+                let granted = (status == .authorized)
+                completion(granted)
+            }
+        }
+    }
+
+    private func startAudioEngine() {
+        // Stop any existing engine
+        stopAudioEngine()
+
+        guard permissionGranted else {
+            statusMessage = "Voice not authorized"
+            return
+        }
+
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            statusMessage = "Speech not available"
+            return
+        }
+
+        do {
+            // Setup audio session
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .duckOthers])
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+            // Create audio engine
+            audioEngine = AVAudioEngine()
+            guard let audioEngine = audioEngine else { return }
+
+            // Create recognition request
+            recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+            guard let recognitionRequest = recognitionRequest else { return }
+            recognitionRequest.shouldReportPartialResults = true
+
+            // Get input node and format
+            let inputNode = audioEngine.inputNode
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+            // Verify format is valid
+            guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+                statusMessage = "Invalid audio format"
+                return
+            }
+
+            // Install tap
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+                self?.recognitionRequest?.append(buffer)
+                self?.checkAudioLevel(buffer: buffer)
+            }
+
+            // Start engine
+            audioEngine.prepare()
+            try audioEngine.start()
+
+            isListening = true
+            updateStatus()
+
+            // Start recognition
+            recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+                if let result = result {
+                    let text = result.bestTranscription.formattedString.lowercased()
+                    DispatchQueue.main.async {
+                        self?.processVoiceCommand(text)
+                    }
+                }
+
+                if error != nil || (result?.isFinal ?? false) {
+                    // Restart recognition after a delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        guard let self = self, self.isListening else { return }
+                        self.startAudioEngine()
+                    }
+                }
+            }
+
+        } catch {
+            statusMessage = "Audio error"
+            isListening = false
+        }
+    }
+
+    private func checkAudioLevel(buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData?[0] else { return }
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return }
+
+        var sum: Float = 0
+        for i in 0..<frameLength {
+            sum += abs(channelData[i])
+        }
+        let average = sum / Float(frameLength)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.isReceivingAudio = average > 0.01
+        }
+    }
+
+    private func processVoiceCommand(_ text: String) {
+        let words = text.lowercased().components(separatedBy: " ")
+        guard let lastWord = words.last else { return }
+
+        if lastWord.contains("pause") || lastWord.contains("stop") || lastWord.contains("wait") {
+            if !isPaused {
+                isPaused = true
+                hapticFeedback()
+                updateStatus()
+            }
+        } else if lastWord.contains("go") || lastWord.contains("continue") || lastWord.contains("start") || lastWord.contains("resume") {
+            if isPaused {
+                isPaused = false
+                hapticFeedback()
+                updateStatus()
+            }
+        }
+    }
+
+    private func stopAudioEngine() {
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+
+        audioEngine = nil
+        recognitionRequest = nil
+        recognitionTask = nil
     }
 
     func stopListening() {
-        // Placeholder - voice disabled for now
+        stopAudioEngine()
+        isListening = false
+        isReceivingAudio = false
     }
 
     func togglePause() {
@@ -57,15 +229,13 @@ class TestModeDetector: ObservableObject {
     }
 
     private func hapticFeedback() {
-        DispatchQueue.main.async {
-            let generator = UINotificationFeedbackGenerator()
-            generator.notificationOccurred(.success)
-        }
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
     }
 
     private func updateStatus() {
         if isPaused {
-            statusMessage = "PAUSED - Tap to continue"
+            statusMessage = "PAUSED - Say 'Go'"
         } else if ceilingPlane == nil {
             statusMessage = "Point at ceiling"
         } else if wallPlanes.isEmpty {
@@ -188,6 +358,7 @@ class TestModeDetector: ObservableObject {
     // MARK: - Reset
 
     func reset() {
+        stopListening()
         ceilingPlane = nil
         wallPlanes = []
         detectedEdges = []
