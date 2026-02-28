@@ -102,9 +102,10 @@ struct ScannerView: View {
                     )
                     .padding(.horizontal)
                 }
-                // Test mode overlay
+                // Test mode overlay - full screen
                 else if meshManager.isScanning && meshManager.currentMode == .test {
                     TestModeOverlayView(detector: meshManager.testModeDetector)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 // Surface type legend (when classification is enabled but NOT in guided mode)
                 else if meshManager.isScanning && meshManager.surfaceClassificationEnabled && meshManager.currentMode == .walls && !meshManager.useEdgeVisualization {
