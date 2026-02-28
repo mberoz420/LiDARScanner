@@ -59,6 +59,7 @@ class MeshManager: NSObject, ObservableObject {
         case wall = "wall"
         case door = "door"
         case window = "window"
+        case glass = "glass"       // Transparent surface - filter through
 
         // Furniture & Objects
         case furniture = "furniture"
@@ -78,6 +79,7 @@ class MeshManager: NSObject, ObservableObject {
             case .wall: return "Wall"
             case .door: return "Door"
             case .window: return "Window"
+            case .glass: return "Glass"
             case .furniture: return "Furniture"
             case .appliance: return "Appliance"
             case .cabinet: return "Cabinet"
@@ -110,7 +112,7 @@ class MeshManager: NSObject, ObservableObject {
             switch self {
             case .edge, .corner, .wall: return "Walls"
             case .door: return "Doors"
-            case .window: return "Windows"
+            case .window, .glass: return "Windows"
             case .appliance: return "Appliances"
             case .cabinet, .closet, .shelf: return "Cabinets"
             case .counter: return "Counters"
@@ -129,8 +131,54 @@ class MeshManager: NSObject, ObservableObject {
         let detectedEdges: Int           // Number of edges detected
     }
 
-    // Storage for classified objects
+    // Glass window plane - for filtering LiDAR data that passes through glass
+    enum GlassHandling: String, CaseIterable {
+        case solid = "Solid"       // Cap with flat surface (window becomes wall)
+        case open = "Open"         // Leave hole (architectural)
+        case filter = "Filter"     // Delete mesh data beyond this plane
+    }
+
+    struct WindowPlane {
+        let id: UUID
+        let position: SIMD3<Float>       // Center of window
+        let normal: SIMD3<Float>         // Outward-facing normal
+        let width: Float
+        let height: Float
+        let bottomY: Float
+        var handling: GlassHandling
+
+        /// Check if a point is "outside" this window (beyond the glass)
+        func isOutside(_ point: SIMD3<Float>) -> Bool {
+            // Point is outside if it's on the positive side of the plane (beyond window)
+            let toPoint = point - position
+            return simd_dot(toPoint, normal) > 0.1  // 10cm tolerance
+        }
+
+        /// Check if a point is within the window bounds (horizontally and vertically)
+        func isWithinBounds(_ point: SIMD3<Float>) -> Bool {
+            let toPoint = point - position
+
+            // Project onto window plane axes
+            let right = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), normal))
+            let up = SIMD3<Float>(0, 1, 0)
+
+            let horizontalDist = abs(simd_dot(toPoint, right))
+            let verticalPos = point.y
+
+            return horizontalDist < width / 2 &&
+                   verticalPos >= bottomY &&
+                   verticalPos <= bottomY + height
+        }
+
+        /// Check if a point should be filtered (outside window and within its projection)
+        func shouldFilter(_ point: SIMD3<Float>) -> Bool {
+            return isOutside(point) && isWithinBounds(point)
+        }
+    }
+
+    // Storage for classified objects and window planes
     @Published var classifiedObjects: [ClassifiedObject] = []
+    @Published var windowPlanes: [WindowPlane] = []
 
     // Surface classifier for floor/ceiling/wall detection
     let surfaceClassifier = SurfaceClassifier()
@@ -217,9 +265,10 @@ class MeshManager: NSObject, ObservableObject {
         vertexCount = 0
         surfaceTypes.removeAll()
 
-        // Reset user-confirmed corners and classified objects
+        // Reset user-confirmed corners, classified objects, and window planes
         userConfirmedCorners.removeAll()
         classifiedObjects.removeAll()
+        windowPlanes.removeAll()
         confirmedCornerCount = 0
         lastConfirmedPosition = nil
         movementSamples.removeAll()
@@ -635,10 +684,16 @@ class MeshManager: NSObject, ObservableObject {
             speakConfirmation("Door marked")
 
         case .window:
-            // Register as window
+            // Register as window (includes glass plane for filtering)
             registerWindow(at: position, frame: frame)
             registerClassifiedObject(command, at: position, frame: frame)
-            speakConfirmation("Window marked")
+            speakConfirmation("Window marked - filtering through glass")
+
+        case .glass:
+            // Register as glass surface only (no window frame, just filter plane)
+            registerGlassPlane(at: position, frame: frame)
+            registerClassifiedObject(command, at: position, frame: frame)
+            speakConfirmation("Glass marked - filtering beyond")
 
         case .furniture, .appliance, .cabinet, .counter, .table, .chair, .sofa, .bed, .shelf, .closet:
             // Register as classified object
@@ -697,6 +752,7 @@ class MeshManager: NSObject, ObservableObject {
         case .furniture: return (0.8, 0.8, 0.8)      // Generic furniture
         case .door: return (0.9, 2.1, 0.1)           // Door
         case .window: return (1.0, 1.2, 0.1)         // Window
+        case .glass: return (2.0, 2.5, 0.02)         // Glass surface (thin)
         default: return (0.5, 0.5, 0.5)              // Default cube
         }
     }
@@ -739,9 +795,13 @@ class MeshManager: NSObject, ObservableObject {
         let heightFromFloor: Float = 0.9 // Default sill height ~90cm
 
         // Estimate wall normal from camera direction (perpendicular to viewing direction)
+        // Normal points OUTWARD (away from room, through window)
         let cameraForward = frame.camera.transform.columns.2
-        let wallNormal = SIMD3<Float>(-cameraForward.x, 0, -cameraForward.z)
-        let normalizedWallNormal = simd_normalize(wallNormal)
+        let outwardNormal = SIMD3<Float>(cameraForward.x, 0, cameraForward.z)
+        let normalizedOutward = simd_normalize(outwardNormal)
+
+        // Wall normal points inward (into room)
+        let wallNormal = -normalizedOutward
 
         // Calculate bounding box for window
         let halfWidth = width / 2
@@ -751,17 +811,34 @@ class MeshManager: NSObject, ObservableObject {
             max: SIMD3<Float>(position.x + halfWidth, windowBottomY + height, position.z + 0.1)
         )
 
+        let windowId = UUID()
+
         let window = DetectedWindow(
-            id: UUID(),
+            id: windowId,
             position: position,
             width: width,
             height: height,
             heightFromFloor: heightFromFloor,
-            wallNormal: normalizedWallNormal,
+            wallNormal: wallNormal,
             boundingBox: boundingBox,
             confidence: 1.0  // User-confirmed = high confidence
         )
         surfaceClassifier.statistics.detectedWindows.append(window)
+
+        // Create window plane for glass filtering
+        // Default to "filter" mode - remove mesh data beyond the glass
+        let plane = WindowPlane(
+            id: windowId,
+            position: position,
+            normal: normalizedOutward,  // Points outward through glass
+            width: width,
+            height: height,
+            bottomY: windowBottomY,
+            handling: .filter  // Default: filter out data beyond window
+        )
+        windowPlanes.append(plane)
+
+        print("[MeshManager] Window registered with glass filter plane at \(position)")
     }
 
     /// Register furniture to exclude from clean walls export
@@ -769,6 +846,33 @@ class MeshManager: NSObject, ObservableObject {
         // Store furniture positions for exclusion during wall reconstruction
         // For now, we just log it - can be extended later
         print("[MeshManager] Furniture registered at \(position) - will be excluded from clean walls")
+    }
+
+    /// Register a glass plane for filtering LiDAR data that passes through
+    private func registerGlassPlane(at position: SIMD3<Float>, frame: ARFrame) {
+        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+        let ceilingY = surfaceClassifier.statistics.ceilingHeight ?? 2.5
+
+        // Glass plane spans floor to ceiling, default width
+        let width: Float = 2.0   // Wide default to catch more data
+        let height: Float = ceilingY - floorY
+
+        // Normal points outward (direction camera is facing = through glass)
+        let cameraForward = frame.camera.transform.columns.2
+        let outwardNormal = simd_normalize(SIMD3<Float>(cameraForward.x, 0, cameraForward.z))
+
+        let plane = WindowPlane(
+            id: UUID(),
+            position: position,
+            normal: outwardNormal,
+            width: width,
+            height: height,
+            bottomY: floorY,
+            handling: .filter
+        )
+        windowPlanes.append(plane)
+
+        print("[MeshManager] Glass plane registered at \(position), will filter data beyond")
     }
 
     // MARK: - Reticle Target Position
