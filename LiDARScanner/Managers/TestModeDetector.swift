@@ -143,10 +143,11 @@ class TestModeDetector: ObservableObject {
 
             // STEP 2: Detect walls near ceiling and capture their intersection with ceiling
             if let ceiling = ceilingPlane {
-                // Is this a wall? (vertical plane)
+                // Is this a wall? (vertical plane, NOT window or door)
                 let isWall = planeAnchor.classification == .wall || abs(normal.y) < 0.3
+                let isWindowOrDoor = planeAnchor.classification == .window || planeAnchor.classification == .door
 
-                if isWall {
+                if isWall && !isWindowOrDoor {
                     // Does this wall reach the ceiling?
                     let wallTopY = planeY + (planeAnchor.planeExtent.height / 2)
                     let nearCeiling = abs(wallTopY - ceiling.y) < 0.5  // Within 50cm
