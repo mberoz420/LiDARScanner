@@ -114,7 +114,7 @@ class AppSettings: ObservableObject {
 
     // Input methods for marking features
     @AppStorage("pauseGestureEnabled") var pauseGestureEnabled: Bool = true   // Pause to confirm edge
-    @AppStorage("voiceCommandsEnabled") var voiceCommandsEnabled: Bool = true  // Speak to mark features
+    @AppStorage("voiceCommandsEnabled") var voiceCommandsEnabled: Bool = false  // Speak to mark features (disabled by default - requires permissions)
     @AppStorage("autoDetectionEnabled") var autoDetectionEnabled: Bool = true  // Automatic edge detection
 
     // Feedback settings

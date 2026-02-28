@@ -378,7 +378,10 @@ class MeshManager: NSObject, ObservableObject {
 
     /// Start listening for voice commands
     func startVoiceCommands() {
-        guard AppSettings.shared.voiceCommandsEnabled else { return }
+        guard AppSettings.shared.voiceCommandsEnabled else {
+            print("[MeshManager] Voice commands disabled in settings")
+            return
+        }
 
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
 
@@ -386,7 +389,10 @@ class MeshManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 switch status {
                 case .authorized:
-                    self?.startListening()
+                    // Delay to let ARKit's audio session settle
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self?.startListening()
+                    }
                 case .denied, .restricted, .notDetermined:
                     print("[MeshManager] Speech recognition not authorized: \(status)")
                 @unknown default:
@@ -398,13 +404,20 @@ class MeshManager: NSObject, ObservableObject {
 
     /// Stop listening for voice commands
     func stopVoiceCommands() {
-        audioEngine.stop()
+        // Safely stop audio engine
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        // Remove tap (safe to call even if no tap exists)
         audioEngine.inputNode.removeTap(onBus: 0)
+
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest = nil
         isListening = false
+        print("[MeshManager] Voice commands stopped")
     }
 
     private func startListening() {
@@ -417,10 +430,16 @@ class MeshManager: NSObject, ObservableObject {
         recognitionTask?.cancel()
         recognitionTask = nil
 
-        // Configure audio session
+        // Stop audio engine if running
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
+
+        // Configure audio session - use mixWithOthers to avoid conflicts with ARKit
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
+            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("[MeshManager] Audio session setup failed: \(error)")
@@ -435,29 +454,38 @@ class MeshManager: NSObject, ObservableObject {
 
         // Start recognition task
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self = self else { return }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
 
-            if let result = result {
-                let text = result.bestTranscription.formattedString.lowercased()
-                self.processVoiceInput(text)
-            }
+                if let result = result {
+                    let text = result.bestTranscription.formattedString.lowercased()
+                    self.processVoiceInput(text)
+                }
 
-            if error != nil || (result?.isFinal ?? false) {
-                // Restart listening if still scanning
-                if self.isScanning && self.currentMode == .walls {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        self.startListening()
+                if error != nil || (result?.isFinal ?? false) {
+                    // Restart listening if still scanning
+                    if self.isScanning && self.currentMode == .walls && AppSettings.shared.voiceCommandsEnabled {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            self.startListening()
+                        }
                     }
                 }
             }
         }
 
-        // Configure audio input
+        // Configure audio input with validation
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            self.recognitionRequest?.append(buffer)
+        // Validate audio format - crash prevention
+        guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
+            print("[MeshManager] Invalid audio format: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
+            return
+        }
+
+        // Install tap for audio buffer (installTap doesn't throw, we already removed any existing tap above)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
         }
 
         // Start audio engine
@@ -468,6 +496,8 @@ class MeshManager: NSObject, ObservableObject {
             print("[MeshManager] Voice commands listening started")
         } catch {
             print("[MeshManager] Audio engine start failed: \(error)")
+            // Clean up on failure
+            audioEngine.inputNode.removeTap(onBus: 0)
         }
     }
 
