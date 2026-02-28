@@ -6,16 +6,15 @@ import AVFoundation
 import UIKit
 
 /// Test Mode: Detect ceiling plane and wall-ceiling intersections
-@MainActor
 class TestModeDetector: NSObject, ObservableObject {
 
     // MARK: - Published State
     @Published var ceilingPlane: DetectedPlane?
     @Published var wallPlanes: [DetectedPlane] = []
-    @Published var boundaryPoints: [SIMD3<Float>] = []  // Room boundary from intersections
+    @Published var boundaryPoints: [SIMD3<Float>] = []
     @Published var isPaused: Bool = false
     @Published var isListening: Bool = false
-    @Published var isReceivingAudio: Bool = false  // For blinking mic
+    @Published var isReceivingAudio: Bool = false
     @Published var statusMessage: String = "Point at ceiling"
 
     // MARK: - Data Structures
@@ -51,17 +50,16 @@ class TestModeDetector: NSObject, ObservableObject {
 
     // MARK: - Configuration
 
-    private let ceilingProximityThreshold: Float = 0.20  // 20cm from ceiling
-    private let ceilingNormalThreshold: Float = 0.8      // Normal Y < -0.8 for ceiling
-    private let wallNormalThreshold: Float = 0.3         // abs(Normal Y) < 0.3 for walls
+    private let ceilingProximityThreshold: Float = 0.20
+    private let ceilingNormalThreshold: Float = 0.8
+    private let wallNormalThreshold: Float = 0.3
 
     // MARK: - Voice Recognition
 
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var audioEngine = AVAudioEngine()
-    private var audioLevelTimer: Timer?
+    private var audioEngine: AVAudioEngine?
 
     // MARK: - Initialization
 
@@ -75,73 +73,87 @@ class TestModeDetector: NSObject, ObservableObject {
     func startListening() {
         guard !isListening else { return }
 
-        SFSpeechRecognizer.requestAuthorization { [weak self] status in
-            DispatchQueue.main.async {
-                if status == .authorized {
-                    self?.startAudioEngine()
-                } else {
-                    self?.statusMessage = "Voice not authorized"
+        // Request microphone permission first
+        AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
+            guard granted else {
+                DispatchQueue.main.async {
+                    self?.statusMessage = "Microphone not authorized"
                 }
-            }
-        }
-    }
-
-    private func startAudioEngine() {
-        stopListening()
-
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-
-        guard let recognitionRequest = recognitionRequest,
-              let speechRecognizer = speechRecognizer,
-              speechRecognizer.isAvailable else {
-            statusMessage = "Speech not available"
-            return
-        }
-
-        recognitionRequest.shouldReportPartialResults = true
-
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-
-            // Check audio level for mic indicator
-            self?.checkAudioLevel(buffer: buffer)
-        }
-
-        audioEngine.prepare()
-
-        do {
-            try audioEngine.start()
-            isListening = true
-            updateStatus()
-        } catch {
-            statusMessage = "Audio failed"
-            return
-        }
-
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self = self else { return }
-
-            if let result = result {
-                let text = result.bestTranscription.formattedString.lowercased()
-                self.processVoiceCommand(text)
+                return
             }
 
-            if error != nil || (result?.isFinal ?? false) {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if self.isListening {
-                        self.restartListening()
+            // Then request speech recognition permission
+            SFSpeechRecognizer.requestAuthorization { [weak self] status in
+                DispatchQueue.main.async {
+                    if status == .authorized {
+                        self?.setupAndStartAudioEngine()
+                    } else {
+                        self?.statusMessage = "Speech not authorized"
                     }
                 }
             }
         }
     }
 
-    private func checkAudioLevel(buffer: AVAudioPCMBuffer) {
+    private func setupAndStartAudioEngine() {
+        // Stop any existing session
+        stopListening()
+
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            statusMessage = "Speech not available"
+            return
+        }
+
+        do {
+            // Configure audio session
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+            // Create new audio engine
+            audioEngine = AVAudioEngine()
+            guard let audioEngine = audioEngine else { return }
+
+            // Create recognition request
+            recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+            guard let recognitionRequest = recognitionRequest else { return }
+            recognitionRequest.shouldReportPartialResults = true
+
+            let inputNode = audioEngine.inputNode
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+            // Check for valid format
+            guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
+                statusMessage = "Invalid audio format"
+                return
+            }
+
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+                self?.recognitionRequest?.append(buffer)
+                self?.updateAudioLevel(buffer: buffer)
+            }
+
+            audioEngine.prepare()
+            try audioEngine.start()
+
+            isListening = true
+            updateStatus()
+
+            // Start recognition task
+            recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+                self?.handleRecognitionResult(result: result, error: error)
+            }
+
+        } catch {
+            statusMessage = "Audio setup failed"
+            isListening = false
+        }
+    }
+
+    private func updateAudioLevel(buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData?[0] else { return }
         let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return }
 
         var sum: Float = 0
         for i in 0..<frameLength {
@@ -149,27 +161,41 @@ class TestModeDetector: NSObject, ObservableObject {
         }
         let average = sum / Float(frameLength)
 
-        DispatchQueue.main.async {
-            self.isReceivingAudio = average > 0.01  // Threshold for "hearing" audio
+        DispatchQueue.main.async { [weak self] in
+            self?.isReceivingAudio = average > 0.01
         }
     }
 
-    private func restartListening() {
-        stopListening()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.startAudioEngine()
+    private func handleRecognitionResult(result: SFSpeechRecognitionResult?, error: Error?) {
+        if let result = result {
+            let text = result.bestTranscription.formattedString.lowercased()
+            DispatchQueue.main.async { [weak self] in
+                self?.processVoiceCommand(text)
+            }
+        }
+
+        if error != nil || (result?.isFinal ?? false) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self, self.isListening else { return }
+                self.setupAndStartAudioEngine()
+            }
         }
     }
 
     func stopListening() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
+
+        audioEngine = nil
         recognitionRequest = nil
         recognitionTask = nil
-        isListening = false
-        isReceivingAudio = false
+
+        DispatchQueue.main.async { [weak self] in
+            self?.isListening = false
+            self?.isReceivingAudio = false
+        }
     }
 
     private func processVoiceCommand(_ text: String) {
@@ -198,11 +224,11 @@ class TestModeDetector: NSObject, ObservableObject {
 
     private func updateStatus() {
         if isPaused {
-            statusMessage = "PAUSED - Say 'Go' to continue"
+            statusMessage = "PAUSED - Say 'Go'"
         } else if ceilingPlane == nil {
             statusMessage = "Point at ceiling"
         } else {
-            statusMessage = "Scan wall-ceiling edges - Say 'Pause' to stop"
+            statusMessage = "Scan edges - Say 'Pause'"
         }
     }
 
@@ -211,19 +237,19 @@ class TestModeDetector: NSObject, ObservableObject {
     func processFrame(_ frame: ARFrame) {
         guard !isPaused else { return }
 
-        // Process plane anchors
         for anchor in frame.anchors {
             if let planeAnchor = anchor as? ARPlaneAnchor {
                 processPlaneAnchor(planeAnchor)
             }
         }
 
-        // Find wall-ceiling intersections
         if ceilingPlane != nil {
             findWallCeilingIntersections()
         }
 
-        updateStatus()
+        DispatchQueue.main.async { [weak self] in
+            self?.updateStatus()
+        }
     }
 
     private func processPlaneAnchor(_ anchor: ARPlaneAnchor) {
@@ -232,7 +258,6 @@ class TestModeDetector: NSObject, ObservableObject {
         let normal = SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
         let extent = SIMD2<Float>(anchor.planeExtent.width, anchor.planeExtent.height)
 
-        // Detect ceiling (normal pointing down, or classified as ceiling)
         if anchor.classification == .ceiling || normal.y < -ceilingNormalThreshold {
             let plane = DetectedPlane(
                 id: anchor.identifier,
@@ -241,14 +266,14 @@ class TestModeDetector: NSObject, ObservableObject {
                 extent: extent,
                 classification: .ceiling
             )
-            ceilingPlane = plane
+            DispatchQueue.main.async { [weak self] in
+                self?.ceilingPlane = plane
+            }
         }
-        // Detect walls near ceiling (within 20cm)
         else if anchor.classification == .wall || abs(normal.y) < wallNormalThreshold {
             if let ceiling = ceilingPlane {
                 let distanceToCeiling = abs(center.y - ceiling.center.y)
 
-                // Only consider walls close to ceiling
                 if distanceToCeiling <= ceilingProximityThreshold {
                     let plane = DetectedPlane(
                         id: anchor.identifier,
@@ -258,12 +283,14 @@ class TestModeDetector: NSObject, ObservableObject {
                         classification: .wall
                     )
 
-                    // Add or update wall
-                    if let index = wallPlanes.firstIndex(where: { $0.id == plane.id }) {
-                        wallPlanes[index] = plane
-                    } else {
-                        wallPlanes.append(plane)
-                        hapticFeedback()
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        if let index = self.wallPlanes.firstIndex(where: { $0.id == plane.id }) {
+                            self.wallPlanes[index] = plane
+                        } else {
+                            self.wallPlanes.append(plane)
+                            self.hapticFeedback()
+                        }
                     }
                 }
             }
@@ -276,19 +303,18 @@ class TestModeDetector: NSObject, ObservableObject {
         var newEdges: [BoundaryEdge] = []
 
         for wall in wallPlanes {
-            // Calculate intersection line between wall and ceiling
             if let edge = calculateIntersection(wall: wall, ceiling: ceiling) {
                 newEdges.append(edge)
             }
         }
 
-        // Update boundary points from edges
-        detectedEdges = newEdges
-        updateBoundaryPoints()
+        DispatchQueue.main.async { [weak self] in
+            self?.detectedEdges = newEdges
+            self?.updateBoundaryPoints()
+        }
     }
 
     private func calculateIntersection(wall: DetectedPlane, ceiling: DetectedPlane) -> BoundaryEdge? {
-        // Line direction is cross product of normals
         let lineDirection = simd_cross(wall.normal, ceiling.normal)
         let lengthSq = simd_length_squared(lineDirection)
 
@@ -296,7 +322,6 @@ class TestModeDetector: NSObject, ObservableObject {
 
         let normalizedDir = simd_normalize(lineDirection)
 
-        // Find point on intersection line
         let d1 = -simd_dot(wall.normal, wall.center)
         let d2 = -simd_dot(ceiling.normal, ceiling.center)
 
@@ -315,7 +340,6 @@ class TestModeDetector: NSObject, ObservableObject {
 
         let point = c1 * n1 + c2 * n2
 
-        // Create edge segment based on wall extent
         let halfLength = max(wall.extent.x, wall.extent.y) / 2.0
         let start = point - normalizedDir * halfLength
         let end = point + normalizedDir * halfLength
@@ -331,7 +355,6 @@ class TestModeDetector: NSObject, ObservableObject {
             points.append(edge.endPoint)
         }
 
-        // Remove duplicates and order clockwise
         boundaryPoints = orderPointsClockwise(removeDuplicates(points))
     }
 
@@ -366,11 +389,13 @@ class TestModeDetector: NSObject, ObservableObject {
 
     func reset() {
         stopListening()
-        ceilingPlane = nil
-        wallPlanes = []
-        boundaryPoints = []
-        detectedEdges = []
-        isPaused = false
-        statusMessage = "Point at ceiling"
+        DispatchQueue.main.async { [weak self] in
+            self?.ceilingPlane = nil
+            self?.wallPlanes = []
+            self?.boundaryPoints = []
+            self?.detectedEdges = []
+            self?.isPaused = false
+            self?.statusMessage = "Point at ceiling"
+        }
     }
 }
