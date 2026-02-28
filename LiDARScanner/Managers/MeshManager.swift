@@ -257,19 +257,35 @@ class MeshManager: NSObject, ObservableObject {
         guard let arView = arView else { return }
 
         // Clear previous scan
-        clearMeshVisualization()
-        edgeVisualizer.clearEdges()
-        roomBuilder.reset()
-        capturedScan = CapturedScan(startTime: Date())
+        // Check if we're resuming an existing scan
+        let isResuming = capturedScan != nil && !existingMeshIds.isEmpty
+
+        if isResuming {
+            // Keep existing meshes, just clear the visualization of OLD meshes
+            // (we'll re-visualize them + new ones as we scan)
+            clearMeshVisualization()
+            edgeVisualizer.clearEdges()
+            // Don't reset roomBuilder - keep calibration if available
+            print("[MeshManager] Resuming scan with \(capturedScan?.meshes.count ?? 0) existing meshes")
+        } else {
+            // Fresh scan - clear everything
+            clearMeshVisualization()
+            edgeVisualizer.clearEdges()
+            roomBuilder.reset()
+            capturedScan = CapturedScan(startTime: Date())
+            existingMeshIds.removeAll()
+
+            // Reset user-confirmed corners, classified objects, and window planes
+            userConfirmedCorners.removeAll()
+            classifiedObjects.removeAll()
+            windowPlanes.removeAll()
+        }
+
         meshUpdateCount = 0
-        vertexCount = 0
+        vertexCount = capturedScan?.vertexCount ?? 0
         surfaceTypes.removeAll()
 
-        // Reset user-confirmed corners, classified objects, and window planes
-        userConfirmedCorners.removeAll()
-        classifiedObjects.removeAll()
-        windowPlanes.removeAll()
-        confirmedCornerCount = 0
+        confirmedCornerCount = userConfirmedCorners.count
         lastConfirmedPosition = nil
         movementSamples.removeAll()
         pauseStartTime = nil
@@ -351,48 +367,117 @@ class MeshManager: NSObject, ObservableObject {
 
     // MARK: - Session Resume
 
+    /// IDs of existing meshes that were loaded (to distinguish from new scans)
+    private var existingMeshIds: Set<UUID> = []
+
     /// Load existing meshes from a saved session for resuming
     func loadExistingMeshes(_ scan: CapturedScan, repairMode: Bool) {
         guard let arView = arView else { return }
 
         isRepairMode = repairMode
         capturedScan = scan
+        existingMeshIds = Set(scan.meshes.map { $0.identifier })
 
         // Store quality scores for repair mode comparison
         existingMeshQuality.removeAll()
 
-        // Create visual representation of existing meshes (semi-transparent)
+        // Also restore classified objects and window planes
+        classifiedObjects = scan.classifiedObjects.map { obj in
+            ClassifiedObject(
+                id: obj.id,
+                category: .furniture,  // Default category for loaded objects
+                position: obj.position,
+                boundingBox: obj.boundingBox,
+                timestamp: Date(),
+                detectedEdges: obj.expectedEdges
+            )
+        }
+
+        windowPlanes = scan.windowPlanes.map { plane in
+            WindowPlane(
+                id: plane.id,
+                position: plane.position,
+                normal: plane.normal,
+                width: plane.width,
+                height: plane.height,
+                bottomY: plane.bottomY,
+                handling: .filter
+            )
+        }
+
+        // Visualize existing mesh coverage with wireframe outline
+        var totalBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+
         for mesh in scan.meshes {
-            // Create mesh visualization
             let vertices = mesh.vertices
-            let indices = mesh.faces.flatMap { $0 }
+            guard !vertices.isEmpty else { continue }
 
-            // Create a simple bounding box representation for now
-            // Full mesh rendering would require MeshResource generation
-            if !vertices.isEmpty {
-                let center = vertices.reduce(SIMD3<Float>.zero) { $0 + $1 } / Float(vertices.count)
-                let transformedCenter = mesh.transform * SIMD4<Float>(center.x, center.y, center.z, 1)
+            // Calculate bounds for this mesh
+            var minBound = vertices[0]
+            var maxBound = vertices[0]
+            for vertex in vertices {
+                let worldPos = mesh.transform * SIMD4<Float>(vertex, 1)
+                let wp = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+                minBound = min(minBound, wp)
+                maxBound = max(maxBound, wp)
+            }
 
-                // Create a small indicator at mesh location
-                let indicatorMesh = MeshResource.generateSphere(radius: 0.02)
+            // Expand total bounds
+            if totalBounds == nil {
+                totalBounds = (minBound, maxBound)
+            } else {
+                totalBounds!.min = min(totalBounds!.min, minBound)
+                totalBounds!.max = max(totalBounds!.max, maxBound)
+            }
+
+            // Create bounding box visualization for each mesh chunk
+            let size = maxBound - minBound
+            let center = (minBound + maxBound) / 2
+
+            // Only show boxes for significant mesh chunks
+            if size.x > 0.1 && size.y > 0.1 && size.z > 0.1 {
+                let boxMesh = MeshResource.generateBox(
+                    width: size.x,
+                    height: size.y,
+                    depth: size.z
+                )
+
                 var material = SimpleMaterial()
-                material.color = .init(tint: UIColor.cyan.withAlphaComponent(0.5))
+                // Color by surface type if available
+                let color: UIColor = mesh.surfaceType == .floor ? .green.withAlphaComponent(0.15) :
+                                     mesh.surfaceType == .ceiling ? .yellow.withAlphaComponent(0.15) :
+                                     mesh.surfaceType == .wall ? .cyan.withAlphaComponent(0.15) :
+                                     .gray.withAlphaComponent(0.1)
+                material.color = .init(tint: color)
 
-                let entity = ModelEntity(mesh: indicatorMesh, materials: [material])
-                let anchor = AnchorEntity(world: SIMD3<Float>(transformedCenter.x, transformedCenter.y, transformedCenter.z))
+                let entity = ModelEntity(mesh: boxMesh, materials: [material])
+                let anchor = AnchorEntity(world: center)
                 anchor.addChild(entity)
                 arView.scene.addAnchor(anchor)
                 meshAnchors[mesh.identifier] = anchor
             }
 
-            // Store default quality score (will be updated in repair mode)
             existingMeshQuality[mesh.identifier] = 0.5
         }
 
-        vertexCount = scan.vertexCount
-        scanStatus = "Loaded \(scan.meshes.count) meshes - ready to continue"
+        // Show overall scan bounds
+        if let bounds = totalBounds {
+            let size = bounds.max - bounds.min
+            print("[MeshManager] Existing scan bounds: \(size.x)m x \(size.y)m x \(size.z)m")
+            scanStatus = String(format: "Loaded %.1fm x %.1fm x %.1fm - scan missing areas",
+                              size.x, size.y, size.z)
+        } else {
+            scanStatus = "Loaded \(scan.meshes.count) meshes - ready to continue"
+        }
 
+        vertexCount = scan.vertexCount
         print("[MeshManager] Loaded \(scan.meshes.count) existing meshes, repair mode: \(repairMode)")
+        if !classifiedObjects.isEmpty {
+            print("[MeshManager] Restored \(classifiedObjects.count) classified objects")
+        }
+        if !windowPlanes.isEmpty {
+            print("[MeshManager] Restored \(windowPlanes.count) window planes")
+        }
     }
 
     /// Get the current scan with any updates
