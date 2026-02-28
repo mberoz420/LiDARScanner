@@ -29,6 +29,9 @@ class MeshManager: NSObject, ObservableObject {
     // Edge visualizer for room mode
     let edgeVisualizer = EdgeVisualizer()
 
+    // Intelligent room builder for walls mode
+    let roomBuilder = RoomBuilder()
+
     // MARK: - Properties
     private weak var arView: ARView?
     private var meshAnchors: [UUID: AnchorEntity] = [:]
@@ -94,6 +97,7 @@ class MeshManager: NSObject, ObservableObject {
         // Clear previous scan
         clearMeshVisualization()
         edgeVisualizer.clearEdges()
+        roomBuilder.reset()
         capturedScan = CapturedScan(startTime: Date())
         meshUpdateCount = 0
         vertexCount = 0
@@ -245,6 +249,19 @@ class MeshManager: NSObject, ObservableObject {
             )
         }
 
+        // Process walls with intelligent room builder (walls mode only)
+        if currentMode == .walls && roomBuilder.isCalibrated {
+            if classifiedSurface.surfaceType == .wall {
+                // Send vertical wall surface to room builder
+                roomBuilder.processVerticalSurface(
+                    vertices: meshData.vertices,
+                    normal: classifiedSurface.averageNormal,
+                    transform: anchor.transform,
+                    meshID: anchor.identifier
+                )
+            }
+        }
+
         // Update visualization with surface-appropriate color
         updateMeshVisualization(for: anchor, surfaceType: classifiedSurface.surfaceType)
 
@@ -295,8 +312,10 @@ class MeshManager: NSObject, ObservableObject {
 
         case .floor:
             phaseProgress = Double(stats.floorConfidence)
-            if stats.floorHeight != nil {
-                scanStatus = String(format: "Floor detected at %.2fm", stats.floorHeight!)
+            if let floorH = stats.floorHeight {
+                scanStatus = String(format: "Floor = 0 (detected at %.2fm)", floorH)
+                // Calibrate room builder with floor level
+                roomBuilder.calibrateFloor(at: floorH)
             } else {
                 scanStatus = currentPhase.instruction
             }
@@ -307,8 +326,10 @@ class MeshManager: NSObject, ObservableObject {
 
         case .ceiling:
             phaseProgress = Double(stats.ceilingConfidence)
-            if let height = stats.estimatedRoomHeight {
-                scanStatus = String(format: "Room height: %.2fm", height)
+            if let height = stats.estimatedRoomHeight, let ceilingH = stats.ceilingHeight {
+                scanStatus = String(format: "Ceiling = %.2fm (room height)", height)
+                // Calibrate room builder with ceiling level
+                roomBuilder.calibrateCeiling(at: ceilingH)
             } else if stats.ceilingHeight != nil {
                 scanStatus = "Ceiling detected - measuring height..."
             } else {
@@ -320,25 +341,135 @@ class MeshManager: NSObject, ObservableObject {
             }
 
         case .walls:
-            phaseProgress = Double(stats.wallCoveragePercent)
-            let corners = stats.cornerCount
-            scanStatus = "\(corners) corners detected | Turn to scan more"
-            // Update edge visualization
+            // Use roomBuilder for intelligent wall detection
+            let wallCount = roomBuilder.wallSegments.count
+            let cornerCount = roomBuilder.roomCorners.count
+            let openingCount = roomBuilder.detectedOpenings.count
+
+            phaseProgress = Double(min(Float(cornerCount) / 4.0, 1.0))
+            scanStatus = "\(wallCount) walls | \(cornerCount) corners | \(openingCount) openings"
+
+            // Update edge visualization from detected edges
             edgeVisualizer.updateEdges(stats.detectedEdges)
-            // Check for completion
-            if stats.wallCoveragePercent >= Float(currentPhase.completionThreshold) {
+
+            // Check for completion (4+ corners = enclosed room)
+            if cornerCount >= 4 {
                 advancePhase()
             }
 
         case .complete:
             phaseProgress = 1.0
-            if let dims = stats.roomDimensions {
-                scanStatus = String(format: "Room: %.1fm x %.1fm x %.1fm",
-                                    dims.width, dims.depth, dims.height)
+            let wallCount = roomBuilder.wallSegments.count
+            let openingCount = roomBuilder.detectedOpenings.count
+
+            if roomBuilder.roomHeight > 0 {
+                // Calculate room bounds from wall segments
+                let allX = roomBuilder.wallSegments.flatMap { [$0.startPoint.x, $0.endPoint.x] }
+                let allZ = roomBuilder.wallSegments.flatMap { [$0.startPoint.y, $0.endPoint.y] }
+
+                if let minX = allX.min(), let maxX = allX.max(),
+                   let minZ = allZ.min(), let maxZ = allZ.max() {
+                    let width = maxX - minX
+                    let depth = maxZ - minZ
+                    scanStatus = String(format: "Room: %.1fm x %.1fm x %.1fm | %d walls | %d openings",
+                                        width, depth, roomBuilder.roomHeight, wallCount, openingCount)
+                } else {
+                    scanStatus = String(format: "Height: %.1fm | %d walls | %d openings",
+                                        roomBuilder.roomHeight, wallCount, openingCount)
+                }
             } else {
                 scanStatus = "Room captured!"
             }
+
+            // Generate final edges from room builder
+            generateEdgesFromRoomBuilder()
         }
+    }
+
+    /// Generate edge lines from room builder's wall segments and corners
+    private func generateEdgesFromRoomBuilder() {
+        var edges: [WallEdge] = []
+
+        // Create vertical corner edges
+        for corner in roomBuilder.roomCorners {
+            let bottomPoint = SIMD3<Float>(corner.position.x, roomBuilder.floorLevel, corner.position.z)
+            let topPoint = SIMD3<Float>(corner.position.x, roomBuilder.floorLevel + roomBuilder.roomHeight, corner.position.z)
+
+            edges.append(WallEdge(
+                id: corner.id,
+                startPoint: bottomPoint,
+                endPoint: topPoint,
+                edgeType: .verticalCorner,
+                angle: corner.angle
+            ))
+        }
+
+        // Create floor-wall edges from wall segments
+        for segment in roomBuilder.wallSegments {
+            let start3D = SIMD3<Float>(segment.startPoint.x, roomBuilder.floorLevel, segment.startPoint.y)
+            let end3D = SIMD3<Float>(segment.endPoint.x, roomBuilder.floorLevel, segment.endPoint.y)
+
+            edges.append(WallEdge(
+                id: UUID(),
+                startPoint: start3D,
+                endPoint: end3D,
+                edgeType: .floorWall,
+                angle: Float.pi / 2
+            ))
+
+            // Ceiling edge
+            let startCeiling = SIMD3<Float>(segment.startPoint.x, roomBuilder.floorLevel + roomBuilder.roomHeight, segment.startPoint.y)
+            let endCeiling = SIMD3<Float>(segment.endPoint.x, roomBuilder.floorLevel + roomBuilder.roomHeight, segment.endPoint.y)
+
+            edges.append(WallEdge(
+                id: UUID(),
+                startPoint: startCeiling,
+                endPoint: endCeiling,
+                edgeType: .ceilingWall,
+                angle: Float.pi / 2
+            ))
+        }
+
+        // Create opening edges (doors, windows)
+        for opening in roomBuilder.detectedOpenings {
+            let edgeType: WallEdge.EdgeType = opening.type == .door ? .doorFrame : .windowFrame
+
+            // Left edge of opening
+            let leftBottom = SIMD3<Float>(
+                opening.position.x - opening.width / 2,
+                roomBuilder.floorLevel + opening.bottomFromFloor,
+                opening.position.z
+            )
+            let leftTop = SIMD3<Float>(
+                opening.position.x - opening.width / 2,
+                roomBuilder.floorLevel + opening.bottomFromFloor + opening.height,
+                opening.position.z
+            )
+            edges.append(WallEdge(id: UUID(), startPoint: leftBottom, endPoint: leftTop, edgeType: edgeType, angle: Float.pi / 2))
+
+            // Right edge of opening
+            let rightBottom = SIMD3<Float>(
+                opening.position.x + opening.width / 2,
+                roomBuilder.floorLevel + opening.bottomFromFloor,
+                opening.position.z
+            )
+            let rightTop = SIMD3<Float>(
+                opening.position.x + opening.width / 2,
+                roomBuilder.floorLevel + opening.bottomFromFloor + opening.height,
+                opening.position.z
+            )
+            edges.append(WallEdge(id: UUID(), startPoint: rightBottom, endPoint: rightTop, edgeType: edgeType, angle: Float.pi / 2))
+
+            // Top edge of opening (for windows and doors)
+            edges.append(WallEdge(id: UUID(), startPoint: leftTop, endPoint: rightTop, edgeType: edgeType, angle: Float.pi / 2))
+
+            // Bottom edge (only for windows, not doors)
+            if opening.type == .window {
+                edges.append(WallEdge(id: UUID(), startPoint: leftBottom, endPoint: rightBottom, edgeType: edgeType, angle: Float.pi / 2))
+            }
+        }
+
+        edgeVisualizer.updateEdges(edges)
     }
 
     /// Advance to the next phase
