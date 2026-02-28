@@ -902,19 +902,9 @@ class TestModeDetector: ObservableObject {
             }
             recognitionRequest.shouldReportPartialResults = true
 
-            // Safely access input node and format - this can crash if audio isn't ready
-            let inputNode: AVAudioInputNode
-            let recordingFormat: AVAudioFormat
-            do {
-                inputNode = audioEngine.inputNode
-                recordingFormat = inputNode.outputFormat(forBus: 0)
-            } catch {
-                print("[TestMode] Audio engine: failed to access input node - \(error)")
-                DispatchQueue.main.async {
-                    self.statusMessage = "Mic not ready"
-                }
-                return
-            }
+            // Access input node and format
+            let inputNode = audioEngine.inputNode
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
 
             // Validate audio format
             guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
