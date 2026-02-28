@@ -1012,12 +1012,6 @@ class TestModeDetector: ObservableObject {
         isReceivingAudio = false
     }
 
-    func togglePause() {
-        isPaused.toggle()
-        updateStatus()
-        hapticFeedback()
-    }
-
     private func hapticFeedback() {
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
