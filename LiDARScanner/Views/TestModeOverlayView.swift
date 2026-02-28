@@ -10,8 +10,19 @@ struct TestModeOverlayView: View {
             VStack {
                 Spacer().frame(height: 80)
 
-                // Clean midsize reticle
+                // Clean midsize reticle with dwell progress
                 ZStack {
+                    // Dwell progress ring (outer)
+                    if detector.dwellProgress > 0 {
+                        Circle()
+                            .trim(from: 0, to: CGFloat(detector.dwellProgress))
+                            .stroke(Color.green, lineWidth: 6)
+                            .frame(width: 116, height: 116)
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 0.1), value: detector.dwellProgress)
+                    }
+
+                    // Main reticle circle
                     Circle()
                         .stroke(reticleColor, lineWidth: 2)
                         .frame(width: 100, height: 100)
@@ -127,10 +138,12 @@ struct TestModeOverlayView: View {
     }
 
     private var instructionText: String {
-        if detector.ceilingPlane == nil {
-            return "Point at CEILING"
+        if detector.dwellProgress > 0 {
+            return "Hold steady..."
+        } else if detector.ceilingPlane == nil {
+            return "Point at CEILING (hold 2s)"
         } else {
-            return "Point at each WALL"
+            return "Point at each WALL (hold 2s)"
         }
     }
 }

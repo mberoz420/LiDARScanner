@@ -315,7 +315,10 @@ class MeshManager: NSObject, ObservableObject {
             testModeDetector.reset()
             surfaceClassifier.classificationEnabled = true
             scanStatus = "Point at ceiling"
-            // Voice recognition disabled - use manual pause button
+            // Enable voice control for hands-free pause/resume
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.testModeDetector.startListening()
+            }
         } else {
             currentPhase = .ready
             useEdgeVisualization = false

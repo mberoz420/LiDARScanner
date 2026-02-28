@@ -24,6 +24,12 @@ class TestModeDetector: ObservableObject {
     @Published var detectedSurfaces: [DetectedSurface] = []
     @Published var lastDetectedSurface: String = ""  // Shows briefly when new surface detected
 
+    // Dwell-time detection (hold reticle on surface for 2 seconds to register)
+    @Published var dwellProgress: Float = 0  // 0 to 1 progress indicator
+    private var currentTargetAnchorID: UUID?
+    private var dwellStartTime: Date?
+    private let dwellDuration: TimeInterval = 2.0  // seconds to hold on surface
+
     struct DetectedSurface: Identifiable {
         let id = UUID()
         let label: String       // "Ceiling 1", "Wall 1", etc.
@@ -145,61 +151,58 @@ class TestModeDetector: ObservableObject {
             let isInReticle = isPlaneInReticleCenter(planeAnchor, frame: frame)
 
             if isInReticle {
-                // CEILING DETECTION
-                if (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
-                   planeY > cameraPosition.y + 0.3 {
+                // Determine surface type
+                let isCeiling = (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
+                               planeY > cameraPosition.y + 0.3
+                let isWall = abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5
 
-                    // Check if we already have this ceiling
-                    if !surfaceAlreadyDetected(anchorID: planeAnchor.identifier) {
-                        rawCeilingY.append(planeY)
-                        if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
-                        let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
+                if (isCeiling || isWall) && !surfaceAlreadyDetected(anchorID: planeAnchor.identifier) {
+                    // Dwell-time tracking - only track ONE surface at a time
+                    if currentTargetAnchorID == planeAnchor.identifier {
+                        // Same surface we're tracking - update dwell progress
+                        if let startTime = dwellStartTime {
+                            let elapsed = Date().timeIntervalSince(startTime)
+                            dwellProgress = min(1.0, Float(elapsed / dwellDuration))
 
-                        ceilingPlane = CeilingPlane(
-                            center: planeCenter,
-                            normal: SIMD3<Float>(0, -1, 0),
-                            y: medianY
-                        )
-
-                        // Add to detected surfaces
-                        let ceilingCount = detectedSurfaces.filter { $0.type == .ceiling }.count + 1
-                        let surface = DetectedSurface(
-                            label: "Ceiling \(ceilingCount)",
-                            type: .ceiling,
-                            height: medianY,
-                            anchorID: planeAnchor.identifier
-                        )
-                        detectedSurfaces.append(surface)
-                        lastDetectedSurface = surface.label
-                        hapticFeedback()
-
-                        // Extract boundary
-                        let geometry = planeAnchor.geometry
-                        for vertex in geometry.boundaryVertices {
-                            let localPos = SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1)
-                            let worldPos = planeAnchor.transform * localPos
-                            let boundaryPoint = SIMD3<Float>(worldPos.x, medianY, worldPos.z)
-                            addBoundaryPoint(boundaryPoint)
+                            // Register surface after dwell duration
+                            if elapsed >= dwellDuration {
+                                if isCeiling {
+                                    registerCeiling(planeAnchor: planeAnchor, planeCenter: planeCenter, planeY: planeY)
+                                } else {
+                                    registerWall(planeAnchor: planeAnchor, planeY: planeY)
+                                }
+                                // Reset dwell state
+                                currentTargetAnchorID = nil
+                                dwellStartTime = nil
+                                dwellProgress = 0
+                            }
                         }
+                    } else if currentTargetAnchorID == nil {
+                        // Not tracking anything - start tracking this surface
+                        currentTargetAnchorID = planeAnchor.identifier
+                        dwellStartTime = Date()
+                        dwellProgress = 0
                     }
+                    // If tracking a DIFFERENT surface, ignore this one (don't switch mid-dwell)
                 }
-                // WALL DETECTION
-                else if abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5 {
-                    // Check if we already have this wall
-                    if !surfaceAlreadyDetected(anchorID: planeAnchor.identifier) {
-                        let wallNum = detectedSurfaces.filter { $0.type == .wall }.count + 1
-                        let surface = DetectedSurface(
-                            label: "Wall \(wallNum)",
-                            type: .wall,
-                            height: planeY,
-                            anchorID: planeAnchor.identifier
-                        )
-                        detectedSurfaces.append(surface)
-                        lastDetectedSurface = surface.label
-                        wallCount = wallNum
-                        hapticFeedback()
-                    }
+            }
+        }
+
+        // Reset dwell if no valid surface in reticle
+        if currentTargetAnchorID != nil {
+            var foundTarget = false
+            for anchor in frame.anchors {
+                if let planeAnchor = anchor as? ARPlaneAnchor,
+                   planeAnchor.identifier == currentTargetAnchorID,
+                   isPlaneInReticleCenter(planeAnchor, frame: frame) {
+                    foundTarget = true
+                    break
                 }
+            }
+            if !foundTarget {
+                currentTargetAnchorID = nil
+                dwellStartTime = nil
+                dwellProgress = 0
             }
         }
 
@@ -231,6 +234,55 @@ class TestModeDetector: ObservableObject {
     /// Check if surface with this anchor ID is already detected
     private func surfaceAlreadyDetected(anchorID: UUID) -> Bool {
         return detectedSurfaces.contains { $0.anchorID == anchorID }
+    }
+
+    /// Register a ceiling surface after dwell time
+    private func registerCeiling(planeAnchor: ARPlaneAnchor, planeCenter: SIMD3<Float>, planeY: Float) {
+        rawCeilingY.append(planeY)
+        if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
+        let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
+
+        ceilingPlane = CeilingPlane(
+            center: planeCenter,
+            normal: SIMD3<Float>(0, -1, 0),
+            y: medianY
+        )
+
+        // Add to detected surfaces
+        let ceilingCount = detectedSurfaces.filter { $0.type == .ceiling }.count + 1
+        let surface = DetectedSurface(
+            label: "Ceiling \(ceilingCount)",
+            type: .ceiling,
+            height: medianY,
+            anchorID: planeAnchor.identifier
+        )
+        detectedSurfaces.append(surface)
+        lastDetectedSurface = surface.label
+        hapticFeedback()
+
+        // Extract boundary
+        let geometry = planeAnchor.geometry
+        for vertex in geometry.boundaryVertices {
+            let localPos = SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1)
+            let worldPos = planeAnchor.transform * localPos
+            let boundaryPoint = SIMD3<Float>(worldPos.x, medianY, worldPos.z)
+            addBoundaryPoint(boundaryPoint)
+        }
+    }
+
+    /// Register a wall surface after dwell time
+    private func registerWall(planeAnchor: ARPlaneAnchor, planeY: Float) {
+        let wallNum = detectedSurfaces.filter { $0.type == .wall }.count + 1
+        let surface = DetectedSurface(
+            label: "Wall \(wallNum)",
+            type: .wall,
+            height: planeY,
+            anchorID: planeAnchor.identifier
+        )
+        detectedSurfaces.append(surface)
+        lastDetectedSurface = surface.label
+        wallCount = wallNum
+        hapticFeedback()
     }
 
     /// Add a boundary point (with duplicate filtering)
@@ -926,6 +978,10 @@ class TestModeDetector: ObservableObject {
         if lastWord.contains("pause") || lastWord.contains("stop") || lastWord.contains("wait") {
             if !isPaused {
                 isPaused = true
+                // Reset dwell to prevent accidental registration
+                currentTargetAnchorID = nil
+                dwellStartTime = nil
+                dwellProgress = 0
                 hapticFeedback()
                 updateStatus()
             }
@@ -991,5 +1047,9 @@ class TestModeDetector: ObservableObject {
         edgeCount = 0
         statusMessage = "Point at ceiling"
         detectionMethod = ""
+        // Reset dwell state
+        currentTargetAnchorID = nil
+        dwellStartTime = nil
+        dwellProgress = 0
     }
 }
