@@ -293,6 +293,11 @@ class MeshManager: NSObject, ObservableObject {
         isScanning = false
         capturedScan?.endTime = Date()
 
+        // Stop any ongoing speech
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+
         // Stop voice commands
         stopVoiceCommands()
 
@@ -404,18 +409,26 @@ class MeshManager: NSObject, ObservableObject {
 
     /// Stop listening for voice commands
     func stopVoiceCommands() {
+        // Only clean up if we were actually listening
+        guard isListening || recognitionTask != nil else {
+            print("[MeshManager] Voice commands - nothing to stop")
+            return
+        }
+
+        // Stop recognition first
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+
         // Safely stop audio engine
         if audioEngine.isRunning {
             audioEngine.stop()
+            // Only remove tap if engine was running (meaning tap was installed)
+            audioEngine.inputNode.removeTap(onBus: 0)
         }
 
-        // Remove tap (safe to call even if no tap exists)
-        audioEngine.inputNode.removeTap(onBus: 0)
-
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        recognitionRequest = nil
         isListening = false
         print("[MeshManager] Voice commands stopped")
     }
