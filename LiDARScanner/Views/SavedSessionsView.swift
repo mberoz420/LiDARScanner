@@ -259,7 +259,7 @@ struct SessionDetailView: View {
             }
             .sheet(isPresented: $showExport) {
                 if let scan = loadedScan {
-                    ExportView(scan: scan)
+                    ExportView(scan: scan, scanMode: scanMode)
                 }
             }
         }

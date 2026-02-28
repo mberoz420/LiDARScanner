@@ -3,6 +3,8 @@ import UniformTypeIdentifiers
 
 struct ExportView: View {
     let scan: CapturedScan
+    let scanMode: ScanMode
+
     @StateObject private var exporter = MeshExporter()
     @StateObject private var roomSimplifier = RoomSimplifier()
     @ObservedObject var settings = AppSettings.shared
@@ -24,8 +26,10 @@ struct ExportView: View {
     @ObservedObject private var sessionManager = ScanSessionManager.shared
     @Environment(\.dismiss) private var dismiss
 
-    // Optional: scan mode for session saving
-    var scanMode: ScanMode = .fast
+    init(scan: CapturedScan, scanMode: ScanMode = .fast) {
+        self.scan = scan
+        self.scanMode = scanMode
+    }
 
     var body: some View {
         NavigationStack {
