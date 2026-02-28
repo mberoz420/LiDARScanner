@@ -36,11 +36,21 @@ class TestModeDetector: ObservableObject {
         let type: SurfaceType
         let height: Float       // Y position
         let anchorID: UUID
+        // Plane equation: point on plane + normal
+        let planePoint: SIMD3<Float>
+        let planeNormal: SIMD3<Float>
 
         enum SurfaceType {
             case ceiling
             case wall
         }
+    }
+
+    /// Wall-ceiling intersection line (where wall meets ceiling)
+    struct WallCeilingEdge {
+        let wallID: UUID
+        let point: SIMD3<Float>      // A point on the intersection line
+        let direction: SIMD3<Float>  // Direction of the line (horizontal)
     }
 
     // MARK: - Data Structures
@@ -242,9 +252,12 @@ class TestModeDetector: ObservableObject {
         if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
         let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
 
+        let ceilingNormal = SIMD3<Float>(0, -1, 0)  // Ceiling faces down
+        let ceilingPoint = SIMD3<Float>(planeCenter.x, medianY, planeCenter.z)
+
         ceilingPlane = CeilingPlane(
-            center: planeCenter,
-            normal: SIMD3<Float>(0, -1, 0),
+            center: ceilingPoint,
+            normal: ceilingNormal,
             y: medianY
         )
 
@@ -254,35 +267,175 @@ class TestModeDetector: ObservableObject {
             label: "Ceiling \(ceilingCount)",
             type: .ceiling,
             height: medianY,
-            anchorID: planeAnchor.identifier
+            anchorID: planeAnchor.identifier,
+            planePoint: ceilingPoint,
+            planeNormal: ceilingNormal
         )
         detectedSurfaces.append(surface)
         lastDetectedSurface = surface.label
         hapticFeedback()
 
-        // Extract boundary
-        let geometry = planeAnchor.geometry
-        for vertex in geometry.boundaryVertices {
-            let localPos = SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1)
-            let worldPos = planeAnchor.transform * localPos
-            let boundaryPoint = SIMD3<Float>(worldPos.x, medianY, worldPos.z)
-            addBoundaryPoint(boundaryPoint)
-        }
+        // Recalculate boundary from wall intersections
+        calculateBoundaryFromPlaneIntersections()
     }
 
     /// Register a wall surface after dwell time
     private func registerWall(planeAnchor: ARPlaneAnchor, planeY: Float) {
+        // Get wall plane data
+        let wallCenter = SIMD3<Float>(
+            planeAnchor.transform.columns.3.x,
+            planeAnchor.transform.columns.3.y,
+            planeAnchor.transform.columns.3.z
+        )
+        // Wall normal is the Y axis of the plane's transform (perpendicular to wall surface)
+        let wallNormal = simd_normalize(SIMD3<Float>(
+            planeAnchor.transform.columns.1.x,
+            planeAnchor.transform.columns.1.y,
+            planeAnchor.transform.columns.1.z
+        ))
+
         let wallNum = detectedSurfaces.filter { $0.type == .wall }.count + 1
         let surface = DetectedSurface(
             label: "Wall \(wallNum)",
             type: .wall,
             height: planeY,
-            anchorID: planeAnchor.identifier
+            anchorID: planeAnchor.identifier,
+            planePoint: wallCenter,
+            planeNormal: wallNormal
         )
         detectedSurfaces.append(surface)
         lastDetectedSurface = surface.label
         wallCount = wallNum
         hapticFeedback()
+
+        // Recalculate boundary from wall intersections
+        calculateBoundaryFromPlaneIntersections()
+    }
+
+    // MARK: - Plane Intersection Boundary Calculation
+
+    /// Calculate ceiling boundary by intersecting infinite wall planes with ceiling plane
+    private func calculateBoundaryFromPlaneIntersections() {
+        guard let ceiling = ceilingPlane else { return }
+
+        // Get all wall surfaces
+        let walls = detectedSurfaces.filter { $0.type == .wall }
+        guard walls.count >= 2 else { return }
+
+        // Step 1: Find intersection line of each wall with ceiling
+        var wallCeilingEdges: [WallCeilingEdge] = []
+
+        for wall in walls {
+            if let edge = intersectPlanes(
+                plane1Point: ceiling.center,
+                plane1Normal: SIMD3<Float>(0, 1, 0),  // Ceiling normal pointing up
+                plane2Point: wall.planePoint,
+                plane2Normal: wall.planeNormal
+            ) {
+                wallCeilingEdges.append(WallCeilingEdge(
+                    wallID: wall.id,
+                    point: SIMD3<Float>(edge.point.x, ceiling.y, edge.point.z),
+                    direction: edge.direction
+                ))
+            }
+        }
+
+        guard wallCeilingEdges.count >= 2 else { return }
+
+        // Step 2: Find intersection points of adjacent wall-ceiling edges
+        // Each pair of wall-ceiling lines can intersect at a corner point
+        var cornerPoints: [SIMD3<Float>] = []
+
+        for i in 0..<wallCeilingEdges.count {
+            for j in (i + 1)..<wallCeilingEdges.count {
+                let edge1 = wallCeilingEdges[i]
+                let edge2 = wallCeilingEdges[j]
+
+                // Find intersection of two lines in 2D (XZ plane)
+                if let intersection = intersectLines2D(
+                    p1: SIMD2<Float>(edge1.point.x, edge1.point.z),
+                    d1: SIMD2<Float>(edge1.direction.x, edge1.direction.z),
+                    p2: SIMD2<Float>(edge2.point.x, edge2.point.z),
+                    d2: SIMD2<Float>(edge2.direction.x, edge2.direction.z)
+                ) {
+                    let corner = SIMD3<Float>(intersection.x, ceiling.y, intersection.y)
+
+                    // Filter out points that are too far (likely parallel walls)
+                    let distFromCenter = simd_distance(
+                        SIMD2<Float>(corner.x, corner.z),
+                        SIMD2<Float>(ceiling.center.x, ceiling.center.z)
+                    )
+                    if distFromCenter < 20.0 {  // Within 20m of ceiling center
+                        cornerPoints.append(corner)
+                    }
+                }
+            }
+        }
+
+        // Step 3: Order points clockwise and set as boundary
+        if cornerPoints.count >= 3 {
+            ceilingBoundary = orderPointsClockwise(cornerPoints)
+            edgeCount = ceilingBoundary.count
+        }
+    }
+
+    /// Intersect two planes, returns a point and direction on the intersection line
+    private func intersectPlanes(
+        plane1Point: SIMD3<Float>, plane1Normal: SIMD3<Float>,
+        plane2Point: SIMD3<Float>, plane2Normal: SIMD3<Float>
+    ) -> (point: SIMD3<Float>, direction: SIMD3<Float>)? {
+        // Line direction is perpendicular to both normals
+        let direction = simd_cross(plane1Normal, plane2Normal)
+        let dirLength = simd_length(direction)
+
+        // If normals are parallel, planes don't intersect in a line
+        guard dirLength > 0.001 else { return nil }
+
+        let normalizedDir = direction / dirLength
+
+        // Find a point on the intersection line
+        // Using the formula for plane-plane intersection
+        let n1 = plane1Normal
+        let n2 = plane2Normal
+        let d1 = -simd_dot(n1, plane1Point)
+        let d2 = -simd_dot(n2, plane2Point)
+
+        // Find the point using a determinant-based approach
+        let n1n2 = simd_dot(n1, n2)
+        let n1n1 = simd_dot(n1, n1)
+        let n2n2 = simd_dot(n2, n2)
+
+        let det = n1n1 * n2n2 - n1n2 * n1n2
+        guard abs(det) > 0.0001 else { return nil }
+
+        let c1 = (d2 * n1n2 - d1 * n2n2) / det
+        let c2 = (d1 * n1n2 - d2 * n1n1) / det
+
+        let point = c1 * n1 + c2 * n2
+
+        return (point: point, direction: normalizedDir)
+    }
+
+    /// Intersect two 2D lines, returns intersection point
+    private func intersectLines2D(
+        p1: SIMD2<Float>, d1: SIMD2<Float>,
+        p2: SIMD2<Float>, d2: SIMD2<Float>
+    ) -> SIMD2<Float>? {
+        // Line 1: p1 + t * d1
+        // Line 2: p2 + s * d2
+        // Solve for intersection
+
+        let cross = d1.x * d2.y - d1.y * d2.x
+
+        // If lines are parallel
+        guard abs(cross) > 0.0001 else { return nil }
+
+        let dx = p2.x - p1.x
+        let dy = p2.y - p1.y
+
+        let t = (dx * d2.y - dy * d2.x) / cross
+
+        return SIMD2<Float>(p1.x + t * d1.x, p1.y + t * d1.y)
     }
 
     /// Add a boundary point (with duplicate filtering)
