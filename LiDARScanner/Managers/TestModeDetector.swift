@@ -606,7 +606,8 @@ class TestModeDetector: ObservableObject {
     // MARK: - Voice Control
 
     func startListening() {
-        AVAudioApplication.requestRecordPermission { [weak self] micGranted in
+        // Use AVAudioSession for iOS 16 compatibility
+        AVAudioSession.sharedInstance().requestRecordPermission { [weak self] micGranted in
             guard micGranted else {
                 DispatchQueue.main.async {
                     self?.statusMessage = "Mic not authorized"
