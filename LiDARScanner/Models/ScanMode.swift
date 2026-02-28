@@ -7,6 +7,7 @@ enum ScanMode: String, CaseIterable, Identifiable {
     case largeObjects = "Large Objects"
     case smallObjects = "Small Objects"
     case organic = "Organic & Faces"
+    case test = "Test"
 
     var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum ScanMode: String, CaseIterable, Identifiable {
         case .largeObjects: return "cube.fill"
         case .smallObjects: return "screwdriver.fill"
         case .organic: return "leaf.fill"
+        case .test: return "testtube.2"
         }
     }
 
@@ -32,6 +34,8 @@ enum ScanMode: String, CaseIterable, Identifiable {
             return "Nails, nuts, bolts, detailed parts"
         case .organic:
             return "Plants, faces, human body"
+        case .test:
+            return "Experimental features"
         }
     }
 
@@ -42,6 +46,7 @@ enum ScanMode: String, CaseIterable, Identifiable {
         case .largeObjects: return .purple
         case .smallObjects: return .red
         case .organic: return .green
+        case .test: return .gray
         }
     }
 
@@ -53,6 +58,7 @@ enum ScanMode: String, CaseIterable, Identifiable {
         case .largeObjects: return 0.2
         case .smallObjects: return 0.1
         case .organic: return 0.15
+        case .test: return 0.2
         }
     }
 
@@ -60,6 +66,7 @@ enum ScanMode: String, CaseIterable, Identifiable {
     var useFrontCamera: Bool {
         switch self {
         case .organic: return false // Start with back, can switch
+        case .test: return false
         default: return false
         }
     }
@@ -77,6 +84,8 @@ enum ScanMode: String, CaseIterable, Identifiable {
             return "Hold steady 15-30cm away, move very slowly"
         case .organic:
             return "Keep subject still, move around them"
+        case .test:
+            return "Testing experimental features"
         }
     }
 
@@ -93,6 +102,8 @@ enum ScanMode: String, CaseIterable, Identifiable {
             return "2cm - 15cm"
         case .organic:
             return "30cm - 2m"
+        case .test:
+            return "Any size"
         }
     }
 
@@ -109,6 +120,8 @@ enum ScanMode: String, CaseIterable, Identifiable {
             return "15 - 30cm"
         case .organic:
             return "0.5 - 2m"
+        case .test:
+            return "1 - 5m"
         }
     }
 
@@ -125,6 +138,8 @@ enum ScanMode: String, CaseIterable, Identifiable {
             return "±0.5-1cm"
         case .organic:
             return "±0.5-1cm (face), ±1-2cm (body)"
+        case .test:
+            return "Variable"
         }
     }
 
@@ -141,6 +156,8 @@ enum ScanMode: String, CaseIterable, Identifiable {
             return "~1cm"
         case .organic:
             return "~0.5cm (face)"
+        case .test:
+            return "~2cm"
         }
     }
 
@@ -178,6 +195,11 @@ enum ScanMode: String, CaseIterable, Identifiable {
                 "Use front camera for face detail",
                 "Use back camera for full body",
                 "Multiple slow passes improve quality"
+            ]
+        case .test:
+            return [
+                "Experimental scanning mode",
+                "Behavior may vary"
             ]
         }
     }

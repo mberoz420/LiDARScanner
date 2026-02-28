@@ -74,7 +74,8 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .padding(.top, 10)
 
-                // 6-Square Grid
+                // Menu Grid
+                ScrollView {
                 LazyVGrid(columns: columns, spacing: 16) {
                     // Saved Scans
                     MainMenuSquare(
@@ -123,10 +124,17 @@ struct ContentView: View {
                         color: ScanMode.organic.color,
                         action: { selectedMode = .organic }
                     )
+
+                    // Test
+                    MainMenuSquare(
+                        title: "Test",
+                        icon: ScanMode.test.icon,
+                        color: ScanMode.test.color,
+                        action: { selectedMode = .test }
+                    )
                 }
                 .padding(.horizontal)
-
-                Spacer()
+                }
 
                 // Footer info
                 Text("3D scanning with texture capture")
