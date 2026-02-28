@@ -5,15 +5,16 @@ struct TestModeOverlayView: View {
     @ObservedObject var detector: TestModeDetector
 
     var body: some View {
-        ZStack {
-            // Reticle in CENTER - aligned with LiDAR aperture
-            // Point phone at what you want to capture
-            TestModeReticle(
-                hasCeiling: detector.ceilingPlane != nil,
-                edgeCount: detector.edgeCount
-            )
+        GeometryReader { geometry in
+            ZStack {
+                // Reticle in CENTER - aligned with LiDAR aperture
+                TestModeReticle(
+                    hasCeiling: detector.ceilingPlane != nil,
+                    edgeCount: detector.edgeCount
+                )
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
 
-            VStack {
+                VStack {
                 // Top status bar
                 HStack(spacing: 12) {
                     // Microphone indicator
@@ -101,7 +102,9 @@ struct TestModeOverlayView: View {
                 .cornerRadius(12)
                 .padding()
             }
+            }
         }
+        .ignoresSafeArea()
     }
 }
 
