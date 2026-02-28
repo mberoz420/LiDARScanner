@@ -73,6 +73,18 @@ struct TestModeOverlayView: View {
                             .fontWeight(.bold)
                     }
 
+                    // Detection method
+                    if !detector.detectionMethod.isEmpty && detector.edgeCount > 0 {
+                        HStack {
+                            Image(systemName: "cpu")
+                                .foregroundColor(.purple)
+                            Text(detector.detectionMethod)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                    }
+
                     // Voice command hint
                     HStack {
                         Image(systemName: "waveform")

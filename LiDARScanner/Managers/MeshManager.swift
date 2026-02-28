@@ -1402,6 +1402,23 @@ class MeshManager: NSObject, ObservableObject {
         meshUpdateCount += 1
     }
 
+    /// Lightweight mesh extraction for test mode (vertices + normals only)
+    private func extractMeshDataForTestMode(from anchor: ARMeshAnchor) -> (vertices: [SIMD3<Float>], normals: [SIMD3<Float>]) {
+        let geometry = anchor.geometry
+
+        var vertices: [SIMD3<Float>] = []
+        for i in 0..<geometry.vertices.count {
+            vertices.append(geometry.vertex(at: i))
+        }
+
+        var normals: [SIMD3<Float>] = []
+        for i in 0..<geometry.normals.count {
+            normals.append(geometry.normal(at: i))
+        }
+
+        return (vertices, normals)
+    }
+
     private func extractMeshData(from anchor: ARMeshAnchor) -> CapturedMeshData {
         let geometry = anchor.geometry
 
@@ -1587,6 +1604,20 @@ extension MeshManager: ARSessionDelegate {
             // Test mode processing
             if isScanning && currentMode == .test {
                 testModeDetector.processFrame(frame)
+            }
+
+            // Process mesh data for test mode (hybrid cove detection)
+            if isScanning && currentMode == .test {
+                for anchor in frame.anchors {
+                    if let meshAnchor = anchor as? ARMeshAnchor {
+                        let meshData = extractMeshDataForTestMode(from: meshAnchor)
+                        testModeDetector.processMesh(
+                            vertices: meshData.vertices,
+                            normals: meshData.normals,
+                            transform: meshAnchor.transform
+                        )
+                    }
+                }
             }
 
             // Check if edge is in reticle and detect pause (for walls mode)
