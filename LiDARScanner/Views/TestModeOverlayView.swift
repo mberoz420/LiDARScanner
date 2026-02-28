@@ -1,244 +1,137 @@
 import SwiftUI
 
-/// Overlay for Test Mode - reticle, mic indicator, pause/go status
+/// Overlay for Test Mode - reticle at top, detected surfaces in middle/bottom
 struct TestModeOverlayView: View {
     @ObservedObject var detector: TestModeDetector
 
     var body: some View {
-        ZStack {
-            // Reticle in CENTER - aligned with LiDAR
-            TestModeReticle(
-                hasCeiling: detector.ceilingPlane != nil,
-                edgeCount: detector.edgeCount
-            )
-
+        VStack(spacing: 0) {
+            // TOP: Reticle area (close to top, behind LiDAR aperture)
             VStack {
-                // Top status bar
-                HStack(spacing: 12) {
-                    // Microphone indicator
-                    MicrophoneIndicator(
-                        isListening: detector.isListening,
-                        isReceiving: detector.isReceivingAudio
-                    )
+                Spacer().frame(height: 80)
 
-                    // Status message
-                    Text(detector.statusMessage)
-                        .font(.headline)
-                        .foregroundColor(.white)
+                // Clean midsize reticle
+                ZStack {
+                    Circle()
+                        .stroke(reticleColor, lineWidth: 2)
+                        .frame(width: 100, height: 100)
 
-                    Spacer()
+                    // Crosshairs
+                    Rectangle()
+                        .fill(reticleColor)
+                        .frame(width: 30, height: 2)
+                    Rectangle()
+                        .fill(reticleColor)
+                        .frame(width: 2, height: 30)
 
-                    // Pause/Go indicator
-                    PauseGoIndicator(isPaused: detector.isPaused)
+                    // Center dot
+                    Circle()
+                        .fill(reticleColor)
+                        .frame(width: 8, height: 8)
                 }
-                .padding()
+
+                // Instruction under reticle
+                Text(instructionText)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(8)
+                    .padding(.top, 12)
+
+                Spacer().frame(height: 40)
+            }
+
+            // MIDDLE TO BOTTOM: Detected surfaces list
+            VStack(spacing: 0) {
+                // Last detected surface (flash notification)
+                if !detector.lastDetectedSurface.isEmpty {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text(detector.lastDetectedSurface)
+                            .fontWeight(.bold)
+                    }
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .padding()
+                    .background(Color.green.opacity(0.3))
+                    .cornerRadius(12)
+                    .padding(.bottom, 8)
+                }
+
+                // Detected surfaces list
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(detector.detectedSurfaces) { surface in
+                            HStack {
+                                Image(systemName: surface.type == .ceiling ? "square.fill" : "rectangle.portrait.fill")
+                                    .foregroundColor(surface.type == .ceiling ? .cyan : .orange)
+
+                                Text(surface.label)
+                                    .fontWeight(.semibold)
+
+                                Spacer()
+
+                                Text(String(format: "%.2fm", surface.height))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+
+                        if detector.detectedSurfaces.isEmpty {
+                            Text("Point reticle at ceiling, then each wall")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .padding()
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .frame(maxHeight: 300)
                 .background(Color.black.opacity(0.7))
-                .cornerRadius(12)
+                .cornerRadius(16)
                 .padding(.horizontal)
 
-                Spacer()
-
-                // Bottom info panel
-                VStack(spacing: 8) {
-                    // Ceiling status
-                    HStack {
-                        Image(systemName: detector.ceilingPlane != nil ? "checkmark.circle.fill" : "circle")
-                            .foregroundColor(detector.ceilingPlane != nil ? .green : .gray)
-                        Text("Ceiling")
-                        Spacer()
-                        if let ceiling = detector.ceilingPlane {
-                            Text(String(format: "Y: %.2fm", ceiling.y))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    // Wall count
-                    HStack {
-                        Image(systemName: "square.split.diagonal")
-                            .foregroundColor(.cyan)
-                        Text("Walls detected")
-                        Spacer()
-                        Text("\(detector.wallCount)")
-                            .fontWeight(.bold)
-                    }
-
-                    // Boundary points count
-                    HStack {
-                        Image(systemName: "line.diagonal")
-                            .foregroundColor(.yellow)
-                        Text("Boundary points")
-                        Spacer()
-                        Text("\(detector.edgeCount)")
-                            .fontWeight(.bold)
-                    }
-
-                    // Detection method
-                    if !detector.detectionMethod.isEmpty && detector.edgeCount > 0 {
-                        HStack {
-                            Image(systemName: "cpu")
-                                .foregroundColor(.purple)
-                            Text(detector.detectionMethod)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                        }
-                    }
-
-                    // Voice command hint
-                    HStack {
-                        Image(systemName: "waveform")
-                            .foregroundColor(.blue)
-                        Text("Say \"Pause\" or \"Go\"")
+                // Bottom status
+                HStack {
+                    Text("Surfaces: \(detector.detectedSurfaces.count)")
+                        .font(.caption)
+                    Spacer()
+                    if detector.isPaused {
+                        Text("PAUSED")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .fontWeight(.bold)
+                            .foregroundColor(.red)
                     }
                 }
-                .padding()
-                .background(Color.black.opacity(0.7))
                 .foregroundColor(.white)
-                .cornerRadius(12)
                 .padding()
             }
-        }
-    }
-}
-
-// MARK: - Reticle View
-
-struct TestModeReticle: View {
-    let hasCeiling: Bool
-    let edgeCount: Int
-
-    var body: some View {
-        ZStack {
-            // Outer ring - LARGER
-            Circle()
-                .stroke(reticleColor, lineWidth: 3)
-                .frame(width: 180, height: 180)
-
-            // Cross hairs - LARGER
-            Rectangle()
-                .fill(reticleColor)
-                .frame(width: 60, height: 3)
-
-            Rectangle()
-                .fill(reticleColor)
-                .frame(width: 3, height: 60)
-
-            // Inner targeting area - LARGER
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(reticleColor, lineWidth: 2)
-                .frame(width: 120, height: 80)
-
-            // Label
-            VStack {
-                Spacer()
-                    .frame(height: 100)
-                Text(labelText)
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(reticleColor)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(6)
-            }
+            .foregroundColor(.white)
         }
     }
 
     private var reticleColor: Color {
-        if !hasCeiling {
-            return .orange
-        } else if edgeCount > 0 {
-            return .green
+        if detector.ceilingPlane == nil {
+            return .orange  // Looking for ceiling
         } else {
-            return .cyan
+            return .cyan    // Looking for walls
         }
     }
 
-    private var labelText: String {
-        if !hasCeiling {
-            return "FIND CEILING"
-        } else if edgeCount == 0 {
-            return "SCAN EDGES"
+    private var instructionText: String {
+        if detector.ceilingPlane == nil {
+            return "Point at CEILING"
         } else {
-            return "EDGES: \(edgeCount)"
+            return "Point at each WALL"
         }
-    }
-}
-
-// MARK: - Microphone Indicator
-
-struct MicrophoneIndicator: View {
-    let isListening: Bool
-    let isReceiving: Bool
-
-    var body: some View {
-        ZStack {
-            // Glow when receiving
-            if isReceiving {
-                Circle()
-                    .fill(Color.green.opacity(0.4))
-                    .frame(width: 44, height: 44)
-            }
-
-            Image(systemName: micIcon)
-                .font(.title2)
-                .foregroundColor(micColor)
-                .frame(width: 36, height: 36)
-                .background(Color.black.opacity(0.5))
-                .clipShape(Circle())
-        }
-        .animation(.easeInOut(duration: 0.2), value: isReceiving)
-    }
-
-    private var micIcon: String {
-        if !isListening {
-            return "mic.slash"
-        } else if isReceiving {
-            return "mic.fill"
-        } else {
-            return "mic"
-        }
-    }
-
-    private var micColor: Color {
-        if !isListening {
-            return .gray
-        } else if isReceiving {
-            return .green
-        } else {
-            return .white
-        }
-    }
-}
-
-// MARK: - Pause/Go Indicator
-
-struct PauseGoIndicator: View {
-    let isPaused: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: isPaused ? "pause.circle.fill" : "play.circle.fill")
-                .font(.title2)
-
-            Text(isPaused ? "PAUSED" : "SCANNING")
-                .font(.caption)
-                .fontWeight(.bold)
-        }
-        .foregroundColor(isPaused ? .red : .green)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isPaused ? Color.red.opacity(0.2) : Color.green.opacity(0.2))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isPaused ? Color.red : Color.green, lineWidth: 1)
-        )
     }
 }
 

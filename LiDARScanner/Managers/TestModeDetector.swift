@@ -18,7 +18,24 @@ class TestModeDetector: ObservableObject {
     @Published var statusMessage: String = "Point at ceiling"
     @Published var wallCount: Int = 0
     @Published var edgeCount: Int = 0
-    @Published var detectionMethod: String = "Hybrid"  // Shows which method found edges
+    @Published var detectionMethod: String = "Hybrid"
+
+    // Detected surfaces list (user-guided)
+    @Published var detectedSurfaces: [DetectedSurface] = []
+    @Published var lastDetectedSurface: String = ""  // Shows briefly when new surface detected
+
+    struct DetectedSurface: Identifiable {
+        let id = UUID()
+        let label: String       // "Ceiling 1", "Wall 1", etc.
+        let type: SurfaceType
+        let height: Float       // Y position
+        let anchorID: UUID
+
+        enum SurfaceType {
+            case ceiling
+            case wall
+        }
+    }
 
     // MARK: - Data Structures
 
@@ -124,43 +141,96 @@ class TestModeDetector: ObservableObject {
                 planeAnchor.transform.columns.1.z
             )
 
-            // STEP 1: Detect ceiling and extract ITS boundary directly
-            if (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
-               planeY > cameraPosition.y + 0.3 {
+            // Check if this plane is in the CENTER of the screen (user is pointing at it)
+            let isInReticle = isPlaneInReticleCenter(planeAnchor, frame: frame)
 
-                rawCeilingY.append(planeY)
-                if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
-                let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
+            if isInReticle {
+                // CEILING DETECTION
+                if (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
+                   planeY > cameraPosition.y + 0.3 {
 
-                let wasNil = ceilingPlane == nil
-                ceilingPlane = CeilingPlane(
-                    center: planeCenter,
-                    normal: SIMD3<Float>(0, -1, 0),
-                    y: medianY
-                )
+                    // Check if we already have this ceiling
+                    if !surfaceAlreadyDetected(anchorID: planeAnchor.identifier) {
+                        rawCeilingY.append(planeY)
+                        if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
+                        let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
 
-                if wasNil { hapticFeedback() }
+                        ceilingPlane = CeilingPlane(
+                            center: planeCenter,
+                            normal: SIMD3<Float>(0, -1, 0),
+                            y: medianY
+                        )
 
-                // Extract ceiling's own boundary vertices from ARKit
-                let geometry = planeAnchor.geometry
-                let vertices = geometry.boundaryVertices
+                        // Add to detected surfaces
+                        let ceilingCount = detectedSurfaces.filter { $0.type == .ceiling }.count + 1
+                        let surface = DetectedSurface(
+                            label: "Ceiling \(ceilingCount)",
+                            type: .ceiling,
+                            height: medianY,
+                            anchorID: planeAnchor.identifier
+                        )
+                        detectedSurfaces.append(surface)
+                        lastDetectedSurface = surface.label
+                        hapticFeedback()
 
-                // Transform boundary vertices to world space
-                for vertex in vertices {
-                    let localPos = SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1)
-                    let worldPos = planeAnchor.transform * localPos
-                    let boundaryPoint = SIMD3<Float>(worldPos.x, medianY, worldPos.z)
-                    addBoundaryPoint(boundaryPoint)
+                        // Extract boundary
+                        let geometry = planeAnchor.geometry
+                        for vertex in geometry.boundaryVertices {
+                            let localPos = SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1)
+                            let worldPos = planeAnchor.transform * localPos
+                            let boundaryPoint = SIMD3<Float>(worldPos.x, medianY, worldPos.z)
+                            addBoundaryPoint(boundaryPoint)
+                        }
+                    }
+                }
+                // WALL DETECTION
+                else if abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5 {
+                    // Check if we already have this wall
+                    if !surfaceAlreadyDetected(anchorID: planeAnchor.identifier) {
+                        let wallNum = detectedSurfaces.filter { $0.type == .wall }.count + 1
+                        let surface = DetectedSurface(
+                            label: "Wall \(wallNum)",
+                            type: .wall,
+                            height: planeY,
+                            anchorID: planeAnchor.identifier
+                        )
+                        detectedSurfaces.append(surface)
+                        lastDetectedSurface = surface.label
+                        wallCount = wallNum
+                        hapticFeedback()
+                    }
                 }
             }
-
-            // Ceiling boundary is extracted directly from ceiling plane above
-            // No need for wall-based detection - ARKit provides the boundary
         }
 
         // Build boundary from captured points
         buildCeilingBoundaryFromPoints()
         updateStatus()
+    }
+
+    /// Check if a plane is in the center reticle area
+    private func isPlaneInReticleCenter(_ anchor: ARPlaneAnchor, frame: ARFrame) -> Bool {
+        let planeCenter = SIMD3<Float>(
+            anchor.transform.columns.3.x,
+            anchor.transform.columns.3.y,
+            anchor.transform.columns.3.z
+        )
+
+        // Direction from camera to plane
+        let toPlane = planeCenter - cameraPosition
+        let distance = simd_length(toPlane)
+        guard distance > 0.3 && distance < 8.0 else { return false }
+
+        let dirToPlane = simd_normalize(toPlane)
+        let alignment = simd_dot(dirToPlane, cameraForward)
+
+        // Must be within ~30 degree cone of camera forward
+        return alignment > 0.85
+    }
+
+    /// Check if surface with this anchor ID is already detected
+    private func surfaceAlreadyDetected(anchorID: UUID) -> Bool {
+        return detectedSurfaces.contains { $0.anchorID == anchorID }
     }
 
     /// Add a boundary point (with duplicate filtering)
@@ -913,11 +983,13 @@ class TestModeDetector: ObservableObject {
         ceilingBoundary = []
         capturedBoundaryPoints = []
         detectedWallIntersections = [:]
+        detectedSurfaces = []
+        lastDetectedSurface = ""
         rawCeilingY = []
         isPaused = false
         wallCount = 0
         edgeCount = 0
-        statusMessage = "Point UP at ceiling"
-        detectionMethod = "Ray-Plane"
+        statusMessage = "Point at ceiling"
+        detectionMethod = ""
     }
 }
