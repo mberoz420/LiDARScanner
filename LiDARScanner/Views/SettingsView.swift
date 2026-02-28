@@ -388,6 +388,15 @@ struct SettingsView: View {
                     Text("Host a version.json file with latest version info and Diawi download URL.")
                 }
 
+                // Experimental
+                Section {
+                    Toggle("Trial 1 - Wall-Ceiling Detection", isOn: $settings.trial1Enabled)
+                } header: {
+                    Text("Experimental")
+                } footer: {
+                    Text("Detect walls from ceiling intersections. Point device up to measure ceiling height.")
+                }
+
                 // About
                 Section {
                     HStack {

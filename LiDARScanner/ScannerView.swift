@@ -13,6 +13,14 @@ struct ScannerView: View {
             ARViewContainer(meshManager: meshManager)
                 .edgesIgnoringSafeArea(.all)
 
+            // Trial 1: Wall-ceiling detection overlay
+            if AppSettings.shared.trial1Enabled && meshManager.isScanning {
+                Trial1OverlayView(
+                    detector: meshManager.trial1Detector,
+                    floorHeight: meshManager.surfaceClassifier.statistics.floorHeight
+                )
+            }
+
             VStack {
                 // Top bar with stats and mode
                 HStack {

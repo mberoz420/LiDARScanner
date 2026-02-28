@@ -131,6 +131,9 @@ class AppSettings: ObservableObject {
     @AppStorage("minWallLength") var minWallLength: Double = 30.0  // cm
     @AppStorage("snapToRightAngles") var snapToRightAngles: Bool = true
 
+    // Experimental features
+    @AppStorage("trial1Enabled") var trial1Enabled: Bool = false
+
     // Computed thresholds for use in SurfaceClassifier
     var horizontalSurfaceThreshold: Float {
         // Convert angle to cosine (normal Y component)

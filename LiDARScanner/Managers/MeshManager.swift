@@ -189,6 +189,9 @@ class MeshManager: NSObject, ObservableObject {
     // Intelligent room builder for walls mode
     let roomBuilder = RoomBuilder()
 
+    // Trial 1: Wall-ceiling intersection detection
+    let trial1Detector = Trial1Detector()
+
     // MARK: - Session Resume
     @Published var isRepairMode = false
     @Published var resumedSessionId: UUID?
@@ -294,6 +297,7 @@ class MeshManager: NSObject, ObservableObject {
 
         // Reset surface classifier and sync with app settings
         surfaceClassifier.reset()
+        trial1Detector.reset()
         surfaceClassificationEnabled = AppSettings.shared.surfaceClassificationEnabled
 
         // Setup guided scanning for room mode
@@ -1211,6 +1215,14 @@ class MeshManager: NSObject, ObservableObject {
             // Update edge visualization - only vertical corners become lines
             edgeVisualizer.updateEdges(stats.detectedEdges)
 
+            // Trial 1: Process edges for wall-ceiling detection
+            if AppSettings.shared.trial1Enabled {
+                trial1Detector.processEdges(
+                    stats.detectedEdges,
+                    ceilingY: stats.ceilingHeight
+                )
+            }
+
             // Don't auto-advance walls - user must tap "Skip" or "Next" when ready
             // This gives them time to scan all walls thoroughly
             // Only auto-advance if they've confirmed 4+ corners manually
@@ -1569,6 +1581,11 @@ extension MeshManager: ARSessionDelegate {
             // Update device orientation from gyroscope/accelerometer
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
+
+            // Trial 1: Process frame for ceiling detection when pointing up
+            if AppSettings.shared.trial1Enabled && isScanning {
+                trial1Detector.processFrame(frame, floorHeight: surfaceClassifier.statistics.floorHeight)
+            }
 
             // Check if edge is in reticle and detect pause (for walls mode)
             if isScanning && currentMode == .walls {
