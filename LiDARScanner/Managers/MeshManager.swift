@@ -315,10 +315,8 @@ class MeshManager: NSObject, ObservableObject {
             testModeDetector.reset()
             surfaceClassifier.classificationEnabled = true
             scanStatus = "Point at ceiling"
-            // Enable voice control for hands-free pause/resume
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.testModeDetector.startListening()
-            }
+            // Voice control disabled - use manual pause button instead
+            // Audio engine initialization can crash on some devices
         } else {
             currentPhase = .ready
             useEdgeVisualization = false

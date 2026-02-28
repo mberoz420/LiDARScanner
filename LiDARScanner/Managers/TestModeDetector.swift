@@ -902,10 +902,21 @@ class TestModeDetector: ObservableObject {
             }
             recognitionRequest.shouldReportPartialResults = true
 
-            // Validate audio format
-            let inputNode = audioEngine.inputNode
-            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            // Safely access input node and format - this can crash if audio isn't ready
+            let inputNode: AVAudioInputNode
+            let recordingFormat: AVAudioFormat
+            do {
+                inputNode = audioEngine.inputNode
+                recordingFormat = inputNode.outputFormat(forBus: 0)
+            } catch {
+                print("[TestMode] Audio engine: failed to access input node - \(error)")
+                DispatchQueue.main.async {
+                    self.statusMessage = "Mic not ready"
+                }
+                return
+            }
 
+            // Validate audio format
             guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
                 print("[TestMode] Audio engine: invalid format - rate=\(recordingFormat.sampleRate) channels=\(recordingFormat.channelCount)")
                 DispatchQueue.main.async {
@@ -914,7 +925,8 @@ class TestModeDetector: ObservableObject {
                 return
             }
 
-            // Install audio tap
+            // Install audio tap (remove existing first to be safe)
+            inputNode.removeTap(onBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 self?.recognitionRequest?.append(buffer)
                 self?.checkAudioLevel(buffer: buffer)
