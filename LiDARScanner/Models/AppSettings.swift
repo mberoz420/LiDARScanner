@@ -112,8 +112,8 @@ class AppSettings: ObservableObject {
     // Door/window detection settings
     @AppStorage("detectDoorsWindows") var detectDoorsWindows: Bool = true
 
-    // Update checking
-    @AppStorage("versionCheckURL") var versionCheckURL: String = ""
+    // Update checking - default to GitHub raw file
+    @AppStorage("versionCheckURL") var versionCheckURL: String = "https://raw.githubusercontent.com/mberoz420/LiDARScanner/master/version.json"
     @AppStorage("autoCheckUpdates") var autoCheckUpdates: Bool = true
 
     // Room simplification

@@ -137,6 +137,9 @@ workflows:
 
       - name: Update version.json
         script: |
+          # Default repo if not specified
+          REPO="${VERSION_JSON_REPO:-mberoz420/LiDARScanner}"
+
           # Create version.json for in-app update checking
           cat > version.json << EOF
           {
@@ -150,17 +153,19 @@ workflows:
 
           echo "Generated version.json:"
           cat version.json
+          echo ""
+          echo "DIAWI_URL = $DIAWI_URL"
 
-          # Upload to GitHub Pages (if configured)
-          if [ -n "$GITHUB_TOKEN" ] && [ -n "$VERSION_JSON_REPO" ]; then
-            echo "Uploading version.json to GitHub..."
+          # Upload to GitHub
+          if [ -n "$GITHUB_TOKEN" ]; then
+            echo "Uploading version.json to GitHub ($REPO)..."
 
             # Base64 encode the content
             CONTENT_BASE64=$(base64 -i version.json | tr -d '\n')
 
             # Get current file SHA if exists
             SHA=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              "https://api.github.com/repos/$VERSION_JSON_REPO/contents/version.json" \
+              "https://api.github.com/repos/$REPO/contents/version.json" \
               | python3 -c "import sys, json; print(json.load(sys.stdin).get('sha', ''))" 2>/dev/null || echo "")
 
             # Prepare update payload
@@ -171,15 +176,18 @@ workflows:
             fi
 
             # Update file via GitHub API
-            curl -s -X PUT -H "Authorization: token $GITHUB_TOKEN" \
+            RESPONSE=$(curl -s -X PUT -H "Authorization: token $GITHUB_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD" \
-              "https://api.github.com/repos/$VERSION_JSON_REPO/contents/version.json"
+              "https://api.github.com/repos/$REPO/contents/version.json")
 
-            echo "version.json uploaded to GitHub"
+            echo "GitHub API response:"
+            echo "$RESPONSE" | head -20
+            echo ""
+            echo "version.json uploaded to: https://raw.githubusercontent.com/$REPO/master/version.json"
           else
-            echo "GitHub token not configured - version.json not uploaded"
-            echo "Set GITHUB_TOKEN and VERSION_JSON_REPO in Codemagic environment"
+            echo "WARNING: GITHUB_TOKEN not set - version.json not uploaded"
+            echo "Set GITHUB_TOKEN in Codemagic environment variables"
           fi
 
     artifacts:
