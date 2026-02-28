@@ -226,6 +226,10 @@ struct ScanModeView: View {
     @ObservedObject private var sessionManager = ScanSessionManager.shared
     @State private var showModeSettings = false
     @State private var showExport = false
+    @State private var showSavePrompt = false
+    @State private var saveName = ""
+    @State private var isSaving = false
+    @State private var saveSuccess = false
     @State private var capturedScan: CapturedScan?
     @State private var isLoadingSession = false
     @State private var repairModeEnabled = false
@@ -405,15 +409,28 @@ struct ScanModeView: View {
                                 )
                         }
 
-                        // Export button
+                        // Save & Export buttons
                         if capturedScan != nil && !meshManager.isScanning {
-                            Button(action: { showExport = true }) {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .frame(width: 56, height: 56)
-                                    .background(Color.blue)
-                                    .cornerRadius(14)
+                            HStack(spacing: 8) {
+                                // Quick Save button
+                                Button(action: { showSavePrompt = true }) {
+                                    Image(systemName: "square.and.arrow.down")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .frame(width: 56, height: 56)
+                                        .background(Color.green)
+                                        .cornerRadius(14)
+                                }
+
+                                // Export button
+                                Button(action: { showExport = true }) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .frame(width: 56, height: 56)
+                                        .background(Color.blue)
+                                        .cornerRadius(14)
+                                }
                             }
                         } else {
                             Color.clear.frame(width: 56, height: 56)
@@ -452,6 +469,41 @@ struct ScanModeView: View {
                 Text(error)
             }
         }
+        .alert("Save Scan", isPresented: $showSavePrompt) {
+            TextField("Scan name", text: $saveName)
+            Button("Save") {
+                Task { await saveCurrentScan() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Enter a name for this scan")
+        }
+        .alert("Saved!", isPresented: $saveSuccess) {
+            Button("OK") { }
+        } message: {
+            Text("Scan saved to 'Saved Scans'")
+        }
+        .onAppear {
+            saveName = sessionManager.generateDefaultName()
+        }
+    }
+
+    private func saveCurrentScan() async {
+        guard let scan = capturedScan else { return }
+        isSaving = true
+
+        do {
+            _ = try await sessionManager.saveSession(
+                scan: scan,
+                mode: mode,
+                name: saveName.isEmpty ? sessionManager.generateDefaultName() : saveName
+            )
+            saveSuccess = true
+        } catch {
+            loadError = "Failed to save: \(error.localizedDescription)"
+        }
+
+        isSaving = false
     }
 
     private func loadResumeSession(_ sessionId: UUID) async {
