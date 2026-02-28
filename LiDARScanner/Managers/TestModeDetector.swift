@@ -92,25 +92,24 @@ class TestModeDetector: ObservableObject {
 
     // MARK: - Frame Processing (ARKit Planes)
 
-    /// Camera direction for filtering planes
-    private var cameraPosition: SIMD3<Float> = .zero
-    private var cameraForward: SIMD3<Float> = .init(0, 0, -1)
-    private let reticleAngleThreshold: Float = 0.5  // ~60° cone
+    /// Screen dimensions and reticle settings
+    private var screenSize: CGSize = CGSize(width: 390, height: 844)  // Default iPhone size
+    private var currentFrame: ARFrame?
+    private let reticleRadius: CGFloat = 60  // Reticle circle radius in points
 
     func processFrame(_ frame: ARFrame) {
         guard !isPaused else { return }
 
-        // Get camera position and direction (aligned with LiDAR)
-        let transform = frame.camera.transform
-        cameraPosition = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+        currentFrame = frame
 
-        // Camera forward is -Z axis - this is where LiDAR is pointing
-        cameraForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+        // Get screen size from camera image
+        let imageResolution = frame.camera.imageResolution
+        screenSize = CGSize(width: imageResolution.width, height: imageResolution.height)
 
-        // Only process planes that are in the reticle direction
+        // Only process planes that project INTO the reticle on screen
         for anchor in frame.anchors {
             if let planeAnchor = anchor as? ARPlaneAnchor {
-                if isPlaneInReticle(planeAnchor) {
+                if isPlaneInReticle(planeAnchor, frame: frame) {
                     processPlaneAnchor(planeAnchor)
                 }
             }
@@ -124,24 +123,37 @@ class TestModeDetector: ObservableObject {
         updateStatus()
     }
 
-    /// Check if plane is roughly in the direction of the reticle
-    private func isPlaneInReticle(_ anchor: ARPlaneAnchor) -> Bool {
+    /// Check if plane center projects into the reticle circle on screen
+    private func isPlaneInReticle(_ anchor: ARPlaneAnchor, frame: ARFrame) -> Bool {
         let planeCenter = SIMD3<Float>(
             anchor.transform.columns.3.x,
             anchor.transform.columns.3.y,
             anchor.transform.columns.3.z
         )
 
-        // Direction from camera to plane
-        let toPlane = planeCenter - cameraPosition
-        let distance = simd_length(toPlane)
-        guard distance > 0.1 else { return false }  // Too close
+        // Project 3D point to 2D screen coordinates
+        let camera = frame.camera
+        let screenPoint = camera.projectPoint(
+            planeCenter,
+            orientation: .portrait,
+            viewportSize: screenSize
+        )
 
-        let directionToPlane = simd_normalize(toPlane)
+        // Check if point is on screen
+        guard screenPoint.x >= 0 && screenPoint.x <= screenSize.width &&
+              screenPoint.y >= 0 && screenPoint.y <= screenSize.height else {
+            return false
+        }
 
-        // Check if plane is in the reticle cone (dot product > threshold)
-        let alignment = simd_dot(directionToPlane, cameraForward)
-        return alignment > reticleAngleThreshold
+        // Reticle is at center of screen
+        let reticleCenter = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
+
+        // Check if projected point is within reticle circle
+        let dx = screenPoint.x - reticleCenter.x
+        let dy = screenPoint.y - reticleCenter.y
+        let distance = sqrt(dx * dx + dy * dy)
+
+        return distance <= reticleRadius
     }
 
     // MARK: - Mesh Processing (Raw LiDAR Data)
