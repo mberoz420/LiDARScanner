@@ -110,16 +110,28 @@ struct TestModeOverlayView: View {
                 .cornerRadius(16)
                 .padding(.horizontal)
 
-                // Bottom status
+                // Bottom status with pause button
                 HStack {
                     Text("Surfaces: \(detector.detectedSurfaces.count)")
                         .font(.caption)
+
                     Spacer()
-                    if detector.isPaused {
-                        Text("PAUSED")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.red)
+
+                    // Manual pause/resume button
+                    Button(action: {
+                        detector.togglePause()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: detector.isPaused ? "play.fill" : "pause.fill")
+                            Text(detector.isPaused ? "Resume" : "Pause")
+                                .fontWeight(.semibold)
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(detector.isPaused ? Color.green : Color.red.opacity(0.8))
+                        .cornerRadius(20)
                     }
                 }
                 .foregroundColor(.white)

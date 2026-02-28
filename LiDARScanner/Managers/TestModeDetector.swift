@@ -1033,6 +1033,19 @@ class TestModeDetector: ObservableObject {
         }
     }
 
+    /// Toggle pause state (for manual button)
+    func togglePause() {
+        isPaused.toggle()
+        if isPaused {
+            // Reset dwell to prevent accidental registration
+            currentTargetAnchorID = nil
+            dwellStartTime = nil
+            dwellProgress = 0
+        }
+        hapticFeedback()
+        updateStatus()
+    }
+
     func reset() {
         stopListening()
         ceilingPlane = nil
