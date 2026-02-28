@@ -124,54 +124,38 @@ class TestModeDetector: ObservableObject {
                 planeAnchor.transform.columns.1.z
             )
 
-            // STEP 1: Detect ceiling (horizontal plane above camera, normal pointing down)
-            if ceilingPlane == nil {
-                if (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
-                   planeY > cameraPosition.y + 0.3 {
-                    rawCeilingY.append(planeY)
-                    if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
+            // STEP 1: Detect ceiling and extract ITS boundary directly
+            if (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
+               planeY > cameraPosition.y + 0.3 {
 
-                    let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
-                    ceilingPlane = CeilingPlane(
-                        center: planeCenter,
-                        normal: SIMD3<Float>(0, -1, 0),
-                        y: medianY
-                    )
-                    hapticFeedback()
+                rawCeilingY.append(planeY)
+                if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
+                let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
+
+                let wasNil = ceilingPlane == nil
+                ceilingPlane = CeilingPlane(
+                    center: planeCenter,
+                    normal: SIMD3<Float>(0, -1, 0),
+                    y: medianY
+                )
+
+                if wasNil { hapticFeedback() }
+
+                // Extract ceiling's own boundary vertices from ARKit
+                let geometry = planeAnchor.geometry
+                let vertices = geometry.boundaryVertices
+
+                // Transform boundary vertices to world space
+                for vertex in vertices {
+                    let localPos = SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1)
+                    let worldPos = planeAnchor.transform * localPos
+                    let boundaryPoint = SIMD3<Float>(worldPos.x, medianY, worldPos.z)
+                    addBoundaryPoint(boundaryPoint)
                 }
             }
 
-            // STEP 2: Detect walls near ceiling and capture their intersection with ceiling
-            if let ceiling = ceilingPlane {
-                // Is this a wall? (vertical plane, NOT window or door)
-                let isWall = planeAnchor.classification == .wall || abs(normal.y) < 0.3
-                let isWindowOrDoor = planeAnchor.classification == .window || planeAnchor.classification == .door
-
-                if isWall && !isWindowOrDoor {
-                    // Does this wall reach the ceiling?
-                    let wallTopY = planeY + (planeAnchor.planeExtent.height / 2)
-                    let nearCeiling = abs(wallTopY - ceiling.y) < 0.5  // Within 50cm
-
-                    if nearCeiling {
-                        // Calculate the line where this wall meets the ceiling
-                        // Wall direction is perpendicular to its normal (in XZ plane)
-                        let wallDir = simd_normalize(SIMD3<Float>(-normal.z, 0, normal.x))
-                        let halfWidth = planeAnchor.planeExtent.width / 2
-
-                        // Two endpoints of the wall-ceiling intersection line
-                        let p1 = SIMD3<Float>(planeCenter.x - wallDir.x * halfWidth,
-                                              ceiling.y,
-                                              planeCenter.z - wallDir.z * halfWidth)
-                        let p2 = SIMD3<Float>(planeCenter.x + wallDir.x * halfWidth,
-                                              ceiling.y,
-                                              planeCenter.z + wallDir.z * halfWidth)
-
-                        // Add both endpoints as boundary points
-                        addBoundaryPoint(p1)
-                        addBoundaryPoint(p2)
-                    }
-                }
-            }
+            // Ceiling boundary is extracted directly from ceiling plane above
+            // No need for wall-based detection - ARKit provides the boundary
         }
 
         // Build boundary from captured points
