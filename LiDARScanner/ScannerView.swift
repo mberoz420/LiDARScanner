@@ -13,6 +13,12 @@ struct ScannerView: View {
             ARViewContainer(meshManager: meshManager)
                 .edgesIgnoringSafeArea(.all)
 
+            // Test mode overlay - separate layer, always on top when in test mode
+            if meshManager.currentMode == .test {
+                TestModeOverlayView(detector: meshManager.testModeDetector)
+                    .edgesIgnoringSafeArea(.all)
+            }
+
             VStack {
                 // Top bar with stats and mode
                 HStack {
@@ -102,11 +108,7 @@ struct ScannerView: View {
                     )
                     .padding(.horizontal)
                 }
-                // Test mode overlay - full screen
-                else if meshManager.isScanning && meshManager.currentMode == .test {
-                    TestModeOverlayView(detector: meshManager.testModeDetector)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+                // Test mode handled in separate ZStack layer above
                 // Surface type legend (when classification is enabled but NOT in guided mode)
                 else if meshManager.isScanning && meshManager.surfaceClassificationEnabled && meshManager.currentMode == .walls && !meshManager.useEdgeVisualization {
                     HStack {
