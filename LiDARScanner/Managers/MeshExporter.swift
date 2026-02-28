@@ -89,51 +89,51 @@ class MeshExporter: ObservableObject {
         let combined = combineMeshes(scan)
         let hasColors = combined.hasColors
 
-        // Build header
-        var header = """
-        ply
-        format ascii 1.0
-        element vertex \(combined.vertices.count)
-        property float x
-        property float y
-        property float z
-        property float nx
-        property float ny
-        property float nz
-
-        """
+        // Build header - PLY requires strict format with no extra blank lines
+        var headerLines = [
+            "ply",
+            "format ascii 1.0",
+            "element vertex \(combined.vertices.count)",
+            "property float x",
+            "property float y",
+            "property float z",
+            "property float nx",
+            "property float ny",
+            "property float nz"
+        ]
 
         if hasColors {
-            header += """
-            property uchar red
-            property uchar green
-            property uchar blue
-
-            """
+            headerLines.append(contentsOf: [
+                "property uchar red",
+                "property uchar green",
+                "property uchar blue"
+            ])
         }
 
-        header += """
-        element face \(combined.faces.count)
-        property list uchar int vertex_indices
-        end_header
+        headerLines.append(contentsOf: [
+            "element face \(combined.faces.count)",
+            "property list uchar int vertex_indices",
+            "end_header"
+        ])
 
-        """
-
-        var plyContent = header
+        var plyContent = headerLines.joined(separator: "\n") + "\n"
 
         // Write vertices with normals and colors
+        // Use explicit formatting to avoid locale issues with decimal separators
         for i in 0..<combined.vertices.count {
             let v = combined.vertices[i]
             let n = i < combined.normals.count ? combined.normals[i] : SIMD3<Float>(0, 1, 0)
 
             if hasColors && i < combined.colors.count {
                 let c = combined.colors[i]
-                let r = UInt8(max(0, min(255, c.r * 255)))
-                let g = UInt8(max(0, min(255, c.g * 255)))
-                let b = UInt8(max(0, min(255, c.b * 255)))
-                plyContent += "\(v.x) \(v.y) \(v.z) \(n.x) \(n.y) \(n.z) \(r) \(g) \(b)\n"
+                let r = Int(max(0, min(255, c.r * 255)))
+                let g = Int(max(0, min(255, c.g * 255)))
+                let b = Int(max(0, min(255, c.b * 255)))
+                plyContent += String(format: "%.6f %.6f %.6f %.6f %.6f %.6f %d %d %d\n",
+                                     v.x, v.y, v.z, n.x, n.y, n.z, r, g, b)
             } else {
-                plyContent += "\(v.x) \(v.y) \(v.z) \(n.x) \(n.y) \(n.z)\n"
+                plyContent += String(format: "%.6f %.6f %.6f %.6f %.6f %.6f\n",
+                                     v.x, v.y, v.z, n.x, n.y, n.z)
             }
         }
 
@@ -142,7 +142,9 @@ class MeshExporter: ObservableObject {
             plyContent += "3 \(face[0]) \(face[1]) \(face[2])\n"
         }
 
-        try plyContent.write(to: url, atomically: true, encoding: .utf8)
+        // Write with Unix line endings (LF only)
+        let data = plyContent.data(using: .utf8)!
+        try data.write(to: url)
     }
 
     // MARK: - OBJ Export (with MTL for colors)
@@ -153,16 +155,16 @@ class MeshExporter: ObservableObject {
         objContent += "# Vertices: \(combined.vertices.count)\n"
         objContent += "# Faces: \(combined.faces.count)\n\n"
 
-        // Write vertices
+        // Write vertices with explicit formatting to avoid locale issues
         for v in combined.vertices {
-            objContent += "v \(v.x) \(v.y) \(v.z)\n"
+            objContent += String(format: "v %.6f %.6f %.6f\n", v.x, v.y, v.z)
         }
 
         objContent += "\n"
 
         // Write normals
         for n in combined.normals {
-            objContent += "vn \(n.x) \(n.y) \(n.z)\n"
+            objContent += String(format: "vn %.6f %.6f %.6f\n", n.x, n.y, n.z)
         }
 
         objContent += "\n"
@@ -175,7 +177,9 @@ class MeshExporter: ObservableObject {
             objContent += "f \(i0)//\(i0) \(i1)//\(i1) \(i2)//\(i2)\n"
         }
 
-        try objContent.write(to: url, atomically: true, encoding: .utf8)
+        // Write with Unix line endings (LF only)
+        let data = objContent.data(using: .utf8)!
+        try data.write(to: url)
     }
 
     // MARK: - Helpers
