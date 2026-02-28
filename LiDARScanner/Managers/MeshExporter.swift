@@ -147,39 +147,139 @@ class MeshExporter: ObservableObject {
         try data.write(to: url)
     }
 
-    // MARK: - OBJ Export (with MTL for colors)
+    // MARK: - OBJ Export (with groups for Blender layers)
     private func exportOBJ(_ scan: CapturedScan, to url: URL) async throws {
-        let combined = combineMeshes(scan)
+        // Group meshes by surface type
+        var groupedMeshes: [String: [CapturedMeshData]] = [
+            "Floor": [],
+            "Ceiling": [],
+            "Walls": [],
+            "Objects": []
+        ]
+
+        let windowPlanes = scan.windowPlanes
+
+        for mesh in scan.meshes {
+            // Determine group based on surface type
+            let groupName: String
+            switch mesh.surfaceType {
+            case .floor:
+                groupName = "Floor"
+            case .ceiling, .ceilingProtrusion:
+                groupName = "Ceiling"
+            case .wall:
+                groupName = "Walls"
+            default:
+                groupName = "Objects"
+            }
+
+            groupedMeshes[groupName, default: []].append(mesh)
+        }
 
         var objContent = "# LiDAR Scanner Export\n"
-        objContent += "# Vertices: \(combined.vertices.count)\n"
-        objContent += "# Faces: \(combined.faces.count)\n\n"
+        objContent += "# Groups: Floor, Ceiling, Walls, Objects\n"
+        objContent += "# Use View > Outliner in Blender to show/hide groups\n\n"
 
-        // Write vertices with explicit formatting to avoid locale issues
-        for v in combined.vertices {
-            objContent += String(format: "v %.6f %.6f %.6f\n", v.x, v.y, v.z)
-        }
+        var globalVertexOffset: UInt32 = 0
 
-        objContent += "\n"
+        // Process each group
+        let groupOrder = ["Floor", "Ceiling", "Walls", "Objects"]
 
-        // Write normals
-        for n in combined.normals {
-            objContent += String(format: "vn %.6f %.6f %.6f\n", n.x, n.y, n.z)
-        }
+        for groupName in groupOrder {
+            guard let meshes = groupedMeshes[groupName], !meshes.isEmpty else { continue }
 
-        objContent += "\n"
+            // Write group header
+            objContent += "\n# \(groupName) surfaces\n"
+            objContent += "g \(groupName)\n"
+            objContent += "o \(groupName)\n\n"
 
-        // Write faces (OBJ uses 1-based indexing)
-        for face in combined.faces {
-            let i0 = face[0] + 1
-            let i1 = face[1] + 1
-            let i2 = face[2] + 1
-            objContent += "f \(i0)//\(i0) \(i1)//\(i1) \(i2)//\(i2)\n"
+            var groupVertices: [SIMD3<Float>] = []
+            var groupNormals: [SIMD3<Float>] = []
+            var groupFaces: [[UInt32]] = []
+            var localVertexOffset: UInt32 = 0
+
+            for mesh in meshes {
+                // Transform vertices to world space
+                var meshWorldVertices: [SIMD3<Float>] = []
+                for vertex in mesh.vertices {
+                    let worldPos = mesh.transform * SIMD4<Float>(vertex, 1)
+                    let wp = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+                    meshWorldVertices.append(wp)
+                    groupVertices.append(wp)
+                }
+
+                // Transform normals
+                let normalMatrix = simd_float3x3(
+                    SIMD3<Float>(mesh.transform.columns.0.x, mesh.transform.columns.0.y, mesh.transform.columns.0.z),
+                    SIMD3<Float>(mesh.transform.columns.1.x, mesh.transform.columns.1.y, mesh.transform.columns.1.z),
+                    SIMD3<Float>(mesh.transform.columns.2.x, mesh.transform.columns.2.y, mesh.transform.columns.2.z)
+                )
+                for normal in mesh.normals {
+                    groupNormals.append(normalize(normalMatrix * normal))
+                }
+
+                // Process faces with glass filtering
+                for face in mesh.faces {
+                    let idx0 = Int(face[0])
+                    let idx1 = Int(face[1])
+                    let idx2 = Int(face[2])
+
+                    guard idx0 < meshWorldVertices.count,
+                          idx1 < meshWorldVertices.count,
+                          idx2 < meshWorldVertices.count else { continue }
+
+                    let v0 = meshWorldVertices[idx0]
+                    let v1 = meshWorldVertices[idx1]
+                    let v2 = meshWorldVertices[idx2]
+
+                    // Filter faces beyond glass
+                    var shouldFilter = false
+                    for plane in windowPlanes {
+                        if plane.shouldFilter(v0) && plane.shouldFilter(v1) && plane.shouldFilter(v2) {
+                            shouldFilter = true
+                            break
+                        }
+                    }
+                    if shouldFilter { continue }
+
+                    groupFaces.append([
+                        face[0] + localVertexOffset,
+                        face[1] + localVertexOffset,
+                        face[2] + localVertexOffset
+                    ])
+                }
+
+                localVertexOffset += UInt32(mesh.vertices.count)
+            }
+
+            // Write vertices for this group
+            for v in groupVertices {
+                objContent += String(format: "v %.6f %.6f %.6f\n", v.x, v.y, v.z)
+            }
+
+            // Write normals for this group
+            for n in groupNormals {
+                objContent += String(format: "vn %.6f %.6f %.6f\n", n.x, n.y, n.z)
+            }
+
+            objContent += "\n"
+
+            // Write faces (OBJ uses 1-based indexing, offset by global vertex count)
+            for face in groupFaces {
+                let i0 = face[0] + globalVertexOffset + 1
+                let i1 = face[1] + globalVertexOffset + 1
+                let i2 = face[2] + globalVertexOffset + 1
+                objContent += "f \(i0)//\(i0) \(i1)//\(i1) \(i2)//\(i2)\n"
+            }
+
+            globalVertexOffset += UInt32(groupVertices.count)
         }
 
         // Write with Unix line endings (LF only)
         let data = objContent.data(using: .utf8)!
         try data.write(to: url)
+
+        print("[MeshExporter] OBJ exported with groups: \(groupedMeshes.filter { !$0.value.isEmpty }.keys.joined(separator: ", "))")
     }
 
     // MARK: - Helpers
