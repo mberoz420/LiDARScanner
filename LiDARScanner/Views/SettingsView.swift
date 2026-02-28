@@ -388,15 +388,6 @@ struct SettingsView: View {
                     Text("Host a version.json file with latest version info and Diawi download URL.")
                 }
 
-                // Experimental
-                Section {
-                    Toggle("Trial 1 - Ceiling Boundary Walls", isOn: $settings.trial1Enabled)
-                } header: {
-                    Text("Experimental")
-                } footer: {
-                    Text("In Walls mode: Trace ceiling-wall intersection to define room boundary, then point DOWN to measure floor. Generates 10cm thick walls from ceiling to floor.")
-                }
-
                 // About
                 Section {
                     HStack {
