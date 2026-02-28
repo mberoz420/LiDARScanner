@@ -31,36 +31,10 @@ struct Trial1OverlayView: View {
 
                 // Calculated ceiling height
                 if let ceilingH = detector.ceilingHeight {
-                    let roomHeight: Float
-                    if let floor = floorHeight {
-                        roomHeight = ceilingH - floor
-                    } else {
-                        roomHeight = ceilingH
-                    }
-
-                    HStack(spacing: 16) {
-                        VStack {
-                            Text(String(format: "%.2f m", roomHeight))
-                                .font(.title)
-                                .fontWeight(.bold)
-                            Text("Room Height")
-                                .font(.caption)
-                        }
-
-                        if floorHeight != nil {
-                            Divider().frame(height: 30)
-                            VStack {
-                                Text(String(format: "%.2f m", ceilingH))
-                                    .font(.headline)
-                                Text("Ceiling Y")
-                                    .font(.caption2)
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.7))
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
+                    CeilingHeightDisplay(
+                        ceilingHeight: ceilingH,
+                        floorHeight: floorHeight
+                    )
                 }
 
                 // Instruction when not pointing up
@@ -91,5 +65,44 @@ struct Trial1OverlayView: View {
             }
         }
         .padding()
+    }
+}
+
+/// Helper view for displaying ceiling height
+private struct CeilingHeightDisplay: View {
+    let ceilingHeight: Float
+    let floorHeight: Float?
+
+    private var roomHeight: Float {
+        if let floor = floorHeight {
+            return ceilingHeight - floor
+        }
+        return ceilingHeight
+    }
+
+    var body: some View {
+        HStack(spacing: 16) {
+            VStack {
+                Text(String(format: "%.2f m", roomHeight))
+                    .font(.title)
+                    .fontWeight(.bold)
+                Text("Room Height")
+                    .font(.caption)
+            }
+
+            if floorHeight != nil {
+                Divider().frame(height: 30)
+                VStack {
+                    Text(String(format: "%.2f m", ceilingHeight))
+                        .font(.headline)
+                    Text("Ceiling Y")
+                        .font(.caption2)
+                }
+            }
+        }
+        .padding()
+        .background(Color.black.opacity(0.7))
+        .foregroundColor(.white)
+        .cornerRadius(12)
     }
 }
