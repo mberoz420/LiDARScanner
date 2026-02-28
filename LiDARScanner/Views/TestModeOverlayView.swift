@@ -6,15 +6,11 @@ struct TestModeOverlayView: View {
 
     var body: some View {
         ZStack {
-            // Reticle in CENTER - large and visible
-            VStack {
-                Spacer()
-                TestModeReticle(
-                    hasCeiling: detector.ceilingPlane != nil,
-                    edgeCount: detector.edgeCount
-                )
-                Spacer()
-            }
+            // Reticle in CENTER - aligned with LiDAR
+            TestModeReticle(
+                hasCeiling: detector.ceilingPlane != nil,
+                edgeCount: detector.edgeCount
+            )
 
             VStack {
                 // Top status bar
@@ -116,37 +112,37 @@ struct TestModeReticle: View {
 
     var body: some View {
         ZStack {
-            // Outer ring
+            // Outer ring - LARGER
             Circle()
+                .stroke(reticleColor, lineWidth: 3)
+                .frame(width: 180, height: 180)
+
+            // Cross hairs - LARGER
+            Rectangle()
+                .fill(reticleColor)
+                .frame(width: 60, height: 3)
+
+            Rectangle()
+                .fill(reticleColor)
+                .frame(width: 3, height: 60)
+
+            // Inner targeting area - LARGER
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(reticleColor, lineWidth: 2)
-                .frame(width: 120, height: 120)
-
-            // Cross hairs
-            Rectangle()
-                .fill(reticleColor)
-                .frame(width: 40, height: 2)
-
-            Rectangle()
-                .fill(reticleColor)
-                .frame(width: 2, height: 40)
-
-            // Inner targeting area
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(reticleColor, lineWidth: 1.5)
-                .frame(width: 80, height: 50)
+                .frame(width: 120, height: 80)
 
             // Label
             VStack {
                 Spacer()
-                    .frame(height: 70)
+                    .frame(height: 100)
                 Text(labelText)
-                    .font(.caption2)
-                    .fontWeight(.medium)
+                    .font(.caption)
+                    .fontWeight(.bold)
                     .foregroundColor(reticleColor)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(4)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(6)
             }
         }
     }

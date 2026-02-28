@@ -274,10 +274,16 @@ struct ScanModeView: View {
                 )
             }
 
+            // Test mode overlay - full screen reticle
+            if mode == .test {
+                TestModeOverlayView(detector: meshManager.testModeDetector)
+                    .edgesIgnoringSafeArea(.all)
+            }
+
             VStack {
-                // Top Bar - minimal
+                // Top Bar - minimal (moved down for test mode to avoid reticle overlap)
                 HStack {
-                    // Back button
+                    // Back button - positioned lower when in test mode
                     Button(action: { dismiss() }) {
                         Image(systemName: "chevron.left")
                             .font(.title3)
@@ -286,6 +292,7 @@ struct ScanModeView: View {
                             .background(Color.black.opacity(0.5))
                             .clipShape(Circle())
                     }
+                    .padding(.top, mode == .test ? 60 : 0)  // Move down in test mode
 
                     Spacer()
 
