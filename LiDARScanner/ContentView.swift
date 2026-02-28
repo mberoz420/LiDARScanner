@@ -231,7 +231,8 @@ struct ScanModeView: View {
 
                         Text(meshManager.scanStatus)
                             .font(.caption2)
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
                     }
                     .foregroundColor(.white)
                     .padding(10)

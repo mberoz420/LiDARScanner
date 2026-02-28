@@ -498,6 +498,8 @@ struct QuickModeButton: View {
                     .font(.title3)
                 Text(mode.rawValue)
                     .font(.caption2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
             .frame(width: 70, height: 60)
             .background(isSelected ? mode.color.opacity(0.3) : Color.black.opacity(0.5))
@@ -541,12 +543,14 @@ struct RoomScanPhaseIndicator: View {
                         Text(phase.rawValue)
                             .font(.subheadline)
                             .fontWeight(.bold)
+                            .lineLimit(1)
                     }
 
                     Text(phase.detailedHint)
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     // Progress bar
                     if phase != .complete && phase != .ready {

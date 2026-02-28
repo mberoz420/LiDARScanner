@@ -317,9 +317,10 @@ class MeshManager: NSObject, ObservableObject {
         case .floor:
             phaseProgress = Double(stats.floorConfidence)
             if let floorH = stats.floorHeight {
-                scanStatus = String(format: "Floor = 0 (detected at %.2fm)", floorH)
-                // Calibrate room builder with floor level
+                scanStatus = String(format: "Floor detected at %.2fm", floorH)
+                // Calibrate room builder and edge visualizer with floor level
                 roomBuilder.calibrateFloor(at: floorH)
+                edgeVisualizer.floorY = floorH
             } else {
                 scanStatus = currentPhase.instruction
             }
@@ -331,11 +332,13 @@ class MeshManager: NSObject, ObservableObject {
         case .ceiling:
             phaseProgress = Double(stats.ceilingConfidence)
             if let height = stats.estimatedRoomHeight, let ceilingH = stats.ceilingHeight {
-                scanStatus = String(format: "Ceiling = %.2fm (room height)", height)
-                // Calibrate room builder with ceiling level
+                scanStatus = String(format: "Height: %.2fm", height)
+                // Calibrate room builder and edge visualizer
                 roomBuilder.calibrateCeiling(at: ceilingH)
+                edgeVisualizer.ceilingY = ceilingH
+                edgeVisualizer.setRoomDimensions(floor: stats.floorHeight ?? 0, ceiling: ceilingH)
             } else if stats.ceilingHeight != nil {
-                scanStatus = "Ceiling detected - measuring height..."
+                scanStatus = "Measuring height..."
             } else {
                 scanStatus = currentPhase.instruction
             }
@@ -345,15 +348,14 @@ class MeshManager: NSObject, ObservableObject {
             }
 
         case .walls:
-            // Use roomBuilder for intelligent wall detection
-            let wallCount = roomBuilder.wallSegments.count
-            let cornerCount = roomBuilder.roomCorners.count
-            let openingCount = roomBuilder.detectedOpenings.count
+            // Count detected corners from edge data
+            let cornerEdges = stats.detectedEdges.filter { $0.edgeType == .verticalCorner }
+            let cornerCount = cornerEntities(in: cornerEdges)
 
             phaseProgress = Double(min(Float(cornerCount) / 4.0, 1.0))
-            scanStatus = "\(wallCount) walls | \(cornerCount) corners | \(openingCount) openings"
+            scanStatus = "\(cornerCount) corners detected"
 
-            // Update edge visualization from detected edges
+            // Update edge visualization - only vertical corners become lines
             edgeVisualizer.updateEdges(stats.detectedEdges)
 
             // Check for completion (4+ corners = enclosed room)
@@ -388,6 +390,18 @@ class MeshManager: NSObject, ObservableObject {
             // Generate final edges from room builder
             generateEdgesFromRoomBuilder()
         }
+    }
+
+    /// Count unique corners from edges (de-duplicated by position)
+    private func cornerEntities(in edges: [WallEdge]) -> Int {
+        var uniqueCorners: Set<String> = []
+        for edge in edges {
+            let midpoint = (edge.startPoint + edge.endPoint) / 2
+            let gridX = round(midpoint.x * 10) / 10
+            let gridZ = round(midpoint.z * 10) / 10
+            uniqueCorners.insert("\(gridX)_\(gridZ)")
+        }
+        return uniqueCorners.count
     }
 
     /// Generate edge lines from room builder's wall segments and corners
