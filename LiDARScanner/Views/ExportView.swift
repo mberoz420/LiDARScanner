@@ -1,6 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// Export type selection
+enum ExportType: String, CaseIterable {
+    case fullMesh = "Full Mesh"
+    case simplifiedRoom = "Simplified Room"
+    case cleanWalls = "Clean Walls"
+}
+
 struct ExportView: View {
     let scan: CapturedScan
     let scanMode: ScanMode
@@ -17,14 +24,17 @@ struct ExportView: View {
     @State private var showGoogleDriveAlert = false
     @State private var googleDriveInstruction = ""
     @State private var pendingShareURL: URL?
-    @State private var useSimplifiedExport = false
+    @State private var exportType: ExportType = .fullMesh
     @State private var simplifiedRoom: SimplifiedRoom?
+    @State private var reconstructedWalls: [ReconstructedWall]?
     @State private var showSaveSession = false
     @State private var sessionName = ""
     @State private var isSavingSession = false
     @State private var sessionSaveSuccess = false
     @ObservedObject private var sessionManager = ScanSessionManager.shared
     @Environment(\.dismiss) private var dismiss
+
+    private let wallReconstructor = WallReconstructor()
 
     init(scan: CapturedScan, scanMode: ScanMode = .fast) {
         self.scan = scan
@@ -84,14 +94,24 @@ struct ExportView: View {
                 Spacer()
             }
 
-            Picker("Export Type", selection: $useSimplifiedExport) {
-                Text("Full Mesh").tag(false)
-                Text("Simplified Room").tag(true)
+            Picker("Export Type", selection: $exportType) {
+                ForEach(ExportType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
             }
             .pickerStyle(.segmented)
-            .onChange(of: useSimplifiedExport) { newValue in
-                if newValue && simplifiedRoom == nil {
-                    generateSimplifiedRoom()
+            .onChange(of: exportType) { newValue in
+                switch newValue {
+                case .simplifiedRoom:
+                    if simplifiedRoom == nil {
+                        generateSimplifiedRoom()
+                    }
+                case .cleanWalls:
+                    if reconstructedWalls == nil {
+                        generateCleanWalls()
+                    }
+                case .fullMesh:
+                    break
                 }
             }
 
@@ -108,21 +128,41 @@ struct ExportView: View {
     private var statsComparisonView: some View {
         HStack {
             VStack(alignment: .leading) {
-                if useSimplifiedExport, let room = simplifiedRoom {
-                    Text("Vertices: \(room.vertexCount)")
-                        .foregroundColor(.green)
-                    Text("Walls: \(room.wallCount)")
-                } else {
+                switch exportType {
+                case .simplifiedRoom:
+                    if let room = simplifiedRoom {
+                        Text("Vertices: \(room.vertexCount)")
+                            .foregroundColor(.green)
+                        Text("Walls: \(room.wallCount)")
+                    }
+                case .cleanWalls:
+                    if let walls = reconstructedWalls {
+                        let vertexCount = walls.count * 8  // Approximate
+                        Text("Vertices: ~\(vertexCount)")
+                            .foregroundColor(.blue)
+                        Text("Walls: \(walls.count)")
+                    }
+                case .fullMesh:
                     Text("Vertices: \(scan.vertexCount)")
                     Text("Faces: \(scan.faceCount)")
                 }
             }
             Spacer()
             VStack(alignment: .trailing) {
-                if useSimplifiedExport, let room = simplifiedRoom {
-                    Text(String(format: "%.1f m²", room.floorArea))
-                    Text(String(format: "Height: %.2f m", room.roomHeight))
-                } else {
+                switch exportType {
+                case .simplifiedRoom:
+                    if let room = simplifiedRoom {
+                        Text(String(format: "%.1f m²", room.floorArea))
+                        Text(String(format: "Height: %.2f m", room.roomHeight))
+                    }
+                case .cleanWalls:
+                    if let stats = scan.statistics, let height = stats.estimatedRoomHeight {
+                        Text(String(format: "Height: %.2f m", height))
+                        Text("No furniture")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                case .fullMesh:
                     Text("Meshes: \(scan.meshes.count)")
                     if scan.hasColors {
                         Label("With Colors", systemImage: "paintpalette.fill")
@@ -138,16 +178,29 @@ struct ExportView: View {
 
     @ViewBuilder
     private var reductionInfoView: some View {
-        if useSimplifiedExport, let room = simplifiedRoom {
-            let reduction = 100.0 - (Float(room.vertexCount) / Float(max(1, scan.vertexCount)) * 100)
-            HStack {
-                Image(systemName: "arrow.down.circle.fill")
-                    .foregroundColor(.green)
-                Text(String(format: "%.0f%% reduction (%d → %d vertices)",
-                            reduction, scan.vertexCount, room.vertexCount))
-                    .font(.caption)
-                    .foregroundColor(.green)
+        switch exportType {
+        case .simplifiedRoom:
+            if let room = simplifiedRoom {
+                let reduction = 100.0 - (Float(room.vertexCount) / Float(max(1, scan.vertexCount)) * 100)
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundColor(.green)
+                    Text(String(format: "%.0f%% reduction (%d → %d vertices)",
+                                reduction, scan.vertexCount, room.vertexCount))
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
             }
+        case .cleanWalls:
+            HStack {
+                Image(systemName: "cube.transparent")
+                    .foregroundColor(.blue)
+                Text("Clean architectural walls from floor to ceiling")
+                    .font(.caption)
+                    .foregroundColor(.blue)
+            }
+        case .fullMesh:
+            EmptyView()
         }
     }
 
@@ -440,7 +493,7 @@ struct ExportView: View {
     private func generateSimplifiedRoom() {
         guard let stats = scan.statistics else {
             exporter.lastError = "No room statistics available for simplification"
-            useSimplifiedExport = false
+            exportType = .fullMesh
             return
         }
 
@@ -452,20 +505,63 @@ struct ExportView: View {
 
         if simplifiedRoom == nil {
             exporter.lastError = "Could not simplify room (need floor/ceiling detection)"
-            useSimplifiedExport = false
+            exportType = .fullMesh
+        }
+    }
+
+    private func generateCleanWalls() {
+        guard let stats = scan.statistics else {
+            exporter.lastError = "No room statistics available for wall reconstruction"
+            exportType = .fullMesh
+            return
+        }
+
+        let walls = wallReconstructor.reconstruct(from: stats)
+
+        if walls.isEmpty {
+            exporter.lastError = "Could not reconstruct walls (need corner detection in Walls mode)"
+            exportType = .fullMesh
+        } else {
+            reconstructedWalls = walls
         }
     }
 
     private func getExportScan() -> CapturedScan {
-        if useSimplifiedExport, let room = simplifiedRoom {
-            // Create scan with simplified mesh
-            let simplifiedMesh = roomSimplifier.generateMesh(from: room)
-            var simplifiedScan = CapturedScan(startTime: scan.startTime)
-            simplifiedScan.meshes = [simplifiedMesh]
-            simplifiedScan.endTime = scan.endTime
-            simplifiedScan.statistics = scan.statistics
-            return simplifiedScan
+        switch exportType {
+        case .simplifiedRoom:
+            if let room = simplifiedRoom {
+                let simplifiedMesh = roomSimplifier.generateMesh(from: room)
+                var simplifiedScan = CapturedScan(startTime: scan.startTime)
+                simplifiedScan.meshes = [simplifiedMesh]
+                simplifiedScan.endTime = scan.endTime
+                simplifiedScan.statistics = scan.statistics
+                return simplifiedScan
+            }
+
+        case .cleanWalls:
+            if let walls = reconstructedWalls, let stats = scan.statistics {
+                // Generate wall mesh
+                let wallMesh = wallReconstructor.generateMesh(walls: walls)
+
+                // Generate floor and ceiling
+                let corners = wallReconstructor.extractCorners(from: stats.detectedEdges)
+                let floorCeilingMesh = wallReconstructor.generateFloorCeiling(
+                    corners: corners,
+                    floorY: stats.floorHeight ?? 0,
+                    ceilingY: stats.ceilingHeight ?? 2.5
+                )
+
+                var cleanScan = CapturedScan(startTime: scan.startTime)
+                cleanScan.meshes = [wallMesh, floorCeilingMesh]
+                cleanScan.endTime = scan.endTime
+                cleanScan.statistics = scan.statistics
+                return cleanScan
+            }
+
+        case .fullMesh:
+            break
         }
+
         return scan
     }
 
