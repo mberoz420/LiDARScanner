@@ -189,6 +189,9 @@ class MeshManager: NSObject, ObservableObject {
     // Intelligent room builder for walls mode
     let roomBuilder = RoomBuilder()
 
+    // Test mode detector for wall-ceiling intersection
+    let testModeDetector = TestModeDetector()
+
     // MARK: - Session Resume
     @Published var isRepairMode = false
     @Published var resumedSessionId: UUID?
@@ -307,6 +310,12 @@ class MeshManager: NSObject, ObservableObject {
 
             // Start voice commands for walls mode
             startVoiceCommands()
+        } else if currentMode == .test {
+            // Test mode: ceiling and wall-ceiling intersection detection
+            testModeDetector.reset()
+            testModeDetector.startListening()
+            surfaceClassifier.classificationEnabled = true
+            scanStatus = "Point at ceiling"
         } else {
             currentPhase = .ready
             useEdgeVisualization = false
@@ -496,6 +505,11 @@ class MeshManager: NSObject, ObservableObject {
 
         // Stop voice commands
         stopVoiceCommands()
+
+        // Stop test mode
+        if currentMode == .test {
+            testModeDetector.stopListening()
+        }
 
         // Include user-confirmed corners in statistics
         var stats = surfaceClassifier.statistics
@@ -1569,6 +1583,11 @@ extension MeshManager: ARSessionDelegate {
             // Update device orientation from gyroscope/accelerometer
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
+
+            // Test mode processing
+            if isScanning && currentMode == .test {
+                testModeDetector.processFrame(frame)
+            }
 
             // Check if edge is in reticle and detect pause (for walls mode)
             if isScanning && currentMode == .walls {
