@@ -22,6 +22,7 @@ class MeshManager: NSObject, ObservableObject {
     @Published var currentPhase: RoomScanPhase = .ready
     @Published var phaseProgress: Double = 0
     @Published var useEdgeVisualization = false  // Edge lines instead of mesh overlay
+    @Published var edgeInReticle = false  // True when edge is detected in center of screen
 
     // Surface classifier for floor/ceiling/wall detection
     let surfaceClassifier = SurfaceClassifier()
@@ -770,6 +771,13 @@ extension MeshManager: ARSessionDelegate {
             // Update device orientation from gyroscope/accelerometer
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
+
+            // Check if edge is in reticle (for walls mode)
+            if isScanning && currentMode == .walls {
+                edgeInReticle = edgeVisualizer.isEdgeInReticle(frame: frame)
+            } else {
+                edgeInReticle = false
+            }
         }
     }
 

@@ -252,22 +252,22 @@ struct ScanModeView: View {
                 }
             }
 
+            // Edge detection reticle (center of screen)
+            if meshManager.isScanning && mode == .walls {
+                EdgeTargetReticle(edgeDetected: meshManager.edgeInReticle)
+            }
+
             VStack {
-                // Top Bar
+                // Top Bar - minimal
                 HStack {
                     // Back button
                     Button(action: { dismiss() }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left")
-                            Text("Menu")
-                        }
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(20)
+                        Image(systemName: "chevron.left")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
                     }
 
                     Spacer()
@@ -286,25 +286,19 @@ struct ScanModeView: View {
                         .cornerRadius(8)
                     }
 
-                    // Mode info
-                    VStack(alignment: .trailing, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Image(systemName: mode.icon)
-                                .foregroundColor(mode.color)
-                            Text(mode.rawValue)
-                                .fontWeight(.bold)
-                        }
-                        .font(.subheadline)
-
-                        Text(meshManager.scanStatus)
-                            .font(.caption2)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.8)
+                    // Mode badge
+                    HStack(spacing: 6) {
+                        Image(systemName: mode.icon)
+                            .foregroundColor(mode.color)
+                        Text(mode.rawValue)
+                            .fontWeight(.semibold)
                     }
+                    .font(.subheadline)
                     .foregroundColor(.white)
-                    .padding(10)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(20)
                 }
                 .padding()
 
@@ -321,74 +315,55 @@ struct ScanModeView: View {
                     .padding(.horizontal)
                 }
 
-                // Stats during scanning
+                // Status bar at bottom (narrow, transparent)
                 if meshManager.isScanning {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Vertices: \(meshManager.vertexCount)")
-                                .font(.caption)
-                            DeviceOrientationIndicator(orientation: meshManager.deviceOrientation)
-                        }
-                        .padding(10)
-                        .background(Color.black.opacity(0.6))
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-
-                        Spacer()
-                    }
+                    ScanStatusBar(
+                        status: meshManager.scanStatus,
+                        vertexCount: meshManager.vertexCount,
+                        orientation: meshManager.deviceOrientation
+                    )
                     .padding(.horizontal)
+                    .padding(.bottom, 8)
                 }
 
                 // Bottom controls
                 HStack(spacing: 20) {
                     // Settings button
                     Button(action: { showModeSettings = true }) {
-                        VStack(spacing: 4) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.title2)
-                            Text("Settings")
-                                .font(.caption2)
-                        }
-                        .foregroundColor(.white)
-                        .frame(width: 70, height: 70)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(16)
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.black.opacity(0.5))
+                            .cornerRadius(14)
                     }
                     .disabled(meshManager.isScanning)
+                    .opacity(meshManager.isScanning ? 0.5 : 1)
 
                     // Start/Stop button
                     Button(action: toggleScanning) {
-                        VStack(spacing: 4) {
-                            Image(systemName: meshManager.isScanning ? "stop.fill" : "play.fill")
-                                .font(.system(size: 30))
-                            Text(meshManager.isScanning ? "Stop" : "Start")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                        }
-                        .foregroundColor(.white)
-                        .frame(width: 90, height: 90)
-                        .background(
-                            Circle()
-                                .fill(meshManager.isScanning ? Color.red : Color.green)
-                        )
+                        Image(systemName: meshManager.isScanning ? "stop.fill" : "play.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                            .frame(width: 80, height: 80)
+                            .background(
+                                Circle()
+                                    .fill(meshManager.isScanning ? Color.red : Color.green)
+                            )
                     }
 
                     // Export button
                     if capturedScan != nil && !meshManager.isScanning {
                         Button(action: { showExport = true }) {
-                            VStack(spacing: 4) {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.title2)
-                                Text("Export")
-                                    .font(.caption2)
-                            }
-                            .foregroundColor(.white)
-                            .frame(width: 70, height: 70)
-                            .background(Color.blue)
-                            .cornerRadius(16)
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .frame(width: 56, height: 56)
+                                .background(Color.blue)
+                                .cornerRadius(14)
                         }
                     } else {
-                        Color.clear.frame(width: 70, height: 70)
+                        Color.clear.frame(width: 56, height: 56)
                     }
                 }
                 .padding(.bottom, 40)
@@ -627,6 +602,116 @@ struct AppSettingsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Scan Status Bar (Bottom)
+
+struct ScanStatusBar: View {
+    let status: String
+    let vertexCount: Int
+    let orientation: DeviceOrientation
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Status text
+            Text(status)
+                .font(.caption)
+                .lineLimit(1)
+
+            Spacer()
+
+            // Vertex count
+            HStack(spacing: 4) {
+                Image(systemName: "cube")
+                    .font(.caption2)
+                Text("\(formatCount(vertexCount))")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+
+            // Orientation indicator
+            DeviceOrientationIndicator(orientation: orientation)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.6))
+        )
+    }
+
+    private func formatCount(_ n: Int) -> String {
+        if n >= 1000000 {
+            return String(format: "%.1fM", Double(n) / 1000000)
+        } else if n >= 1000 {
+            return String(format: "%.1fK", Double(n) / 1000)
+        }
+        return "\(n)"
+    }
+}
+
+// MARK: - Edge Target Reticle
+
+struct EdgeTargetReticle: View {
+    let edgeDetected: Bool
+
+    var body: some View {
+        ZStack {
+            // Outer ring
+            Circle()
+                .stroke(edgeDetected ? Color.green : Color.white.opacity(0.5), lineWidth: 2)
+                .frame(width: 80, height: 80)
+
+            // Inner crosshair
+            Group {
+                // Horizontal line
+                Rectangle()
+                    .fill(edgeDetected ? Color.green : Color.white.opacity(0.7))
+                    .frame(width: 30, height: 2)
+
+                // Vertical line
+                Rectangle()
+                    .fill(edgeDetected ? Color.green : Color.white.opacity(0.7))
+                    .frame(width: 2, height: 30)
+            }
+
+            // Corner brackets
+            ForEach(0..<4, id: \.self) { i in
+                CornerBracket(edgeDetected: edgeDetected)
+                    .rotationEffect(.degrees(Double(i) * 90))
+            }
+
+            // Center dot when edge detected
+            if edgeDetected {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+
+                // Pulsing effect
+                Circle()
+                    .stroke(Color.green, lineWidth: 2)
+                    .frame(width: 60, height: 60)
+                    .opacity(0.5)
+                    .scaleEffect(edgeDetected ? 1.2 : 1.0)
+                    .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: edgeDetected)
+            }
+        }
+    }
+}
+
+struct CornerBracket: View {
+    let edgeDetected: Bool
+
+    var body: some View {
+        Path { path in
+            path.move(to: CGPoint(x: 35, y: 0))
+            path.addLine(to: CGPoint(x: 35, y: -10))
+            path.addLine(to: CGPoint(x: 25, y: -10))
+        }
+        .stroke(edgeDetected ? Color.green : Color.white.opacity(0.7), lineWidth: 2)
+        .offset(y: -35)
     }
 }
 

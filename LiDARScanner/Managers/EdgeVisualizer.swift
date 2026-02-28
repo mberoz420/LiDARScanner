@@ -135,4 +135,52 @@ class EdgeVisualizer {
     var edgeCount: Int {
         cornerEntities.count
     }
+
+    /// Check if any edge is in the center of the screen (reticle area)
+    func isEdgeInReticle(frame: ARFrame, reticleRadius: Float = 0.15) -> Bool {
+        guard !cornerEntities.isEmpty else { return false }
+
+        // Get camera position and forward direction
+        let cameraTransform = frame.camera.transform
+        let cameraPosition = SIMD3<Float>(
+            cameraTransform.columns.3.x,
+            cameraTransform.columns.3.y,
+            cameraTransform.columns.3.z
+        )
+        let cameraForward = -SIMD3<Float>(
+            cameraTransform.columns.2.x,
+            cameraTransform.columns.2.y,
+            cameraTransform.columns.2.z
+        )
+
+        // Check each corner position
+        for (_, entity) in cornerEntities {
+            let cornerPos = entity.position
+
+            // Vector from camera to corner
+            let toCorner = cornerPos - cameraPosition
+            let distance = length(toCorner)
+
+            // Skip if too far or too close
+            if distance < 0.3 || distance > 5.0 { continue }
+
+            // Project corner onto camera's view direction
+            let projectedDistance = dot(toCorner, cameraForward)
+            if projectedDistance < 0 { continue }  // Behind camera
+
+            // Find the closest point on the camera ray to the corner
+            let closestPointOnRay = cameraPosition + cameraForward * projectedDistance
+
+            // Distance from corner to the ray (perpendicular distance)
+            let perpDistance = length(cornerPos - closestPointOnRay)
+
+            // Check if within reticle radius (scaled by distance for perspective)
+            let scaledRadius = reticleRadius * (projectedDistance / 1.0)  // Scale with distance
+            if perpDistance < scaledRadius {
+                return true
+            }
+        }
+
+        return false
+    }
 }
