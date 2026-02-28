@@ -410,8 +410,8 @@ class SurfaceClassifier: ObservableObject {
     /// Height clustering tolerance for floor/ceiling detection (meters)
     private let heightClusterTolerance: Float = 0.15
 
-    /// Angle threshold for edge detection (radians, ~60 degrees)
-    private let edgeAngleThreshold: Float = 1.05
+    /// Angle threshold for edge detection (radians, ~45 degrees - lower = more edges detected)
+    private let edgeAngleThreshold: Float = 0.78
 
     // MARK: - Internal State
     private var floorHeightSamples: [Float] = []
@@ -659,6 +659,8 @@ class SurfaceClassifier: ObservableObject {
         faceNormals: [SIMD3<Float>],
         faceCenters: [SIMD3<Float>]
     ) {
+        print("[SurfaceClassifier] detectEdges called with \(faces.count) faces")
+
         // Build edge-to-face mapping
         var edgeToFaces: [String: [Int]] = [:]
 
@@ -679,6 +681,8 @@ class SurfaceClassifier: ObservableObject {
 
         // Find edges where surface types differ or normals change sharply
         var detectedEdgePoints: [(start: SIMD3<Float>, end: SIMD3<Float>, type: WallEdge.EdgeType, angle: Float)] = []
+        var typeChangeCount = 0
+        var sharpAngleCount = 0
 
         for (edgeKey, faceIndices) in edgeToFaces {
             guard faceIndices.count == 2 else { continue }  // Only internal edges
@@ -704,6 +708,9 @@ class SurfaceClassifier: ObservableObject {
             let isTypeChange = type1 != type2
             let isSharpAngle = angle > edgeAngleThreshold
 
+            if isTypeChange { typeChangeCount += 1 }
+            if isSharpAngle { sharpAngleCount += 1 }
+
             if isTypeChange || isSharpAngle {
                 // Extract edge vertices
                 let vertexIndices = edgeKey.split(separator: "-").compactMap { UInt32($0) }
@@ -720,6 +727,8 @@ class SurfaceClassifier: ObservableObject {
                 detectedEdgePoints.append((start, end, edgeType, angle))
             }
         }
+
+        print("[SurfaceClassifier] Edge detection: \(typeChangeCount) type changes, \(sharpAngleCount) sharp angles, \(detectedEdgePoints.count) edges found")
 
         // Merge nearby edge segments into continuous edges
         mergeEdgeSegments(detectedEdgePoints)
@@ -754,15 +763,15 @@ class SurfaceClassifier: ObservableObject {
         // Simple approach: keep significant edges, limit total count
         let significantEdges = segments.filter { segment in
             let length = simd_distance(segment.start, segment.end)
-            return length > 0.1  // At least 10cm
+            return length > 0.05  // At least 5cm (lowered from 10cm to catch more edges)
         }
 
         // Sort by angle (sharpest first) and take top edges
         let sortedEdges = significantEdges.sorted { $0.angle > $1.angle }
-        let topEdges = Array(sortedEdges.prefix(50))  // Keep top 50 edges
+        let topEdges = Array(sortedEdges.prefix(50))  // Keep top 50 edges from this mesh
 
-        // Extend vertical edges (corners) to floor and ceiling
-        statistics.detectedEdges = topEdges.map { segment in
+        // Create new edges and APPEND to existing (accumulate across meshes)
+        let newEdges = topEdges.map { segment -> WallEdge in
             var start = segment.start
             var end = segment.end
 
@@ -800,6 +809,34 @@ class SurfaceClassifier: ObservableObject {
                 angle: segment.angle
             )
         }
+
+        // Append new edges, avoiding duplicates (edges with very similar positions)
+        for newEdge in newEdges {
+            let isDuplicate = statistics.detectedEdges.contains { existingEdge in
+                let startDist = simd_distance(existingEdge.startPoint, newEdge.startPoint)
+                let endDist = simd_distance(existingEdge.endPoint, newEdge.endPoint)
+                let reversedStartDist = simd_distance(existingEdge.startPoint, newEdge.endPoint)
+                let reversedEndDist = simd_distance(existingEdge.endPoint, newEdge.startPoint)
+
+                let normalMatch = (startDist < 0.15 && endDist < 0.15)
+                let reversedMatch = (reversedStartDist < 0.15 && reversedEndDist < 0.15)
+
+                return normalMatch || reversedMatch
+            }
+
+            if !isDuplicate {
+                statistics.detectedEdges.append(newEdge)
+            }
+        }
+
+        // Limit total edges to prevent memory issues
+        if statistics.detectedEdges.count > 200 {
+            // Keep the most significant edges (longest, by angle)
+            statistics.detectedEdges.sort { $0.length > $1.length }
+            statistics.detectedEdges = Array(statistics.detectedEdges.prefix(150))
+        }
+
+        print("[SurfaceClassifier] Total accumulated edges: \(statistics.detectedEdges.count)")
     }
 
     /// Classify entire mesh anchor and return dominant surface type

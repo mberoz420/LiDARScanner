@@ -265,9 +265,13 @@ class MeshManager: NSObject, ObservableObject {
         // Update visualization with surface-appropriate color
         updateMeshVisualization(for: anchor, surfaceType: classifiedSurface.surfaceType)
 
-        // Update edge visualization in room mode
+        // Update edge visualization in room mode - show edges as they're detected
         if useEdgeVisualization && currentMode == .walls {
-            edgeVisualizer.updateEdges(surfaceClassifier.statistics.detectedEdges)
+            let edges = surfaceClassifier.statistics.detectedEdges
+            if !edges.isEmpty {
+                edgeVisualizer.updateEdges(edges)
+                print("[MeshManager] Passing \(edges.count) edges to visualizer")
+            }
         }
 
         // Store for export
