@@ -229,16 +229,14 @@ struct ReticleCorners: View {
 struct MicrophoneIndicator: View {
     let isListening: Bool
     let isReceiving: Bool
-    @State private var blink = false
 
     var body: some View {
         ZStack {
             // Glow effect when receiving
             if isReceiving {
                 Circle()
-                    .fill(Color.green.opacity(0.3))
+                    .fill(Color.green.opacity(0.4))
                     .frame(width: 44, height: 44)
-                    .scaleEffect(blink ? 1.2 : 1.0)
             }
 
             Image(systemName: isListening ? "mic.fill" : "mic.slash")
@@ -248,15 +246,7 @@ struct MicrophoneIndicator: View {
                 .background(Color.black.opacity(0.5))
                 .clipShape(Circle())
         }
-        .onChange(of: isReceiving) { _, receiving in
-            if receiving {
-                withAnimation(.easeInOut(duration: 0.3).repeatForever(autoreverses: true)) {
-                    blink = true
-                }
-            } else {
-                blink = false
-            }
-        }
+        .animation(.easeInOut(duration: 0.2), value: isReceiving)
     }
 
     private var micColor: Color {
