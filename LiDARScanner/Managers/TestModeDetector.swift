@@ -606,15 +606,42 @@ class TestModeDetector: ObservableObject {
     // MARK: - Voice Control
 
     func startListening() {
-        // Use AVAudioSession for iOS 16 compatibility
-        AVAudioSession.sharedInstance().requestRecordPermission { [weak self] micGranted in
-            guard micGranted else {
-                DispatchQueue.main.async {
-                    self?.statusMessage = "Mic not authorized"
-                }
-                return
-            }
+        // Check current permission status first (non-blocking)
+        let audioSession = AVAudioSession.sharedInstance()
 
+        // Check if we already have permission
+        switch audioSession.recordPermission {
+        case .granted:
+            // Already have mic permission, check speech
+            checkSpeechPermissionAndStart()
+        case .denied:
+            DispatchQueue.main.async {
+                self.statusMessage = "Mic denied - check Settings"
+            }
+        case .undetermined:
+            // Request permission
+            audioSession.requestRecordPermission { [weak self] micGranted in
+                DispatchQueue.main.async {
+                    if micGranted {
+                        self?.checkSpeechPermissionAndStart()
+                    } else {
+                        self?.statusMessage = "Mic not authorized"
+                    }
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    private func checkSpeechPermissionAndStart() {
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized:
+            permissionGranted = true
+            startAudioEngine()
+        case .denied, .restricted:
+            statusMessage = "Speech denied - check Settings"
+        case .notDetermined:
             SFSpeechRecognizer.requestAuthorization { [weak self] status in
                 DispatchQueue.main.async {
                     if status == .authorized {
@@ -625,43 +652,77 @@ class TestModeDetector: ObservableObject {
                     }
                 }
             }
+        @unknown default:
+            break
         }
     }
 
     private func startAudioEngine() {
+        // Safety: stop any existing engine first
         stopAudioEngine()
 
-        guard permissionGranted,
-              let speechRecognizer = speechRecognizer,
-              speechRecognizer.isAvailable else { return }
+        // Verify permissions and availability
+        guard permissionGranted else {
+            print("[TestMode] Audio engine: permission not granted")
+            return
+        }
+
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("[TestMode] Audio engine: speech recognizer not available")
+            DispatchQueue.main.async {
+                self.statusMessage = "Speech not available"
+            }
+            return
+        }
 
         do {
+            // Configure audio session with error handling
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .duckOthers])
+            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .mixWithOthers])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 
+            // Create new audio engine
             audioEngine = AVAudioEngine()
-            guard let audioEngine = audioEngine else { return }
+            guard let audioEngine = audioEngine else {
+                print("[TestMode] Audio engine: failed to create engine")
+                return
+            }
 
+            // Create recognition request
             recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-            guard let recognitionRequest = recognitionRequest else { return }
+            guard let recognitionRequest = recognitionRequest else {
+                print("[TestMode] Audio engine: failed to create request")
+                return
+            }
             recognitionRequest.shouldReportPartialResults = true
 
+            // Validate audio format
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
 
-            guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else { return }
+            guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+                print("[TestMode] Audio engine: invalid format - rate=\(recordingFormat.sampleRate) channels=\(recordingFormat.channelCount)")
+                DispatchQueue.main.async {
+                    self.statusMessage = "Audio format error"
+                }
+                return
+            }
 
+            // Install audio tap
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 self?.recognitionRequest?.append(buffer)
                 self?.checkAudioLevel(buffer: buffer)
             }
 
+            // Start engine
             audioEngine.prepare()
             try audioEngine.start()
 
-            isListening = true
+            DispatchQueue.main.async {
+                self.isListening = true
+            }
 
+            // Start recognition task
             recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
                 if let result = result {
                     let text = result.bestTranscription.formattedString.lowercased()
@@ -671,14 +732,22 @@ class TestModeDetector: ObservableObject {
                 }
 
                 if error != nil || (result?.isFinal ?? false) {
+                    // Restart after brief delay
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                         guard let self = self, self.isListening else { return }
                         self.startAudioEngine()
                     }
                 }
             }
+
+            print("[TestMode] Audio engine started successfully")
+
         } catch {
-            isListening = false
+            print("[TestMode] Audio engine error: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.isListening = false
+                self.statusMessage = "Audio error"
+            }
         }
     }
 

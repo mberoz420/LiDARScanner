@@ -313,9 +313,14 @@ class MeshManager: NSObject, ObservableObject {
         } else if currentMode == .test {
             // Test mode: ceiling and wall-ceiling intersection detection
             testModeDetector.reset()
-            testModeDetector.startListening()
             surfaceClassifier.classificationEnabled = true
             scanStatus = "Point at ceiling"
+
+            // Delay voice recognition start to allow permission prompts
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard self?.isScanning == true, self?.currentMode == .test else { return }
+                self?.testModeDetector.startListening()
+            }
         } else {
             currentPhase = .ready
             useEdgeVisualization = false
