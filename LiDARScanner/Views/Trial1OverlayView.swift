@@ -1,108 +1,217 @@
 import SwiftUI
 
-/// Overlay view showing Trial 1 ceiling detection results
+/// Overlay view for Trial 1 ceiling boundary scanning
 struct Trial1OverlayView: View {
     @ObservedObject var detector: Trial1Detector
-    let floorHeight: Float?
 
     var body: some View {
         VStack {
-            // Top: Ceiling height display
+            // Top: Phase indicator and instructions
             VStack(spacing: 8) {
-                // Real-time distance when pointing up
-                if detector.isPointingAtCeiling {
-                    HStack {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .foregroundColor(.green)
-                        if let distance = detector.distanceToTarget {
-                            Text(String(format: "Distance: %.2f m", distance))
-                                .font(.title2)
-                                .fontWeight(.bold)
-                        } else {
-                            Text("Measuring...")
-                                .font(.title2)
-                        }
-                    }
-                    .padding()
-                    .background(Color.green.opacity(0.8))
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
+                // Phase badge
+                HStack {
+                    Image(systemName: detector.phase.icon)
+                    Text(detector.phase.rawValue)
+                        .fontWeight(.bold)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(phaseColor.opacity(0.9))
+                .foregroundColor(.white)
+                .cornerRadius(20)
 
-                // Calculated ceiling height
-                if let ceilingH = detector.ceilingHeight {
-                    CeilingHeightDisplay(
-                        ceilingHeight: ceilingH,
-                        floorHeight: floorHeight
-                    )
-                }
-
-                // Instruction when not pointing up
-                if !detector.isPointingAtCeiling && detector.ceilingHeight == nil {
-                    HStack {
-                        Image(systemName: "iphone.radiowaves.left.and.right")
-                        Text("Point device UP to measure ceiling")
-                    }
-                    .padding()
-                    .background(Color.blue.opacity(0.7))
+                // Instruction
+                Text(detector.phase.instruction)
+                    .font(.headline)
                     .foregroundColor(.white)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.7))
                     .cornerRadius(8)
-                }
+
+                // Progress info based on phase
+                phaseProgressView
             }
+            .padding(.top, 60)
 
             Spacer()
 
-            // Bottom: Wall count from ceiling edges
-            if !detector.wallCeilingEdges.isEmpty {
-                HStack {
-                    Image(systemName: "square.split.diagonal")
-                    Text("\(detector.wallCeilingEdges.count) wall-ceiling edges detected")
+            // Bottom: Measurements and controls
+            VStack(spacing: 12) {
+                // Measurements display
+                if detector.ceilingHeight != nil || detector.floorHeight != nil || detector.roomHeight != nil {
+                    measurementsView
                 }
-                .padding()
-                .background(Color.black.opacity(0.7))
-                .foregroundColor(.white)
-                .cornerRadius(8)
+
+                // Next button when ready to advance
+                if canAdvancePhase {
+                    Button(action: { detector.nextPhase() }) {
+                        HStack {
+                            Text(nextButtonText)
+                                .fontWeight(.semibold)
+                            Image(systemName: "arrow.right.circle.fill")
+                        }
+                        .padding()
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                    }
+                }
             }
+            .padding(.bottom, 120)
         }
         .padding()
     }
-}
 
-/// Helper view for displaying ceiling height
-private struct CeilingHeightDisplay: View {
-    let ceilingHeight: Float
-    let floorHeight: Float?
+    // MARK: - Phase Progress View
 
-    private var roomHeight: Float {
-        if let floor = floorHeight {
-            return ceilingHeight - floor
+    @ViewBuilder
+    private var phaseProgressView: some View {
+        switch detector.phase {
+        case .ready:
+            EmptyView()
+
+        case .scanningCeilingBoundary:
+            VStack(spacing: 4) {
+                Text("\(detector.ceilingBoundaryPoints.count) boundary points")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                if detector.ceilingBoundaryPoints.count < 3 {
+                    Text("Need at least 3 points")
+                        .font(.caption)
+                        .foregroundColor(.yellow)
+                } else {
+                    Text("Tap Next when boundary complete")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+            .padding()
+            .background(Color.black.opacity(0.7))
+            .foregroundColor(.white)
+            .cornerRadius(8)
+
+        case .measuringFloor:
+            VStack(spacing: 4) {
+                if detector.isPointingAtFloor {
+                    if let distance = detector.distanceToFloor {
+                        Text(String(format: "Floor: %.2f m away", distance))
+                            .font(.title2)
+                            .fontWeight(.bold)
+                    }
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.title)
+                } else {
+                    Text("Point device DOWN")
+                        .font(.title2)
+                    Image(systemName: "arrow.down")
+                        .font(.largeTitle)
+                }
+            }
+            .padding()
+            .background(detector.isPointingAtFloor ? Color.green.opacity(0.8) : Color.blue.opacity(0.8))
+            .foregroundColor(.white)
+            .cornerRadius(12)
+
+        case .complete:
+            VStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.largeTitle)
+                    .foregroundColor(.green)
+                Text("Walls Generated!")
+                    .font(.headline)
+
+                if let mesh = detector.generatedWallMesh {
+                    Text("\(mesh.vertices.count) vertices, \(mesh.faces.count) faces")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            .padding()
+            .background(Color.black.opacity(0.7))
+            .foregroundColor(.white)
+            .cornerRadius(12)
         }
-        return ceilingHeight
     }
 
-    var body: some View {
-        HStack(spacing: 16) {
-            VStack {
-                Text(String(format: "%.2f m", roomHeight))
-                    .font(.title)
-                    .fontWeight(.bold)
-                Text("Room Height")
-                    .font(.caption)
-            }
+    // MARK: - Measurements View
 
-            if floorHeight != nil {
-                Divider().frame(height: 30)
+    private var measurementsView: some View {
+        HStack(spacing: 20) {
+            if let ceiling = detector.ceilingHeight {
                 VStack {
-                    Text(String(format: "%.2f m", ceilingHeight))
+                    Text(String(format: "%.2f m", ceiling))
                         .font(.headline)
-                    Text("Ceiling Y")
+                        .fontWeight(.bold)
+                    Text("Ceiling")
                         .font(.caption2)
                 }
+            }
+
+            if let floor = detector.floorHeight {
+                VStack {
+                    Text(String(format: "%.2f m", floor))
+                        .font(.headline)
+                        .fontWeight(.bold)
+                    Text("Floor")
+                        .font(.caption2)
+                }
+            }
+
+            if let height = detector.roomHeight {
+                VStack {
+                    Text(String(format: "%.2f m", height))
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    Text("Room Height")
+                        .font(.caption)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.green.opacity(0.3))
+                .cornerRadius(6)
             }
         }
         .padding()
         .background(Color.black.opacity(0.7))
         .foregroundColor(.white)
         .cornerRadius(12)
+    }
+
+    // MARK: - Helpers
+
+    private var phaseColor: Color {
+        switch detector.phase {
+        case .ready: return .gray
+        case .scanningCeilingBoundary: return .cyan
+        case .measuringFloor: return .blue
+        case .complete: return .green
+        }
+    }
+
+    private var canAdvancePhase: Bool {
+        switch detector.phase {
+        case .ready:
+            return false
+        case .scanningCeilingBoundary:
+            return detector.ceilingBoundaryPoints.count >= 3
+        case .measuringFloor:
+            return detector.floorHeight != nil && detector.ceilingHeight != nil
+        case .complete:
+            return false
+        }
+    }
+
+    private var nextButtonText: String {
+        switch detector.phase {
+        case .scanningCeilingBoundary:
+            return "Next: Measure Floor"
+        case .measuringFloor:
+            return "Generate Walls"
+        default:
+            return "Next"
+        }
     }
 }

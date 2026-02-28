@@ -390,11 +390,11 @@ struct SettingsView: View {
 
                 // Experimental
                 Section {
-                    Toggle("Trial 1 - Wall-Ceiling Detection", isOn: $settings.trial1Enabled)
+                    Toggle("Trial 1 - Ceiling Boundary Walls", isOn: $settings.trial1Enabled)
                 } header: {
                     Text("Experimental")
                 } footer: {
-                    Text("Detect walls from ceiling intersections. Point device up to measure ceiling height.")
+                    Text("In Walls mode: Trace ceiling-wall intersection to define room boundary, then point DOWN to measure floor. Generates 10cm thick walls from ceiling to floor.")
                 }
 
                 // About

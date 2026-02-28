@@ -309,6 +309,11 @@ class MeshManager: NSObject, ObservableObject {
             surfaceClassifier.classificationEnabled = true
             scanStatus = currentPhase.instruction
 
+            // Start Trial 1 ceiling boundary scanning if enabled
+            if AppSettings.shared.trial1Enabled {
+                trial1Detector.startScanning()
+            }
+
             // Start voice commands for walls mode
             startVoiceCommands()
         } else {
@@ -500,6 +505,15 @@ class MeshManager: NSObject, ObservableObject {
 
         // Stop voice commands
         stopVoiceCommands()
+
+        // Stop Trial 1 and add generated walls to scan
+        if AppSettings.shared.trial1Enabled {
+            trial1Detector.stopScanning()
+            if let wallMesh = trial1Detector.generatedWallMesh {
+                capturedScan?.meshes.append(wallMesh)
+                print("[MeshManager] Added Trial1 wall mesh to scan")
+            }
+        }
 
         // Include user-confirmed corners in statistics
         var stats = surfaceClassifier.statistics
@@ -1215,13 +1229,6 @@ class MeshManager: NSObject, ObservableObject {
             // Update edge visualization - only vertical corners become lines
             edgeVisualizer.updateEdges(stats.detectedEdges)
 
-            // Trial 1: Process edges for wall-ceiling detection
-            if AppSettings.shared.trial1Enabled {
-                trial1Detector.processEdges(
-                    stats.detectedEdges,
-                    ceilingY: stats.ceilingHeight
-                )
-            }
 
             // Don't auto-advance walls - user must tap "Skip" or "Next" when ready
             // This gives them time to scan all walls thoroughly
@@ -1582,9 +1589,9 @@ extension MeshManager: ARSessionDelegate {
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
 
-            // Trial 1: Process frame for ceiling detection when pointing up
-            if AppSettings.shared.trial1Enabled && isScanning {
-                trial1Detector.processFrame(frame, floorHeight: surfaceClassifier.statistics.floorHeight)
+            // Trial 1: Process frame for ceiling boundary scanning
+            if AppSettings.shared.trial1Enabled {
+                trial1Detector.processFrame(frame)
             }
 
             // Check if edge is in reticle and detect pause (for walls mode)
