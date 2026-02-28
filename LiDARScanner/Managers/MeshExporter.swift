@@ -185,6 +185,7 @@ class MeshExporter: ObservableObject {
     // MARK: - Helpers
 
     /// Combine all mesh anchors into single mesh with world-space transforms applied
+    /// Also filters out faces that are beyond glass/window planes
     private func combineMeshes(_ scan: CapturedScan) -> CapturedMeshData {
         var allVertices: [SIMD3<Float>] = []
         var allNormals: [SIMD3<Float>] = []
@@ -192,11 +193,17 @@ class MeshExporter: ObservableObject {
         var allFaces: [[UInt32]] = []
         var vertexOffset: UInt32 = 0
 
+        let windowPlanes = scan.windowPlanes
+        var filteredFaceCount = 0
+
         for mesh in scan.meshes {
             // Transform vertices to world space
+            var meshWorldVertices: [SIMD3<Float>] = []
             for vertex in mesh.vertices {
                 let worldPos = mesh.transform * SIMD4<Float>(vertex, 1)
-                allVertices.append(SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z))
+                let worldVertex = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+                meshWorldVertices.append(worldVertex)
+                allVertices.append(worldVertex)
             }
 
             // Transform normals (rotation only)
@@ -212,8 +219,35 @@ class MeshExporter: ObservableObject {
             // Copy colors
             allColors.append(contentsOf: mesh.colors)
 
-            // Offset face indices
+            // Offset face indices, filtering out faces beyond glass
             for face in mesh.faces {
+                let idx0 = Int(face[0])
+                let idx1 = Int(face[1])
+                let idx2 = Int(face[2])
+
+                // Get world-space vertices for this face
+                guard idx0 < meshWorldVertices.count,
+                      idx1 < meshWorldVertices.count,
+                      idx2 < meshWorldVertices.count else { continue }
+
+                let v0 = meshWorldVertices[idx0]
+                let v1 = meshWorldVertices[idx1]
+                let v2 = meshWorldVertices[idx2]
+
+                // Check if face should be filtered (all vertices beyond any window plane)
+                var shouldFilterFace = false
+                for plane in windowPlanes {
+                    if plane.shouldFilter(v0) && plane.shouldFilter(v1) && plane.shouldFilter(v2) {
+                        shouldFilterFace = true
+                        break
+                    }
+                }
+
+                if shouldFilterFace {
+                    filteredFaceCount += 1
+                    continue  // Skip this face
+                }
+
                 allFaces.append([
                     face[0] + vertexOffset,
                     face[1] + vertexOffset,
@@ -222,6 +256,10 @@ class MeshExporter: ObservableObject {
             }
 
             vertexOffset += UInt32(mesh.vertices.count)
+        }
+
+        if filteredFaceCount > 0 {
+            print("[MeshExporter] Filtered \(filteredFaceCount) faces beyond glass/windows")
         }
 
         return CapturedMeshData(

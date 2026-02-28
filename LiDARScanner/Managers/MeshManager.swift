@@ -429,6 +429,18 @@ class MeshManager: NSObject, ObservableObject {
             )
         }
 
+        // Convert and include window planes for glass filtering
+        capturedScan?.windowPlanes = windowPlanes.map { plane in
+            ExportWindowPlane(
+                id: plane.id,
+                position: plane.position,
+                normal: plane.normal,
+                width: plane.width,
+                height: plane.height,
+                bottomY: plane.bottomY
+            )
+        }
+
         // Build summary
         var summary = "\(vertexCount) vertices"
         if !surfaceClassifier.statistics.summary.isEmpty {
@@ -439,6 +451,9 @@ class MeshManager: NSObject, ObservableObject {
         }
         if !classifiedObjects.isEmpty {
             summary += " | \(classifiedObjects.count) objects"
+        }
+        if !windowPlanes.isEmpty {
+            summary += " | \(windowPlanes.count) glass filters"
         }
         scanStatus = "Scan complete - \(summary)"
 

@@ -74,10 +74,48 @@ struct ExportClassifiedObject {
     let expectedEdges: Int
 }
 
+/// Window/glass plane for filtering LiDAR artifacts beyond glass
+struct ExportWindowPlane {
+    let id: UUID
+    let position: SIMD3<Float>       // Center of window/glass
+    let normal: SIMD3<Float>         // Outward-facing normal (through glass)
+    let width: Float
+    let height: Float
+    let bottomY: Float
+
+    /// Check if a point is beyond this glass plane
+    func isOutside(_ point: SIMD3<Float>) -> Bool {
+        let toPoint = point - position
+        return simd_dot(toPoint, normal) > 0.1  // 10cm tolerance
+    }
+
+    /// Check if point is within the horizontal/vertical bounds of the window
+    func isWithinBounds(_ point: SIMD3<Float>) -> Bool {
+        let toPoint = point - position
+
+        // Get right vector (perpendicular to normal and up)
+        let up = SIMD3<Float>(0, 1, 0)
+        let right = simd_normalize(simd_cross(up, normal))
+
+        let horizontalDist = abs(simd_dot(toPoint, right))
+        let verticalPos = point.y
+
+        return horizontalDist < width / 2 &&
+               verticalPos >= bottomY &&
+               verticalPos <= bottomY + height
+    }
+
+    /// Check if a point should be filtered (outside glass and within window projection)
+    func shouldFilter(_ point: SIMD3<Float>) -> Bool {
+        return isOutside(point) && isWithinBounds(point)
+    }
+}
+
 /// Container for entire scan session
 struct CapturedScan {
     var meshes: [CapturedMeshData] = []
     var classifiedObjects: [ExportClassifiedObject] = []
+    var windowPlanes: [ExportWindowPlane] = []
     let startTime: Date
     var endTime: Date?
     var statistics: ScanStatistics?
