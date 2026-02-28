@@ -96,7 +96,7 @@ class TestModeDetector: ObservableObject {
     private var cameraPosition: SIMD3<Float> = .zero
     private var cameraForward: SIMD3<Float> = .init(0, 0, -1)
 
-    /// Captured boundary points from ray-ceiling intersections
+    /// Captured boundary points
     private var capturedBoundaryPoints: [SIMD3<Float>] = []
 
     func processFrame(_ frame: ARFrame) {
@@ -107,54 +107,68 @@ class TestModeDetector: ObservableObject {
         cameraPosition = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         cameraForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
 
-        // STEP 1: Detect ceiling (when pointing UP)
-        let pointingUp = cameraForward.y > 0.5
+        let pointingUp = cameraForward.y > 0.3
 
-        if ceilingPlane == nil && pointingUp {
-            // Look for ceiling plane
-            for anchor in frame.anchors {
-                if let planeAnchor = anchor as? ARPlaneAnchor {
-                    let planeY = planeAnchor.transform.columns.3.y
-                    let normal = SIMD3<Float>(
-                        planeAnchor.transform.columns.1.x,
-                        planeAnchor.transform.columns.1.y,
-                        planeAnchor.transform.columns.1.z
+        for anchor in frame.anchors {
+            guard let planeAnchor = anchor as? ARPlaneAnchor else { continue }
+
+            let planeY = planeAnchor.transform.columns.3.y
+            let planeCenter = SIMD3<Float>(
+                planeAnchor.transform.columns.3.x,
+                planeAnchor.transform.columns.3.y,
+                planeAnchor.transform.columns.3.z
+            )
+            let normal = SIMD3<Float>(
+                planeAnchor.transform.columns.1.x,
+                planeAnchor.transform.columns.1.y,
+                planeAnchor.transform.columns.1.z
+            )
+
+            // STEP 1: Detect ceiling (horizontal plane above camera, normal pointing down)
+            if ceilingPlane == nil {
+                if (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
+                   planeY > cameraPosition.y + 0.3 {
+                    rawCeilingY.append(planeY)
+                    if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
+
+                    let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
+                    ceilingPlane = CeilingPlane(
+                        center: planeCenter,
+                        normal: SIMD3<Float>(0, -1, 0),
+                        y: medianY
                     )
-
-                    // Ceiling: above camera AND normal pointing down
-                    if planeY > cameraPosition.y + 0.5 && normal.y < -0.7 {
-                        rawCeilingY.append(planeY)
-                        if rawCeilingY.count > 10 { rawCeilingY.removeFirst() }
-
-                        let medianY = rawCeilingY.sorted()[rawCeilingY.count / 2]
-                        ceilingPlane = CeilingPlane(
-                            center: SIMD3<Float>(0, medianY, 0),
-                            normal: SIMD3<Float>(0, -1, 0),
-                            y: medianY
-                        )
-                        hapticFeedback()
-                        break
-                    }
+                    hapticFeedback()
                 }
             }
-        }
 
-        // STEP 2: Capture boundary points (when ceiling is known)
-        if let ceiling = ceilingPlane {
-            // Calculate where LiDAR ray intersects ceiling plane
-            // Ray: P = cameraPosition + t * cameraForward
-            // Plane: Y = ceiling.y
-            // Solve: cameraPosition.y + t * cameraForward.y = ceiling.y
+            // STEP 2: Detect walls near ceiling and capture their intersection with ceiling
+            if let ceiling = ceilingPlane {
+                // Is this a wall? (vertical plane)
+                let isWall = planeAnchor.classification == .wall || abs(normal.y) < 0.3
 
-            if abs(cameraForward.y) > 0.1 {  // Not pointing perfectly horizontal
-                let t = (ceiling.y - cameraPosition.y) / cameraForward.y
+                if isWall {
+                    // Does this wall reach the ceiling?
+                    let wallTopY = planeY + (planeAnchor.planeExtent.height / 2)
+                    let nearCeiling = abs(wallTopY - ceiling.y) < 0.5  // Within 50cm
 
-                // Only valid if intersection is IN FRONT of camera
-                if t > 0.5 && t < 10.0 {  // Between 0.5m and 10m
-                    let intersectionPoint = cameraPosition + cameraForward * t
+                    if nearCeiling {
+                        // Calculate the line where this wall meets the ceiling
+                        // Wall direction is perpendicular to its normal (in XZ plane)
+                        let wallDir = simd_normalize(SIMD3<Float>(-normal.z, 0, normal.x))
+                        let halfWidth = planeAnchor.planeExtent.width / 2
 
-                    // This is a ceiling boundary point!
-                    addBoundaryPoint(intersectionPoint)
+                        // Two endpoints of the wall-ceiling intersection line
+                        let p1 = SIMD3<Float>(planeCenter.x - wallDir.x * halfWidth,
+                                              ceiling.y,
+                                              planeCenter.z - wallDir.z * halfWidth)
+                        let p2 = SIMD3<Float>(planeCenter.x + wallDir.x * halfWidth,
+                                              ceiling.y,
+                                              planeCenter.z + wallDir.z * halfWidth)
+
+                        // Add both endpoints as boundary points
+                        addBoundaryPoint(p1)
+                        addBoundaryPoint(p2)
+                    }
                 }
             }
         }
@@ -167,9 +181,12 @@ class TestModeDetector: ObservableObject {
     /// Add a boundary point (with duplicate filtering)
     private func addBoundaryPoint(_ point: SIMD3<Float>) {
         // Check if too close to existing point
-        for existing in capturedBoundaryPoints {
-            if simd_distance(existing, point) < 0.2 {  // 20cm threshold
-                return  // Already have a point here
+        for i in 0..<capturedBoundaryPoints.count {
+            let existing = capturedBoundaryPoints[i]
+            if simd_distance(existing, point) < 0.25 {  // 25cm threshold
+                // Average with existing point for better accuracy
+                capturedBoundaryPoints[i] = (existing + point) / 2
+                return
             }
         }
 
@@ -186,7 +203,7 @@ class TestModeDetector: ObservableObject {
             return
         }
 
-        // Order points clockwise
+        // Order points clockwise to form a closed boundary
         let ordered = orderPointsClockwise(capturedBoundaryPoints)
         ceilingBoundary = ordered
         edgeCount = ordered.count
