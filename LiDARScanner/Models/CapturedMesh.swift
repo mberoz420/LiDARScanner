@@ -64,9 +64,20 @@ struct CapturedMeshData {
     }
 }
 
+/// User-classified object for export grouping
+struct ExportClassifiedObject {
+    let id: UUID
+    let category: String           // "Appliance", "Cabinet", "Furniture", etc.
+    let exportGroup: String        // Group name for OBJ export
+    let position: SIMD3<Float>
+    let boundingBox: (min: SIMD3<Float>, max: SIMD3<Float>)
+    let expectedEdges: Int
+}
+
 /// Container for entire scan session
 struct CapturedScan {
     var meshes: [CapturedMeshData] = []
+    var classifiedObjects: [ExportClassifiedObject] = []
     let startTime: Date
     var endTime: Date?
     var statistics: ScanStatistics?

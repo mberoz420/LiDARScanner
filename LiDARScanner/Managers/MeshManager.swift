@@ -51,25 +51,86 @@ class MeshManager: NSObject, ObservableObject {
     @Published var isListening = false
     @Published var lastVoiceCommand: String?
 
-    // Voice command types
+    // Voice command types for object classification
     enum VoiceCommand: String, CaseIterable {
+        // Structure
         case edge = "edge"
         case corner = "corner"
+        case wall = "wall"
         case door = "door"
         case window = "window"
+
+        // Furniture & Objects
         case furniture = "furniture"
-        case wall = "wall"
+        case appliance = "appliance"
+        case cabinet = "cabinet"
+        case counter = "counter"
+        case table = "table"
+        case chair = "chair"
+        case sofa = "sofa"
+        case bed = "bed"
+        case shelf = "shelf"
+        case closet = "closet"
 
         var confirmationMessage: String {
             switch self {
             case .edge, .corner: return "Corner"
+            case .wall: return "Wall"
             case .door: return "Door"
             case .window: return "Window"
             case .furniture: return "Furniture"
-            case .wall: return "Wall"
+            case .appliance: return "Appliance"
+            case .cabinet: return "Cabinet"
+            case .counter: return "Counter"
+            case .table: return "Table"
+            case .chair: return "Chair"
+            case .sofa: return "Sofa"
+            case .bed: return "Bed"
+            case .shelf: return "Shelf"
+            case .closet: return "Closet"
+            }
+        }
+
+        /// Expected edge count for box-shaped objects
+        var expectedEdges: Int {
+            switch self {
+            case .appliance, .cabinet, .closet: return 12  // Full box
+            case .counter: return 10  // Wall-adjacent, one side hidden
+            case .table: return 12
+            case .chair: return 12
+            case .sofa: return 10  // Usually against wall
+            case .bed: return 10   // Usually against wall
+            case .shelf: return 8  // Often wall-mounted
+            default: return 0  // Not applicable
+            }
+        }
+
+        /// Category for export grouping
+        var exportGroup: String {
+            switch self {
+            case .edge, .corner, .wall: return "Walls"
+            case .door: return "Doors"
+            case .window: return "Windows"
+            case .appliance: return "Appliances"
+            case .cabinet, .closet, .shelf: return "Cabinets"
+            case .counter: return "Counters"
+            case .furniture, .table, .chair, .sofa, .bed: return "Furniture"
             }
         }
     }
+
+    // Classified object - tagged by user via voice/gesture
+    struct ClassifiedObject {
+        let id: UUID
+        let category: VoiceCommand
+        let position: SIMD3<Float>       // Center position
+        let boundingBox: (min: SIMD3<Float>, max: SIMD3<Float>)?
+        let timestamp: Date
+        let detectedEdges: Int           // Number of edges detected
+    }
+
+    // Storage for classified objects
+    @Published var classifiedObjects: [ClassifiedObject] = []
 
     // Surface classifier for floor/ceiling/wall detection
     let surfaceClassifier = SurfaceClassifier()
@@ -156,8 +217,9 @@ class MeshManager: NSObject, ObservableObject {
         vertexCount = 0
         surfaceTypes.removeAll()
 
-        // Reset user-confirmed corners
+        // Reset user-confirmed corners and classified objects
         userConfirmedCorners.removeAll()
+        classifiedObjects.removeAll()
         confirmedCornerCount = 0
         lastConfirmedPosition = nil
         movementSamples.removeAll()
@@ -306,6 +368,18 @@ class MeshManager: NSObject, ObservableObject {
         stats.userConfirmedCorners = userConfirmedCorners
         capturedScan?.statistics = stats
 
+        // Convert and include classified objects for export
+        capturedScan?.classifiedObjects = classifiedObjects.map { obj in
+            ExportClassifiedObject(
+                id: obj.id,
+                category: obj.category.confirmationMessage,
+                exportGroup: obj.category.exportGroup,
+                position: obj.position,
+                boundingBox: obj.boundingBox ?? (min: obj.position - 0.25, max: obj.position + 0.25),
+                expectedEdges: obj.detectedEdges
+            )
+        }
+
         // Build summary
         var summary = "\(vertexCount) vertices"
         if !surfaceClassifier.statistics.summary.isEmpty {
@@ -313,6 +387,9 @@ class MeshManager: NSObject, ObservableObject {
         }
         if !userConfirmedCorners.isEmpty {
             summary += " | \(userConfirmedCorners.count) confirmed corners"
+        }
+        if !classifiedObjects.isEmpty {
+            summary += " | \(classifiedObjects.count) objects"
         }
         scanStatus = "Scan complete - \(summary)"
 
@@ -554,20 +631,73 @@ class MeshManager: NSObject, ObservableObject {
         case .door:
             // Register as door
             registerDoor(at: position, frame: frame)
+            registerClassifiedObject(command, at: position, frame: frame)
             speakConfirmation("Door marked")
-            print("[MeshManager] Voice: door at \(position)")
 
         case .window:
             // Register as window
             registerWindow(at: position, frame: frame)
+            registerClassifiedObject(command, at: position, frame: frame)
             speakConfirmation("Window marked")
-            print("[MeshManager] Voice: window at \(position)")
 
-        case .furniture:
-            // Register as furniture (to exclude from clean walls)
-            registerFurniture(at: position)
-            speakConfirmation("Furniture marked")
-            print("[MeshManager] Voice: furniture at \(position)")
+        case .furniture, .appliance, .cabinet, .counter, .table, .chair, .sofa, .bed, .shelf, .closet:
+            // Register as classified object
+            registerClassifiedObject(command, at: position, frame: frame)
+            speakConfirmation("\(command.confirmationMessage) marked")
+
+            // Hint about expected edges
+            if command.expectedEdges > 0 {
+                let edgeHint = command == .counter || command == .sofa || command == .bed || command == .shelf
+                    ? "(\(command.expectedEdges) edges, wall-adjacent)"
+                    : "(\(command.expectedEdges) edges)"
+                print("[MeshManager] Voice: \(command.rawValue) at \(position) \(edgeHint)")
+            }
+        }
+    }
+
+    /// Register a classified object at the given position
+    private func registerClassifiedObject(_ category: VoiceCommand, at position: SIMD3<Float>, frame: ARFrame) {
+        // Estimate bounding box based on category defaults
+        let (defaultWidth, defaultHeight, defaultDepth) = defaultDimensions(for: category)
+
+        let halfW = defaultWidth / 2
+        let halfD = defaultDepth / 2
+        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+
+        let boundingBox = (
+            min: SIMD3<Float>(position.x - halfW, floorY, position.z - halfD),
+            max: SIMD3<Float>(position.x + halfW, floorY + defaultHeight, position.z + halfD)
+        )
+
+        let classified = ClassifiedObject(
+            id: UUID(),
+            category: category,
+            position: position,
+            boundingBox: boundingBox,
+            timestamp: Date(),
+            detectedEdges: category.expectedEdges
+        )
+
+        classifiedObjects.append(classified)
+        print("[MeshManager] Classified \(category.rawValue) at \(position), group: \(category.exportGroup), total: \(classifiedObjects.count)")
+    }
+
+    /// Default dimensions for object categories (width, height, depth in meters)
+    private func defaultDimensions(for category: VoiceCommand) -> (Float, Float, Float) {
+        switch category {
+        case .appliance: return (0.6, 0.9, 0.6)      // Typical appliance
+        case .cabinet: return (0.6, 0.9, 0.6)        // Kitchen cabinet
+        case .closet: return (1.2, 2.2, 0.6)         // Closet
+        case .counter: return (0.6, 0.9, 0.6)        // Counter section
+        case .table: return (1.2, 0.75, 0.8)         // Dining table
+        case .chair: return (0.5, 0.9, 0.5)          // Chair
+        case .sofa: return (2.0, 0.85, 0.9)          // Sofa
+        case .bed: return (1.5, 0.5, 2.0)            // Bed
+        case .shelf: return (0.8, 1.8, 0.3)          // Shelf unit
+        case .furniture: return (0.8, 0.8, 0.8)      // Generic furniture
+        case .door: return (0.9, 2.1, 0.1)           // Door
+        case .window: return (1.0, 1.2, 0.1)         // Window
+        default: return (0.5, 0.5, 0.5)              // Default cube
         }
     }
 
