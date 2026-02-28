@@ -92,68 +92,58 @@ class TestModeDetector: ObservableObject {
 
     // MARK: - Frame Processing (ARKit Planes)
 
-    /// Screen dimensions and reticle settings
-    private var screenSize: CGSize = CGSize(width: 390, height: 844)  // Default iPhone size
-    private var currentFrame: ARFrame?
-    private let reticleRadius: CGFloat = 60  // Reticle circle radius in points
+    /// Camera state
+    private var cameraY: Float = 0
+    private var cameraForward: SIMD3<Float> = .init(0, 0, -1)
 
     func processFrame(_ frame: ARFrame) {
         guard !isPaused else { return }
 
-        currentFrame = frame
+        // Get camera position and direction
+        let transform = frame.camera.transform
+        cameraY = transform.columns.3.y
+        cameraForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
 
-        // Get screen size from camera image
-        let imageResolution = frame.camera.imageResolution
-        screenSize = CGSize(width: imageResolution.width, height: imageResolution.height)
+        // Are we pointing UP? (camera forward Y > 0.3 means pointing upward)
+        let pointingUp = cameraForward.y > 0.3
 
-        // Only process planes that project INTO the reticle on screen
         for anchor in frame.anchors {
             if let planeAnchor = anchor as? ARPlaneAnchor {
-                if isPlaneInReticle(planeAnchor, frame: frame) {
-                    processPlaneAnchor(planeAnchor)
+                let planeY = planeAnchor.transform.columns.3.y
+
+                // ONLY process planes that make sense for where we're pointing:
+                // - If pointing UP: only accept planes ABOVE the camera
+                // - Ignore floor (planes significantly below camera)
+                if pointingUp {
+                    // Must be above camera to be valid when pointing up
+                    if planeY > cameraY + 0.3 {
+                        processPlaneAnchor(planeAnchor)
+                    }
+                }
+                // If pointing horizontally, accept walls near ceiling
+                else if ceilingPlane != nil {
+                    let normal = SIMD3<Float>(
+                        planeAnchor.transform.columns.1.x,
+                        planeAnchor.transform.columns.1.y,
+                        planeAnchor.transform.columns.1.z
+                    )
+                    // Only walls (vertical planes) near ceiling height
+                    if abs(normal.y) < 0.3 {
+                        let wallTopY = planeY + (planeAnchor.planeExtent.height / 2)
+                        if abs(wallTopY - ceilingPlane!.y) < ceilingProximity {
+                            processPlaneAnchor(planeAnchor)
+                        }
+                    }
                 }
             }
         }
 
-        // Build ceiling boundary from all sources
+        // Build ceiling boundary
         if ceilingPlane != nil {
             buildHybridCeilingBoundary()
         }
 
         updateStatus()
-    }
-
-    /// Check if plane center projects into the reticle circle on screen
-    private func isPlaneInReticle(_ anchor: ARPlaneAnchor, frame: ARFrame) -> Bool {
-        let planeCenter = SIMD3<Float>(
-            anchor.transform.columns.3.x,
-            anchor.transform.columns.3.y,
-            anchor.transform.columns.3.z
-        )
-
-        // Project 3D point to 2D screen coordinates
-        let camera = frame.camera
-        let screenPoint = camera.projectPoint(
-            planeCenter,
-            orientation: .portrait,
-            viewportSize: screenSize
-        )
-
-        // Check if point is on screen
-        guard screenPoint.x >= 0 && screenPoint.x <= screenSize.width &&
-              screenPoint.y >= 0 && screenPoint.y <= screenSize.height else {
-            return false
-        }
-
-        // Reticle is at center of screen
-        let reticleCenter = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
-
-        // Check if projected point is within reticle circle
-        let dx = screenPoint.x - reticleCenter.x
-        let dy = screenPoint.y - reticleCenter.y
-        let distance = sqrt(dx * dx + dy * dy)
-
-        return distance <= reticleRadius
     }
 
     // MARK: - Mesh Processing (Raw LiDAR Data)
