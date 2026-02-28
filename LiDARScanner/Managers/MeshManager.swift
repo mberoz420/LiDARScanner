@@ -315,12 +315,7 @@ class MeshManager: NSObject, ObservableObject {
             testModeDetector.reset()
             surfaceClassifier.classificationEnabled = true
             scanStatus = "Point at ceiling"
-
-            // Delay voice recognition start to allow permission prompts
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                guard self?.isScanning == true, self?.currentMode == .test else { return }
-                self?.testModeDetector.startListening()
-            }
+            // Voice recognition disabled - use manual pause button
         } else {
             currentPhase = .ready
             useEdgeVisualization = false
@@ -1606,23 +1601,9 @@ extension MeshManager: ARSessionDelegate {
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
 
-            // Test mode processing
+            // Test mode processing - only ARKit planes for now
             if isScanning && currentMode == .test {
                 testModeDetector.processFrame(frame)
-            }
-
-            // Process mesh data for test mode (hybrid cove detection)
-            if isScanning && currentMode == .test {
-                for anchor in frame.anchors {
-                    if let meshAnchor = anchor as? ARMeshAnchor {
-                        let meshData = extractMeshDataForTestMode(from: meshAnchor)
-                        testModeDetector.processMesh(
-                            vertices: meshData.vertices,
-                            normals: meshData.normals,
-                            transform: meshAnchor.transform
-                        )
-                    }
-                }
             }
 
             // Check if edge is in reticle and detect pause (for walls mode)
