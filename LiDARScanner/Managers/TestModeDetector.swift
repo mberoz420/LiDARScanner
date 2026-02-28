@@ -7,13 +7,11 @@ import UIKit
 class TestModeDetector: ObservableObject {
 
     // MARK: - Published State
-    @MainActor @Published var ceilingPlane: DetectedPlane?
-    @MainActor @Published var wallPlanes: [DetectedPlane] = []
-    @MainActor @Published var detectedEdges: [BoundaryEdge] = []
-    @MainActor @Published var isPaused: Bool = false
-    @MainActor @Published var isListening: Bool = false
-    @MainActor @Published var isReceivingAudio: Bool = false
-    @MainActor @Published var statusMessage: String = "Point at ceiling"
+    @Published var ceilingPlane: DetectedPlane?
+    @Published var wallPlanes: [DetectedPlane] = []
+    @Published var detectedEdges: [BoundaryEdge] = []
+    @Published var isPaused: Bool = false
+    @Published var statusMessage: String = "Point at ceiling"
 
     // MARK: - Data Structures
 
@@ -42,40 +40,32 @@ class TestModeDetector: ObservableObject {
     private let ceilingNormalThreshold: Float = 0.8
     private let wallNormalThreshold: Float = 0.3
 
-    // MARK: - Voice Control (placeholder for now)
+    // MARK: - Control
 
-    @MainActor
     func startListening() {
-        isListening = true
-        statusMessage = "Point at ceiling"
+        // Placeholder - voice disabled for now
     }
 
-    @MainActor
     func stopListening() {
-        isListening = false
-        isReceivingAudio = false
+        // Placeholder - voice disabled for now
     }
 
-    @MainActor
     func togglePause() {
         isPaused.toggle()
-        if isPaused {
-            statusMessage = "PAUSED - Tap to continue"
-        } else {
-            updateStatus()
-        }
+        updateStatus()
         hapticFeedback()
     }
 
     private func hapticFeedback() {
-        let generator = UINotificationFeedbackGenerator()
-        generator.notificationOccurred(.success)
+        DispatchQueue.main.async {
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+        }
     }
 
-    @MainActor
     private func updateStatus() {
         if isPaused {
-            statusMessage = "PAUSED"
+            statusMessage = "PAUSED - Tap to continue"
         } else if ceilingPlane == nil {
             statusMessage = "Point at ceiling"
         } else if wallPlanes.isEmpty {
@@ -87,7 +77,6 @@ class TestModeDetector: ObservableObject {
 
     // MARK: - Frame Processing
 
-    @MainActor
     func processFrame(_ frame: ARFrame) {
         guard !isPaused else { return }
 
@@ -104,7 +93,6 @@ class TestModeDetector: ObservableObject {
         updateStatus()
     }
 
-    @MainActor
     private func processPlaneAnchor(_ anchor: ARPlaneAnchor) {
         let transform = anchor.transform
         let center = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
@@ -150,7 +138,6 @@ class TestModeDetector: ObservableObject {
         }
     }
 
-    @MainActor
     private func findWallCeilingIntersections() {
         guard let ceiling = ceilingPlane else { return }
 
@@ -200,14 +187,11 @@ class TestModeDetector: ObservableObject {
 
     // MARK: - Reset
 
-    @MainActor
     func reset() {
         ceilingPlane = nil
         wallPlanes = []
         detectedEdges = []
         isPaused = false
-        isListening = false
-        isReceivingAudio = false
         statusMessage = "Point at ceiling"
     }
 }
