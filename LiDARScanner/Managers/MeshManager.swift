@@ -32,6 +32,11 @@ class MeshManager: NSObject, ObservableObject {
     // Intelligent room builder for walls mode
     let roomBuilder = RoomBuilder()
 
+    // MARK: - Session Resume
+    @Published var isRepairMode = false
+    @Published var resumedSessionId: UUID?
+    private var existingMeshQuality: [UUID: Float] = [:]  // Quality scores for existing meshes
+
     // MARK: - Properties
     private weak var arView: ARView?
     private var meshAnchors: [UUID: AnchorEntity] = [:]
@@ -171,6 +176,57 @@ class MeshManager: NSObject, ObservableObject {
         } else if faceTrackingAvailable {
             startFaceTracking(arView: arView)
         }
+    }
+
+    // MARK: - Session Resume
+
+    /// Load existing meshes from a saved session for resuming
+    func loadExistingMeshes(_ scan: CapturedScan, repairMode: Bool) {
+        guard let arView = arView else { return }
+
+        isRepairMode = repairMode
+        capturedScan = scan
+
+        // Store quality scores for repair mode comparison
+        existingMeshQuality.removeAll()
+
+        // Create visual representation of existing meshes (semi-transparent)
+        for mesh in scan.meshes {
+            // Create mesh visualization
+            let vertices = mesh.vertices
+            let indices = mesh.faces.flatMap { $0 }
+
+            // Create a simple bounding box representation for now
+            // Full mesh rendering would require MeshResource generation
+            if !vertices.isEmpty {
+                let center = vertices.reduce(SIMD3<Float>.zero) { $0 + $1 } / Float(vertices.count)
+                let transformedCenter = mesh.transform * SIMD4<Float>(center.x, center.y, center.z, 1)
+
+                // Create a small indicator at mesh location
+                let indicatorMesh = MeshResource.generateSphere(radius: 0.02)
+                var material = SimpleMaterial()
+                material.color = .init(tint: UIColor.cyan.withAlphaComponent(0.5))
+
+                let entity = ModelEntity(mesh: indicatorMesh, materials: [material])
+                let anchor = AnchorEntity(world: SIMD3<Float>(transformedCenter.x, transformedCenter.y, transformedCenter.z))
+                anchor.addChild(entity)
+                arView.scene.addAnchor(anchor)
+                meshAnchors[mesh.identifier] = anchor
+            }
+
+            // Store default quality score (will be updated in repair mode)
+            existingMeshQuality[mesh.identifier] = 0.5
+        }
+
+        vertexCount = scan.vertexCount
+        scanStatus = "Loaded \(scan.meshes.count) meshes - ready to continue"
+
+        print("[MeshManager] Loaded \(scan.meshes.count) existing meshes, repair mode: \(repairMode)")
+    }
+
+    /// Get the current scan with any updates
+    func getCurrentScan() -> CapturedScan? {
+        return capturedScan
     }
 
     func stopScanning() -> CapturedScan? {

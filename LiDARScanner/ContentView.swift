@@ -4,7 +4,10 @@ struct ContentView: View {
     @StateObject private var versionTracker = VersionTracker()
     @StateObject private var updateChecker = UpdateChecker()
     @State private var showSettings = false
+    @State private var showSavedScans = false
     @State private var selectedMode: ScanMode?
+    @State private var resumeSessionId: UUID?
+    @State private var resumeRepairMode = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -60,18 +63,25 @@ struct ContentView: View {
                         }
                     }
                     .disabled(updateChecker.isChecking)
+
+                    // Settings button
+                    Button(action: { showSettings = true }) {
+                        Image(systemName: "gear")
+                            .font(.title3)
+                            .foregroundColor(.gray)
+                    }
                 }
                 .padding(.horizontal)
                 .padding(.top, 10)
 
                 // 6-Square Grid
                 LazyVGrid(columns: columns, spacing: 16) {
-                    // App Settings
+                    // Saved Scans
                     MainMenuSquare(
-                        title: "App Settings",
-                        icon: "gear",
-                        color: .gray,
-                        action: { showSettings = true }
+                        title: "Saved Scans",
+                        icon: "square.stack.3d.up",
+                        color: .indigo,
+                        action: { showSavedScans = true }
                     )
 
                     // Fast Scan
@@ -134,8 +144,30 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
-        .fullScreenCover(item: $selectedMode) { mode in
-            ScanModeView(mode: mode)
+        .sheet(isPresented: $showSavedScans) {
+            SavedSessionsView()
+        }
+        .fullScreenCover(item: $selectedMode, onDismiss: {
+            // Reset resume state after scanning session ends
+            resumeSessionId = nil
+            resumeRepairMode = false
+        }) { mode in
+            ScanModeView(
+                mode: mode,
+                resumeSessionId: resumeSessionId,
+                resumeRepairMode: resumeRepairMode
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .resumeScanSession)) { notification in
+            if let sessionId = notification.userInfo?["sessionId"] as? UUID,
+               let repairMode = notification.userInfo?["repairMode"] as? Bool {
+                // Get the scan mode from session metadata
+                if let session = ScanSessionManager.shared.savedSessions.first(where: { $0.id == sessionId }) {
+                    resumeSessionId = sessionId
+                    resumeRepairMode = repairMode
+                    selectedMode = ScanMode(rawValue: session.scanMode) ?? .fast
+                }
+            }
         }
         .sheet(isPresented: $updateChecker.showUpdateProgress) {
             UpdateProgressView(updateChecker: updateChecker)
@@ -187,10 +219,17 @@ struct MainMenuSquare: View {
 
 struct ScanModeView: View {
     let mode: ScanMode
+    var resumeSessionId: UUID? = nil
+    var resumeRepairMode: Bool = false
+
     @StateObject private var meshManager = MeshManager()
+    @ObservedObject private var sessionManager = ScanSessionManager.shared
     @State private var showModeSettings = false
     @State private var showExport = false
     @State private var capturedScan: CapturedScan?
+    @State private var isLoadingSession = false
+    @State private var repairModeEnabled = false
+    @State private var loadError: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -198,6 +237,20 @@ struct ScanModeView: View {
             // AR View
             ARViewContainer(meshManager: meshManager)
                 .edgesIgnoringSafeArea(.all)
+
+            // Loading overlay for session resume
+            if isLoadingSession {
+                Color.black.opacity(0.7)
+                    .edgesIgnoringSafeArea(.all)
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .tint(.white)
+                    Text("Loading session...")
+                        .foregroundColor(.white)
+                        .font(.headline)
+                }
+            }
 
             VStack {
                 // Top Bar
@@ -218,6 +271,20 @@ struct ScanModeView: View {
                     }
 
                     Spacer()
+
+                    // Repair mode indicator (when resuming)
+                    if resumeSessionId != nil && repairModeEnabled {
+                        HStack(spacing: 4) {
+                            Image(systemName: "wrench.and.screwdriver")
+                            Text("Repair")
+                        }
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange)
+                        .cornerRadius(8)
+                    }
 
                     // Mode info
                     VStack(alignment: .trailing, spacing: 2) {
@@ -329,22 +396,65 @@ struct ScanModeView: View {
         }
         .onAppear {
             meshManager.currentMode = mode
+            repairModeEnabled = resumeRepairMode
+
+            // Load session if resuming
+            if let sessionId = resumeSessionId {
+                Task {
+                    await loadResumeSession(sessionId)
+                }
+            }
         }
         .sheet(isPresented: $showModeSettings) {
             ModeSettingsView(mode: mode)
         }
         .sheet(isPresented: $showExport) {
             if let scan = capturedScan {
-                ExportView(scan: scan)
+                ExportView(scan: scan, scanMode: mode)
             }
         }
+        .alert("Load Error", isPresented: .init(
+            get: { loadError != nil },
+            set: { if !$0 { loadError = nil } }
+        )) {
+            Button("OK") { loadError = nil }
+        } message: {
+            if let error = loadError {
+                Text(error)
+            }
+        }
+    }
+
+    private func loadResumeSession(_ sessionId: UUID) async {
+        isLoadingSession = true
+
+        do {
+            let result = try await sessionManager.loadSession(sessionId)
+            capturedScan = result.scan
+            meshManager.loadExistingMeshes(result.scan, repairMode: repairModeEnabled)
+            meshManager.scanStatus = "Session loaded - tap Start to continue"
+        } catch {
+            loadError = error.localizedDescription
+        }
+
+        isLoadingSession = false
     }
 
     private func toggleScanning() {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
+
+            // Auto-save if resuming a session
+            if let sessionId = resumeSessionId, let scan = capturedScan {
+                Task {
+                    try? await sessionManager.updateSession(sessionId, with: scan)
+                }
+            }
         } else {
-            capturedScan = nil
+            // If not resuming, clear the scan
+            if resumeSessionId == nil {
+                capturedScan = nil
+            }
             meshManager.startScanning()
         }
     }

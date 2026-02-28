@@ -17,7 +17,15 @@ struct ExportView: View {
     @State private var pendingShareURL: URL?
     @State private var useSimplifiedExport = false
     @State private var simplifiedRoom: SimplifiedRoom?
+    @State private var showSaveSession = false
+    @State private var sessionName = ""
+    @State private var isSavingSession = false
+    @State private var sessionSaveSuccess = false
+    @ObservedObject private var sessionManager = ScanSessionManager.shared
     @Environment(\.dismiss) private var dismiss
+
+    // Optional: scan mode for session saving
+    var scanMode: ScanMode = .fast
 
     var body: some View {
         NavigationStack {
@@ -188,6 +196,23 @@ struct ExportView: View {
                 }
                 .disabled(exporter.isExporting)
 
+                // Save Session button
+                Button(action: {
+                    sessionName = sessionManager.generateDefaultName()
+                    showSaveSession = true
+                }) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Save Session")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                .disabled(isSavingSession)
+
                 if let error = exporter.lastError {
                     Text("Error: \(error)")
                         .foregroundColor(.red)
@@ -198,6 +223,20 @@ struct ExportView: View {
                     Label("Saved successfully!", systemImage: "checkmark.circle.fill")
                         .foregroundColor(.green)
                         .transition(.opacity)
+                }
+
+                if sessionSaveSuccess {
+                    Label("Session saved! Find it in Saved Scans.", systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .transition(.opacity)
+                }
+
+                if isSavingSession {
+                    HStack {
+                        ProgressView()
+                        Text("Saving session...")
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Spacer()
@@ -222,6 +261,15 @@ struct ExportView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(googleDriveInstruction)
+            }
+            .alert("Save Session", isPresented: $showSaveSession) {
+                TextField("Session Name", text: $sessionName)
+                Button("Save") {
+                    Task { await saveSession() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Save this scan to continue editing later.")
             }
             .fileExporter(
                 isPresented: $showFilePicker,
@@ -351,6 +399,33 @@ struct ExportView: View {
             return simplifiedScan
         }
         return scan
+    }
+
+    private func saveSession() async {
+        guard !sessionName.isEmpty else { return }
+
+        isSavingSession = true
+
+        do {
+            _ = try await sessionManager.saveSession(
+                scan,
+                name: sessionName,
+                mode: scanMode
+            )
+
+            withAnimation {
+                sessionSaveSuccess = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                withAnimation {
+                    sessionSaveSuccess = false
+                }
+            }
+        } catch {
+            exporter.lastError = "Failed to save session: \(error.localizedDescription)"
+        }
+
+        isSavingSession = false
     }
 
     private func saveToiCloud(url: URL) {
