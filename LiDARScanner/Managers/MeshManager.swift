@@ -826,36 +826,61 @@ class MeshManager: NSObject, ObservableObject {
             }
 
         case .ceiling:
-            phaseProgress = Double(stats.ceilingConfidence)
-            if let height = stats.estimatedRoomHeight, let ceilingH = stats.ceilingHeight {
-                scanStatus = String(format: "Height: %.2fm", height)
-                // Calibrate room builder and edge visualizer
-                roomBuilder.calibrateCeiling(at: ceilingH)
-                edgeVisualizer.ceilingY = ceilingH
-                edgeVisualizer.setRoomDimensions(floor: stats.floorHeight ?? 0, ceiling: ceilingH)
-            } else if stats.ceilingHeight != nil {
-                scanStatus = "Measuring height..."
+            // Check if user is looking up
+            let isLookingUp = deviceOrientation == .lookingUp || deviceOrientation == .lookingSlightlyUp
+
+            if stats.ceilingHeight != nil {
+                phaseProgress = Double(stats.ceilingConfidence)
+                if let height = stats.estimatedRoomHeight, let ceilingH = stats.ceilingHeight {
+                    scanStatus = String(format: "Ceiling found! Height: %.2fm", height)
+                    // Calibrate room builder and edge visualizer
+                    roomBuilder.calibrateCeiling(at: ceilingH)
+                    edgeVisualizer.ceilingY = ceilingH
+                    edgeVisualizer.setRoomDimensions(floor: stats.floorHeight ?? 0, ceiling: ceilingH)
+                } else {
+                    scanStatus = "Measuring height..."
+                }
+                // Auto-advance when ceiling is detected with good confidence
+                if stats.ceilingConfidence >= Float(currentPhase.completionThreshold) {
+                    advancePhase()
+                }
             } else {
-                scanStatus = currentPhase.instruction
-            }
-            // Auto-advance when ceiling is detected
-            if stats.ceilingConfidence >= Float(currentPhase.completionThreshold) {
-                advancePhase()
+                // No ceiling detected yet
+                phaseProgress = 0
+                if isLookingUp {
+                    scanStatus = "Scanning ceiling... hold steady"
+                } else {
+                    scanStatus = "Point phone UP at the ceiling"
+                }
             }
 
         case .walls:
             // Count detected corners from edge data
             let cornerEdges = stats.detectedEdges.filter { $0.edgeType == .verticalCorner }
-            let cornerCount = cornerEntities(in: cornerEdges)
+            let autoCornerCount = cornerEntities(in: cornerEdges)
 
-            phaseProgress = Double(min(Float(cornerCount) / 4.0, 1.0))
-            scanStatus = "\(cornerCount) corners detected"
+            // User-confirmed corners are more valuable
+            let userCornerCount = userConfirmedCorners.count
+            let totalCorners = max(autoCornerCount, userCornerCount)
+
+            // Progress: need at least 4 corners, encourage more
+            let minCorners = 4
+            let targetCorners = 6  // Encourage scanning more corners
+            phaseProgress = Double(min(Float(totalCorners) / Float(targetCorners), 1.0))
+
+            if userCornerCount > 0 {
+                scanStatus = "\(totalCorners) corners (\(userCornerCount) confirmed) - scan all walls"
+            } else {
+                scanStatus = "\(totalCorners) corners - scan all walls, pause at corners"
+            }
 
             // Update edge visualization - only vertical corners become lines
             edgeVisualizer.updateEdges(stats.detectedEdges)
 
-            // Check for completion (4+ corners = enclosed room)
-            if cornerCount >= 4 {
+            // Don't auto-advance walls - user must tap "Skip" or "Next" when ready
+            // This gives them time to scan all walls thoroughly
+            // Only auto-advance if they've confirmed 4+ corners manually
+            if userCornerCount >= 4 {
                 advancePhase()
             }
 

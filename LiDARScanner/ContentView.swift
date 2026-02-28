@@ -252,63 +252,14 @@ struct ScanModeView: View {
                 }
             }
 
-            // Edge detection reticle (center of screen)
+            // Central targeting aperture (always visible when scanning walls)
             if meshManager.isScanning && mode == .walls {
-                VStack {
-                    // Active input methods + confirmed corners
-                    HStack(spacing: 8) {
-                        // Active input method icons
-                        InputMethodIndicator()
-
-                        if meshManager.isListening {
-                            HStack(spacing: 4) {
-                                Image(systemName: "mic.fill")
-                                    .foregroundColor(.red)
-                                Text("Listening")
-                            }
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.black.opacity(0.6))
-                            .cornerRadius(12)
-                        }
-
-                        if meshManager.confirmedCornerCount > 0 {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text("\(meshManager.confirmedCornerCount) corners")
-                            }
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.yellow)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.black.opacity(0.6))
-                            .cornerRadius(12)
-                        }
-                    }
-                    .offset(y: -60)
-
-                    EdgeTargetReticle(
-                        edgeDetected: meshManager.edgeInReticle,
-                        edgeConfirmed: meshManager.edgeConfirmed,
-                        isPaused: meshManager.isPaused
-                    )
-
-                    // Last voice command indicator
-                    if let command = meshManager.lastVoiceCommand {
-                        Text("Voice: \"\(command)\"")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.black.opacity(0.6))
-                            .cornerRadius(12)
-                            .offset(y: 60)
-                            .transition(.opacity)
-                    }
-                }
+                // Main targeting reticle - center of screen
+                EdgeTargetReticle(
+                    edgeDetected: meshManager.edgeInReticle,
+                    edgeConfirmed: meshManager.edgeConfirmed,
+                    isPaused: meshManager.isPaused
+                )
             }
 
             VStack {
@@ -358,66 +309,115 @@ struct ScanModeView: View {
 
                 Spacer()
 
-                // Guided room scanning UI
-                if meshManager.isScanning && mode == .walls && meshManager.useEdgeVisualization {
-                    RoomScanPhaseIndicator(
-                        phase: meshManager.currentPhase,
-                        progress: meshManager.phaseProgress,
-                        stats: meshManager.surfaceClassifier.statistics,
-                        onSkip: { meshManager.skipPhase() }
-                    )
-                    .padding(.horizontal)
-                }
+                // Bottom panel - all status and controls at the bottom
+                VStack(spacing: 8) {
+                    // Scanning indicators (listening, corners confirmed)
+                    if meshManager.isScanning && mode == .walls {
+                        HStack(spacing: 8) {
+                            // Active input method icons
+                            InputMethodIndicator()
 
-                // Status bar at bottom (narrow, transparent)
-                if meshManager.isScanning {
-                    ScanStatusBar(
-                        status: meshManager.scanStatus,
-                        vertexCount: meshManager.vertexCount,
-                        orientation: meshManager.deviceOrientation
-                    )
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                }
+                            if meshManager.isListening {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "mic.fill")
+                                        .foregroundColor(.red)
+                                    Text("Listening")
+                                }
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(12)
+                            }
 
-                // Bottom controls
-                HStack(spacing: 20) {
-                    // Settings button
-                    Button(action: { showModeSettings = true }) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(Color.black.opacity(0.5))
-                            .cornerRadius(14)
+                            if meshManager.confirmedCornerCount > 0 {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                    Text("\(meshManager.confirmedCornerCount) corners")
+                                }
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.yellow)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(12)
+                            }
+
+                            // Last voice command
+                            if let command = meshManager.lastVoiceCommand {
+                                Text("\"\(command)\"")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.black.opacity(0.6))
+                                    .cornerRadius(12)
+                            }
+                        }
                     }
-                    .disabled(meshManager.isScanning)
-                    .opacity(meshManager.isScanning ? 0.5 : 1)
 
-                    // Start/Stop button
-                    Button(action: toggleScanning) {
-                        Image(systemName: meshManager.isScanning ? "stop.fill" : "play.fill")
-                            .font(.system(size: 28))
-                            .foregroundColor(.white)
-                            .frame(width: 80, height: 80)
-                            .background(
-                                Circle()
-                                    .fill(meshManager.isScanning ? Color.red : Color.green)
-                            )
+                    // Compact phase indicator for walls mode
+                    if meshManager.isScanning && mode == .walls && meshManager.useEdgeVisualization {
+                        CompactPhaseIndicator(
+                            phase: meshManager.currentPhase,
+                            progress: meshManager.phaseProgress,
+                            status: meshManager.scanStatus,
+                            onSkip: { meshManager.skipPhase() }
+                        )
+                        .padding(.horizontal)
                     }
 
-                    // Export button
-                    if capturedScan != nil && !meshManager.isScanning {
-                        Button(action: { showExport = true }) {
-                            Image(systemName: "square.and.arrow.up")
+                    // Status bar for non-walls modes
+                    if meshManager.isScanning && mode != .walls {
+                        ScanStatusBar(
+                            status: meshManager.scanStatus,
+                            vertexCount: meshManager.vertexCount,
+                            orientation: meshManager.deviceOrientation
+                        )
+                        .padding(.horizontal)
+                    }
+
+                    // Bottom controls
+                    HStack(spacing: 20) {
+                        // Settings button
+                        Button(action: { showModeSettings = true }) {
+                            Image(systemName: "slider.horizontal.3")
                                 .font(.title2)
                                 .foregroundColor(.white)
                                 .frame(width: 56, height: 56)
-                                .background(Color.blue)
+                                .background(Color.black.opacity(0.5))
                                 .cornerRadius(14)
                         }
-                    } else {
-                        Color.clear.frame(width: 56, height: 56)
+                        .disabled(meshManager.isScanning)
+                        .opacity(meshManager.isScanning ? 0.5 : 1)
+
+                        // Start/Stop button
+                        Button(action: toggleScanning) {
+                            Image(systemName: meshManager.isScanning ? "stop.fill" : "play.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(.white)
+                                .frame(width: 80, height: 80)
+                                .background(
+                                    Circle()
+                                        .fill(meshManager.isScanning ? Color.red : Color.green)
+                                )
+                        }
+
+                        // Export button
+                        if capturedScan != nil && !meshManager.isScanning {
+                            Button(action: { showExport = true }) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .frame(width: 56, height: 56)
+                                    .background(Color.blue)
+                                    .cornerRadius(14)
+                            }
+                        } else {
+                            Color.clear.frame(width: 56, height: 56)
+                        }
                     }
                 }
                 .padding(.bottom, 40)
@@ -754,6 +754,71 @@ struct ScanStatusBar: View {
             return String(format: "%.1fK", Double(n) / 1000)
         }
         return "\(n)"
+    }
+}
+
+// MARK: - Compact Phase Indicator (Bottom of screen)
+
+struct CompactPhaseIndicator: View {
+    let phase: RoomScanPhase
+    let progress: Double
+    let status: String
+    let onSkip: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Phase icon and progress
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.3), lineWidth: 3)
+                    .frame(width: 36, height: 36)
+
+                Circle()
+                    .trim(from: 0, to: CGFloat(progress))
+                    .stroke(phase.color, lineWidth: 3)
+                    .frame(width: 36, height: 36)
+                    .rotationEffect(.degrees(-90))
+
+                Image(systemName: phase.icon)
+                    .font(.system(size: 14))
+                    .foregroundColor(phase.color)
+            }
+
+            // Status text
+            VStack(alignment: .leading, spacing: 2) {
+                Text(phase.rawValue)
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(phase.color)
+
+                Text(status)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            // Skip/Next button
+            if phase != .complete && phase != .ready {
+                Button(action: onSkip) {
+                    Text(phase == .walls ? "Done" : "Skip")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(phase == .walls ? Color.green : Color.gray.opacity(0.6))
+                        .cornerRadius(16)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.black.opacity(0.7))
+        )
     }
 }
 
