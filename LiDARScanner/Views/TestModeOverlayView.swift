@@ -6,16 +6,12 @@ struct TestModeOverlayView: View {
 
     var body: some View {
         ZStack {
-            // Reticle near top of screen (for ceiling/wall-ceiling detection)
-            VStack {
-                Spacer()
-                    .frame(height: 100)
-                TestModeReticle(
-                    hasCeiling: detector.ceilingPlane != nil,
-                    edgeCount: detector.edgeCount
-                )
-                Spacer()
-            }
+            // Reticle in CENTER - aligned with LiDAR aperture
+            // Point phone at what you want to capture
+            TestModeReticle(
+                hasCeiling: detector.ceilingPlane != nil,
+                edgeCount: detector.edgeCount
+            )
 
             VStack {
                 // Top status bar

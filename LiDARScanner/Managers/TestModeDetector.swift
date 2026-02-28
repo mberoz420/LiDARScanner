@@ -100,15 +100,12 @@ class TestModeDetector: ObservableObject {
     func processFrame(_ frame: ARFrame) {
         guard !isPaused else { return }
 
-        // Get camera position and direction
+        // Get camera position and direction (aligned with LiDAR)
         let transform = frame.camera.transform
         cameraPosition = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
 
-        // Camera forward is -Z axis, but we want to point slightly UP (toward reticle at top)
-        // Reticle is near top of screen, so adjust forward direction upward
-        let rawForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
-        let upBias: Float = 0.3  // Bias toward up direction
-        cameraForward = simd_normalize(rawForward + SIMD3<Float>(0, upBias, 0))
+        // Camera forward is -Z axis - this is where LiDAR is pointing
+        cameraForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
 
         // Only process planes that are in the reticle direction
         for anchor in frame.anchors {
