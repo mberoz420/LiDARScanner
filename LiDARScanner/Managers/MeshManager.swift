@@ -312,6 +312,12 @@ class MeshManager: NSObject, ObservableObject {
             surfaceClassifier.classificationEnabled = true
             scanStatus = currentPhase.instruction
 
+            // Load ML model for enhanced wall/floor/ceiling detection
+            if surfaceClassifier.loadMLModel() {
+                surfaceClassifier.setMLClassificationEnabled(true)
+                print("[MeshManager] ML-enhanced classification enabled for Walls & Rooms")
+            }
+
             // Start voice commands for walls mode
             startVoiceCommands()
         } else if currentMode == .test {
@@ -1081,6 +1087,20 @@ class MeshManager: NSObject, ObservableObject {
 
         // Extract geometry data
         let meshData = extractMeshData(from: anchor)
+
+        // Accumulate points for ML classification (walls mode)
+        if currentMode == .walls && surfaceClassifier.mlClassificationEnabled {
+            surfaceClassifier.accumulatePointsForML(
+                vertices: meshData.vertices,
+                normals: meshData.normals,
+                transform: meshData.transform
+            )
+
+            // Run ML inference periodically
+            Task {
+                await surfaceClassifier.runMLInferenceIfNeeded()
+            }
+        }
 
         // Detect protrusions if ceiling-related
         if classifiedSurface.surfaceType == .ceilingProtrusion {

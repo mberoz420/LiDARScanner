@@ -383,7 +383,8 @@ struct ScanModeView: View {
                             phase: meshManager.currentPhase,
                             progress: meshManager.phaseProgress,
                             status: meshManager.scanStatus,
-                            onSkip: { meshManager.skipPhase() }
+                            onSkip: { meshManager.skipPhase() },
+                            mlEnabled: meshManager.surfaceClassifier.mlClassificationEnabled
                         )
                         .padding(.horizontal)
                     }
@@ -831,6 +832,7 @@ struct CompactPhaseIndicator: View {
     let progress: Double
     let status: String
     let onSkip: () -> Void
+    var mlEnabled: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -853,10 +855,27 @@ struct CompactPhaseIndicator: View {
 
             // Status text
             VStack(alignment: .leading, spacing: 2) {
-                Text(phase.rawValue)
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(phase.color)
+                HStack(spacing: 4) {
+                    Text(phase.rawValue)
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(phase.color)
+
+                    // ML indicator badge
+                    if mlEnabled {
+                        HStack(spacing: 2) {
+                            Image(systemName: "brain")
+                                .font(.system(size: 8))
+                            Text("ML")
+                                .font(.system(size: 8, weight: .bold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Color.purple)
+                        .cornerRadius(4)
+                    }
+                }
 
                 Text(status)
                     .font(.caption2)

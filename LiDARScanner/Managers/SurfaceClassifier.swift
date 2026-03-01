@@ -1,6 +1,7 @@
 import Foundation
 import ARKit
 import CoreMotion
+import CoreML
 import simd
 
 /// Surface type classification based on normal direction
@@ -379,6 +380,19 @@ class SurfaceClassifier: ObservableObject {
     @Published var devicePitch: Float = 0 // Radians, negative = looking down
     @Published var statistics = ScanStatistics()
     @Published var classificationEnabled = true
+    @Published var mlModelLoaded = false
+    @Published var mlClassificationEnabled = false  // Use ML when available
+
+    // MARK: - Core ML Model
+    private var segmentationModel: MLModel?
+    private var lastMLInferenceTime: Date = .distantPast
+    private let mlInferenceInterval: TimeInterval = 0.5  // Run ML every 0.5s max
+
+    // Accumulated points for ML batch processing
+    private var accumulatedPoints: [SIMD3<Float>] = []
+    private var accumulatedNormals: [SIMD3<Float>] = []
+    private var mlClassifications: [SIMD3<Float>: SurfaceType] = [:]  // Cache ML results
+    private let maxAccumulatedPoints = 8192  // Limit for memory
 
     // MARK: - Classification Thresholds (from settings)
 
@@ -878,10 +892,16 @@ class SurfaceClassifier: ObservableObject {
 
         let averageNormal = totalArea > 0 ? normalize(normalSum) : SIMD3<Float>(0, 1, 0)
         let avgY = (minBound.y + maxBound.y) / 2
-        let surfaceType = classifySurface(averageNormal: averageNormal, worldY: avgY)
+        let center = (minBound + maxBound) / 2
 
-        // Calculate confidence based on how consistent the normal is
-        let confidence = min(1.0, length(normalSum) / (totalArea + 0.001))
+        // Use ML-enhanced classification if available, otherwise geometric
+        let surfaceType = classifySurfaceEnhanced(averageNormal: averageNormal, worldPosition: center)
+
+        // Calculate confidence - boost confidence if ML was used
+        var confidence = min(1.0, length(normalSum) / (totalArea + 0.001))
+        if mlClassificationEnabled && getMLEnhancedClassification(worldPoint: center, normal: averageNormal) != nil {
+            confidence = min(1.0, confidence + 0.2)  // Boost confidence for ML-backed classification
+        }
 
         return ClassifiedSurface(
             surfaceType: surfaceType,
@@ -1159,6 +1179,196 @@ class SurfaceClassifier: ObservableObject {
         return rectangles
     }
 
+    // MARK: - Core ML Integration
+
+    /// Load the indoor segmentation ML model
+    func loadMLModel() -> Bool {
+        // Try compiled model first (.mlmodelc)
+        if let modelURL = Bundle.main.url(forResource: "IndoorSegmentation", withExtension: "mlmodelc") {
+            do {
+                let config = MLModelConfiguration()
+                config.computeUnits = .cpuAndNeuralEngine
+                segmentationModel = try MLModel(contentsOf: modelURL, configuration: config)
+                mlModelLoaded = true
+                print("[SurfaceClassifier] Loaded ML model: IndoorSegmentation.mlmodelc")
+                return true
+            } catch {
+                print("[SurfaceClassifier] Failed to load .mlmodelc: \(error)")
+            }
+        }
+
+        // Try mlpackage
+        if let modelURL = Bundle.main.url(forResource: "IndoorSegmentation", withExtension: "mlpackage") {
+            do {
+                let compiledURL = try MLModel.compileModel(at: modelURL)
+                let config = MLModelConfiguration()
+                config.computeUnits = .cpuAndNeuralEngine
+                segmentationModel = try MLModel(contentsOf: compiledURL, configuration: config)
+                mlModelLoaded = true
+                print("[SurfaceClassifier] Loaded and compiled ML model: IndoorSegmentation.mlpackage")
+                return true
+            } catch {
+                print("[SurfaceClassifier] Failed to load .mlpackage: \(error)")
+            }
+        }
+
+        print("[SurfaceClassifier] No ML model found - using geometric heuristics only")
+        return false
+    }
+
+    /// Enable/disable ML-enhanced classification
+    func setMLClassificationEnabled(_ enabled: Bool) {
+        mlClassificationEnabled = enabled && mlModelLoaded
+        if mlClassificationEnabled {
+            print("[SurfaceClassifier] ML classification enabled")
+        }
+    }
+
+    /// Add points for ML batch processing
+    func accumulatePointsForML(vertices: [SIMD3<Float>], normals: [SIMD3<Float>], transform: simd_float4x4) {
+        guard mlClassificationEnabled else { return }
+
+        // Transform to world space and accumulate
+        for i in 0..<min(vertices.count, normals.count) {
+            let worldPos = transformPoint(vertices[i], by: transform)
+            let worldNormal = transformNormal(normals[i], by: transform)
+
+            accumulatedPoints.append(worldPos)
+            accumulatedNormals.append(worldNormal)
+        }
+
+        // Trim if too many points
+        if accumulatedPoints.count > maxAccumulatedPoints {
+            // Keep most recent points with some spatial sampling
+            let keepCount = maxAccumulatedPoints / 2
+            accumulatedPoints = Array(accumulatedPoints.suffix(keepCount))
+            accumulatedNormals = Array(accumulatedNormals.suffix(keepCount))
+        }
+    }
+
+    /// Run ML inference on accumulated points (call periodically)
+    func runMLInferenceIfNeeded() async {
+        guard mlClassificationEnabled,
+              let model = segmentationModel,
+              !accumulatedPoints.isEmpty else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastMLInferenceTime) >= mlInferenceInterval else { return }
+        lastMLInferenceTime = now
+
+        let points = accumulatedPoints
+        let normals = accumulatedNormals
+
+        // Run inference off main thread
+        let classifications = await Task.detached(priority: .userInitiated) { [weak self] in
+            return self?.runMLInference(points: points, normals: normals, model: model) ?? [:]
+        }.value
+
+        // Update cache on main thread
+        for (point, surfaceType) in classifications {
+            mlClassifications[point] = surfaceType
+        }
+
+        // Trim cache
+        if mlClassifications.count > maxAccumulatedPoints * 2 {
+            mlClassifications.removeAll()
+        }
+    }
+
+    /// Run ML inference on a batch of points
+    private func runMLInference(points: [SIMD3<Float>], normals: [SIMD3<Float>], model: MLModel) -> [SIMD3<Float>: SurfaceType] {
+        guard points.count == normals.count, !points.isEmpty else { return [:] }
+
+        let numPoints = points.count
+
+        // Prepare input: [1, N, 6] - batch of 1, N points, 6 features (xyz + normals)
+        let inputArray = try? MLMultiArray(shape: [1, NSNumber(value: numPoints), 6], dataType: .float32)
+        guard let input = inputArray else { return [:] }
+
+        for i in 0..<numPoints {
+            let baseIndex = i * 6
+            input[baseIndex + 0] = NSNumber(value: points[i].x)
+            input[baseIndex + 1] = NSNumber(value: points[i].y)
+            input[baseIndex + 2] = NSNumber(value: points[i].z)
+            input[baseIndex + 3] = NSNumber(value: normals[i].x)
+            input[baseIndex + 4] = NSNumber(value: normals[i].y)
+            input[baseIndex + 5] = NSNumber(value: normals[i].z)
+        }
+
+        // Create feature provider
+        let inputFeatures = try? MLDictionaryFeatureProvider(dictionary: ["points": input])
+        guard let features = inputFeatures else { return [:] }
+
+        // Run prediction
+        guard let prediction = try? model.prediction(from: features) else { return [:] }
+
+        // Parse output - expect [1, N, 4] probabilities for floor/ceiling/wall/object
+        guard let outputArray = prediction.featureValue(for: "classifications")?.multiArrayValue else { return [:] }
+
+        var results: [SIMD3<Float>: SurfaceType] = [:]
+
+        for i in 0..<numPoints {
+            let baseIndex = i * 4
+
+            // Get probabilities
+            let floorProb = outputArray[baseIndex + 0].floatValue
+            let ceilingProb = outputArray[baseIndex + 1].floatValue
+            let wallProb = outputArray[baseIndex + 2].floatValue
+            let objectProb = outputArray[baseIndex + 3].floatValue
+
+            // Find max probability class
+            let maxProb = max(floorProb, max(ceilingProb, max(wallProb, objectProb)))
+            let surfaceType: SurfaceType
+
+            if maxProb == floorProb {
+                surfaceType = .floor
+            } else if maxProb == ceilingProb {
+                surfaceType = .ceiling
+            } else if maxProb == wallProb {
+                surfaceType = .wall
+            } else {
+                surfaceType = .object
+            }
+
+            results[points[i]] = surfaceType
+        }
+
+        return results
+    }
+
+    /// Get ML-enhanced classification for a point (falls back to geometric if no ML result)
+    func getMLEnhancedClassification(worldPoint: SIMD3<Float>, normal: SIMD3<Float>) -> SurfaceType? {
+        guard mlClassificationEnabled else { return nil }
+
+        // Look for nearby cached ML classification
+        let searchRadius: Float = 0.1  // 10cm
+
+        for (cachedPoint, classification) in mlClassifications {
+            if simd_distance(cachedPoint, worldPoint) < searchRadius {
+                return classification
+            }
+        }
+
+        return nil
+    }
+
+    /// Classify using ML if available, otherwise geometric heuristics
+    func classifySurfaceEnhanced(averageNormal: SIMD3<Float>, worldPosition: SIMD3<Float>) -> SurfaceType {
+        // Try ML classification first
+        if let mlResult = getMLEnhancedClassification(worldPoint: worldPosition, normal: averageNormal) {
+            return mlResult
+        }
+
+        // Fall back to geometric heuristics
+        return classifySurface(averageNormal: averageNormal, worldY: worldPosition.y)
+    }
+
+    private func transformNormal(_ normal: SIMD3<Float>, by transform: simd_float4x4) -> SIMD3<Float> {
+        let n4 = SIMD4<Float>(normal.x, normal.y, normal.z, 0)
+        let transformed = transform * n4
+        return simd_normalize(SIMD3<Float>(transformed.x, transformed.y, transformed.z))
+    }
+
     // MARK: - Reset
 
     func reset() {
@@ -1167,6 +1377,9 @@ class SurfaceClassifier: ObservableObject {
         protrusionCandidates.removeAll()
         edgeCandidates.removeAll()
         wallGapCandidates.removeAll()
+        accumulatedPoints.removeAll()
+        accumulatedNormals.removeAll()
+        mlClassifications.removeAll()
         statistics = ScanStatistics()
     }
 
