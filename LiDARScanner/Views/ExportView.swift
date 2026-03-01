@@ -59,7 +59,9 @@ struct ExportView: View {
                 .sheet(isPresented: $showSaveSession) {
                     SaveSessionSheet(
                         sessionName: $sessionName,
-                        isSaving: isSavingSession,
+                        isSaving: $isSavingSession,
+                        meshCount: scan.meshes.count,
+                        vertexCount: scan.vertexCount,
                         onSave: { Task { await saveSession() } },
                         onCancel: { showSaveSession = false }
                     )
@@ -562,16 +564,29 @@ struct ExportView: View {
     }
 
     private func saveSession() async {
-        guard !sessionName.isEmpty else { return }
+        guard !sessionName.isEmpty else {
+            exporter.lastError = "Session name is empty"
+            return
+        }
+
+        guard !scan.meshes.isEmpty else {
+            exporter.lastError = "No mesh data to save. Try scanning first."
+            showSaveSession = false
+            return
+        }
 
         isSavingSession = true
 
         do {
-            _ = try await sessionManager.saveSession(
+            print("[ExportView] Saving session '\(sessionName)' with \(scan.meshes.count) meshes, \(scan.vertexCount) vertices")
+
+            let sessionId = try await sessionManager.saveSession(
                 scan,
                 name: sessionName,
                 mode: scanMode
             )
+
+            print("[ExportView] Session saved successfully with ID: \(sessionId)")
 
             // Dismiss sheet and show success
             showSaveSession = false
@@ -585,7 +600,9 @@ struct ExportView: View {
                 }
             }
         } catch {
-            exporter.lastError = "Failed to save session: \(error.localizedDescription)"
+            print("[ExportView] Save failed: \(error)")
+            exporter.lastError = "Failed to save: \(error.localizedDescription)"
+            showSaveSession = false
         }
 
         isSavingSession = false
@@ -733,10 +750,16 @@ struct SurfaceStatItem: View {
 
 struct SaveSessionSheet: View {
     @Binding var sessionName: String
-    let isSaving: Bool
+    @Binding var isSaving: Bool
+    let meshCount: Int
+    let vertexCount: Int
     let onSave: () -> Void
     let onCancel: () -> Void
     @FocusState private var isNameFocused: Bool
+
+    private var canSave: Bool {
+        !sessionName.isEmpty && !isSaving && meshCount > 0
+    }
 
     var body: some View {
         NavigationStack {
@@ -752,11 +775,42 @@ struct SaveSessionSheet: View {
                 }
                 .padding(.horizontal)
 
-                Text("Save this scan to continue editing later or annotate for ML training.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                // Show scan info
+                HStack(spacing: 20) {
+                    VStack {
+                        Text("\(meshCount)")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text("Meshes")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    VStack {
+                        Text("\(vertexCount)")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text("Vertices")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(10)
+
+                if meshCount == 0 {
+                    Text("No scan data to save. Please scan something first.")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                } else {
+                    Text("Save this scan to continue editing later or annotate for ML training.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
 
                 Spacer()
 
@@ -771,11 +825,11 @@ struct SaveSessionSheet: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(sessionName.isEmpty ? Color.gray : Color.green)
+                        .background(canSave ? Color.green : Color.gray)
                         .foregroundColor(.white)
                         .cornerRadius(10)
                     }
-                    .disabled(sessionName.isEmpty || isSaving)
+                    .disabled(!canSave)
 
                     Button("Cancel", action: onCancel)
                         .foregroundColor(.secondary)
