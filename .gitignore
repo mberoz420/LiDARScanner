@@ -43,3 +43,4 @@ build/
 *.crt
 *.key
 *_base64.txt
+*.json
