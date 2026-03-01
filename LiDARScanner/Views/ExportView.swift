@@ -8,6 +8,31 @@ enum ExportType: String, CaseIterable {
     case cleanWalls = "Clean Walls"
 }
 
+// Session save location
+enum SessionSaveLocation: String, CaseIterable, Identifiable {
+    case local = "On Device"
+    case googleDrive = "Google Drive"
+    case iCloud = "iCloud"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .local: return "iphone"
+        case .googleDrive: return "cloud"
+        case .iCloud: return "icloud"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .local: return "Save to app's local storage"
+        case .googleDrive: return "Upload to Google Drive"
+        case .iCloud: return "Save to iCloud Drive"
+        }
+    }
+}
+
 struct ExportView: View {
     let scan: CapturedScan
     let scanMode: ScanMode
@@ -32,7 +57,9 @@ struct ExportView: View {
     @State private var isSavingSession = false
     @State private var sessionSaveSuccess = false
     @State private var saveErrorMessage: String?
+    @State private var sessionSaveLocation: SessionSaveLocation = .local
     @ObservedObject private var sessionManager = ScanSessionManager.shared
+    @ObservedObject private var driveManager = GoogleDriveManager.shared
     @Environment(\.dismiss) private var dismiss
 
     private let wallReconstructor = WallReconstructor()
@@ -60,10 +87,12 @@ struct ExportView: View {
                 .sheet(isPresented: $showSaveSession) {
                     SaveSessionSheet(
                         sessionName: $sessionName,
+                        saveLocation: $sessionSaveLocation,
                         isSaving: $isSavingSession,
                         errorMessage: $saveErrorMessage,
                         meshCount: scan.meshes.count,
                         vertexCount: scan.vertexCount,
+                        isGoogleDriveConfigured: driveManager.isConfigured,
                         onSave: { Task { await saveSession() } },
                         onCancel: { showSaveSession = false }
                     )
@@ -582,15 +611,29 @@ struct ExportView: View {
         isSavingSession = true
 
         do {
-            print("[ExportView] Saving session '\(sessionName)' with \(scan.meshes.count) meshes, \(scan.vertexCount) vertices")
+            print("[ExportView] Saving session '\(sessionName)' to \(sessionSaveLocation.rawValue) with \(scan.meshes.count) meshes, \(scan.vertexCount) vertices")
 
+            // Always save locally first (we need the file for cloud upload)
             let sessionId = try await sessionManager.saveSession(
                 scan,
                 name: sessionName,
                 mode: scanMode
             )
 
-            print("[ExportView] Session saved successfully with ID: \(sessionId)")
+            print("[ExportView] Session saved locally with ID: \(sessionId)")
+
+            // Upload to cloud if requested
+            switch sessionSaveLocation {
+            case .local:
+                // Already saved locally, nothing more to do
+                break
+
+            case .googleDrive:
+                try await uploadSessionToGoogleDrive(sessionId: sessionId)
+
+            case .iCloud:
+                try await uploadSessionToiCloud(sessionId: sessionId)
+            }
 
             // Dismiss sheet and show success
             showSaveSession = false
@@ -611,6 +654,68 @@ struct ExportView: View {
         }
 
         isSavingSession = false
+    }
+
+    private func uploadSessionToGoogleDrive(sessionId: UUID) async throws {
+        // Get the session file URL
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let sessionsDir = docs.appendingPathComponent("ScanSessions", isDirectory: true)
+        let sessionURL = sessionsDir.appendingPathComponent("\(sessionId.uuidString).json")
+
+        guard FileManager.default.fileExists(atPath: sessionURL.path) else {
+            throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found"])
+        }
+
+        // Sign in if needed
+        if !driveManager.isSignedIn {
+            guard await driveManager.signIn() else {
+                throw NSError(domain: "ExportView", code: 2, userInfo: [NSLocalizedDescriptionKey: driveManager.lastError ?? "Google Drive sign-in failed"])
+            }
+        }
+
+        // Upload the file
+        let success = await driveManager.uploadFile(at: sessionURL, mimeType: "application/json")
+
+        guard success else {
+            throw NSError(domain: "ExportView", code: 3, userInfo: [NSLocalizedDescriptionKey: driveManager.lastError ?? "Google Drive upload failed"])
+        }
+
+        print("[ExportView] Session uploaded to Google Drive")
+    }
+
+    private func uploadSessionToiCloud(sessionId: UUID) async throws {
+        // Get the session file URL
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let sessionsDir = docs.appendingPathComponent("ScanSessions", isDirectory: true)
+        let sessionURL = sessionsDir.appendingPathComponent("\(sessionId.uuidString).json")
+
+        guard FileManager.default.fileExists(atPath: sessionURL.path) else {
+            throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found"])
+        }
+
+        // Get iCloud container URL
+        guard let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)?
+            .appendingPathComponent("Documents")
+            .appendingPathComponent("ScanSessions") else {
+            throw NSError(domain: "ExportView", code: 4, userInfo: [NSLocalizedDescriptionKey: "iCloud not available. Please sign in to iCloud in Settings."])
+        }
+
+        // Create ScanSessions folder in iCloud if needed
+        if !FileManager.default.fileExists(atPath: iCloudURL.path) {
+            try FileManager.default.createDirectory(at: iCloudURL, withIntermediateDirectories: true)
+        }
+
+        // Copy file to iCloud
+        let destinationURL = iCloudURL.appendingPathComponent("\(sessionId.uuidString).json")
+
+        // Remove existing file if present
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+
+        try FileManager.default.copyItem(at: sessionURL, to: destinationURL)
+
+        print("[ExportView] Session uploaded to iCloud: \(destinationURL.path)")
     }
 
     private func saveToiCloud(url: URL) {
@@ -755,10 +860,12 @@ struct SurfaceStatItem: View {
 
 struct SaveSessionSheet: View {
     @Binding var sessionName: String
+    @Binding var saveLocation: SessionSaveLocation
     @Binding var isSaving: Bool
     @Binding var errorMessage: String?
     let meshCount: Int
     let vertexCount: Int
+    let isGoogleDriveConfigured: Bool
     let onSave: () -> Void
     let onCancel: () -> Void
     @FocusState private var isNameFocused: Bool
@@ -769,108 +876,130 @@ struct SaveSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Session Name")
-                        .font(.headline)
-
-                    TextField("Enter name for this scan", text: $sessionName)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($isNameFocused)
-                        .submitLabel(.done)
-                        .onChange(of: sessionName) { _ in
-                            // Clear error when user starts typing
-                            errorMessage = nil
-                        }
-                }
-                .padding(.horizontal)
-
-                // Show scan info
-                HStack(spacing: 20) {
-                    VStack {
-                        Text("\(meshCount)")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(meshCount > 0 ? .primary : .red)
-                        Text("Meshes")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    VStack {
-                        Text("\(vertexCount)")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                        Text("Vertices")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(10)
-
-                // Error message
-                if let error = errorMessage {
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Session name input
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
-                            Text("Save Failed")
-                                .font(.headline)
-                                .foregroundColor(.red)
+                        Text("Session Name")
+                            .font(.headline)
+
+                        TextField("Enter name for this scan", text: $sessionName)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($isNameFocused)
+                            .submitLabel(.done)
+                            .onChange(of: sessionName) { _ in
+                                // Clear error when user starts typing
+                                errorMessage = nil
+                            }
+                    }
+                    .padding(.horizontal)
+
+                    // Save location picker
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Save Location")
+                            .font(.headline)
+
+                        ForEach(SessionSaveLocation.allCases) { location in
+                            SaveLocationRow(
+                                location: location,
+                                isSelected: saveLocation == location,
+                                isAvailable: isLocationAvailable(location)
+                            ) {
+                                if isLocationAvailable(location) {
+                                    saveLocation = location
+                                    errorMessage = nil
+                                }
+                            }
                         }
-                        Text(error)
+                    }
+                    .padding(.horizontal)
+
+                    // Show scan info
+                    HStack(spacing: 20) {
+                        VStack {
+                            Text("\(meshCount)")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(meshCount > 0 ? .primary : .red)
+                            Text("Meshes")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        VStack {
+                            Text("\(vertexCount)")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                            Text("Vertices")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(10)
+
+                    // Error message
+                    if let error = errorMessage {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.red)
+                                Text("Save Failed")
+                                    .font(.headline)
+                                    .foregroundColor(.red)
+                            }
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(8)
+                        .padding(.horizontal)
+                    }
+
+                    if meshCount == 0 {
+                        Text("No scan data to save. Please scan something first.")
                             .font(.caption)
                             .foregroundColor(.red)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    } else if errorMessage == nil {
+                        Text(locationHelpText)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color.red.opacity(0.1))
-                    .cornerRadius(8)
-                    .padding(.horizontal)
-                }
 
-                if meshCount == 0 {
-                    Text("No scan data to save. Please scan something first.")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                } else if errorMessage == nil {
-                    Text("Save this scan to continue editing later or annotate for ML training.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-
-                Spacer()
-
-                VStack(spacing: 12) {
-                    Button(action: onSave) {
-                        HStack {
-                            if isSaving {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    VStack(spacing: 12) {
+                        Button(action: onSave) {
+                            HStack {
+                                if isSaving {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                }
+                                Image(systemName: saveLocation.icon)
+                                Text(isSaving ? savingText : "Save to \(saveLocation.rawValue)")
                             }
-                            Text(isSaving ? "Saving..." : "Save Session")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(canSave ? Color.green : Color.gray)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(canSave ? Color.green : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                    }
-                    .disabled(!canSave)
+                        .disabled(!canSave)
 
-                    Button("Cancel", action: onCancel)
-                        .foregroundColor(.secondary)
+                        Button("Cancel", action: onCancel)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom)
                 }
-                .padding(.horizontal)
-                .padding(.bottom)
+                .padding(.top)
             }
-            .padding(.top)
             .navigationTitle("Save Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -883,6 +1012,114 @@ struct SaveSessionSheet: View {
                 errorMessage = nil
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.large, .medium])
+    }
+
+    private func isLocationAvailable(_ location: SessionSaveLocation) -> Bool {
+        switch location {
+        case .local:
+            return true
+        case .googleDrive:
+            return isGoogleDriveConfigured
+        case .iCloud:
+            return FileManager.default.ubiquityIdentityToken != nil
+        }
+    }
+
+    private var locationHelpText: String {
+        switch saveLocation {
+        case .local:
+            return "Save to device storage. Access from Saved Scans tab."
+        case .googleDrive:
+            return "Save locally and upload to Google Drive for backup."
+        case .iCloud:
+            return "Save locally and sync to iCloud Drive across your devices."
+        }
+    }
+
+    private var savingText: String {
+        switch saveLocation {
+        case .local:
+            return "Saving..."
+        case .googleDrive:
+            return "Uploading to Drive..."
+        case .iCloud:
+            return "Syncing to iCloud..."
+        }
+    }
+}
+
+struct SaveLocationRow: View {
+    let location: SessionSaveLocation
+    let isSelected: Bool
+    let isAvailable: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack {
+                Image(systemName: location.icon)
+                    .font(.title3)
+                    .foregroundColor(iconColor)
+                    .frame(width: 30)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(location.rawValue)
+                        .font(.body)
+                        .foregroundColor(isAvailable ? .primary : .secondary)
+
+                    if !isAvailable {
+                        Text(unavailableReason)
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    } else {
+                        Text(location.description)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                if isSelected && isAvailable {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                }
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(isSelected && isAvailable ? Color.green.opacity(0.1) : Color.gray.opacity(0.05))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected && isAvailable ? Color.green : Color.clear, lineWidth: 2)
+            )
+        }
+        .disabled(!isAvailable)
+    }
+
+    private var iconColor: Color {
+        if !isAvailable {
+            return .gray
+        }
+        switch location {
+        case .local:
+            return .blue
+        case .googleDrive:
+            return .green
+        case .iCloud:
+            return .cyan
+        }
+    }
+
+    private var unavailableReason: String {
+        switch location {
+        case .local:
+            return ""
+        case .googleDrive:
+            return "Configure in Settings"
+        case .iCloud:
+            return "Sign in to iCloud in Settings"
+        }
     }
 }
