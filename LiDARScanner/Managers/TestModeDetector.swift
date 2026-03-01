@@ -26,9 +26,12 @@ class TestModeDetector: ObservableObject {
 
     // Dwell-time detection (hold reticle on surface for 2 seconds to register)
     @Published var dwellProgress: Float = 0  // 0 to 1 progress indicator
-    private var currentTargetAnchorID: UUID?
     private var dwellStartTime: Date?
     private let dwellDuration: TimeInterval = 2.0  // seconds to hold on surface
+    // Track by surface characteristics, not anchor UUID (ARKit fragments same wall)
+    private var dwellSurfaceType: DetectedSurface.SurfaceType?
+    private var dwellNormalDirection: SIMD3<Float>?  // For walls, track which direction wall faces
+    private var dwellPlaneAnchor: ARPlaneAnchor?  // The anchor to use when registering
 
     struct DetectedSurface: Identifiable {
         let id = UUID()
@@ -140,85 +143,149 @@ class TestModeDetector: ObservableObject {
         cameraPosition = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         cameraForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
 
-        let pointingUp = cameraForward.y > 0.3
+        // Find the best surface currently in the reticle
+        var bestAnchor: ARPlaneAnchor?
+        var bestSurfaceType: DetectedSurface.SurfaceType?
+        var bestNormal: SIMD3<Float>?
+        var bestDistance: Float = .infinity
 
         for anchor in frame.anchors {
             guard let planeAnchor = anchor as? ARPlaneAnchor else { continue }
 
-            let planeY = planeAnchor.transform.columns.3.y
             let planeCenter = SIMD3<Float>(
                 planeAnchor.transform.columns.3.x,
                 planeAnchor.transform.columns.3.y,
                 planeAnchor.transform.columns.3.z
             )
-            let normal = SIMD3<Float>(
+            let normal = simd_normalize(SIMD3<Float>(
                 planeAnchor.transform.columns.1.x,
                 planeAnchor.transform.columns.1.y,
                 planeAnchor.transform.columns.1.z
-            )
+            ))
+            let planeY = planeAnchor.transform.columns.3.y
 
-            // Check if this plane is in the CENTER of the screen (user is pointing at it)
-            let isInReticle = isPlaneInReticleCenter(planeAnchor, frame: frame)
+            // Check if this plane is in the reticle
+            guard isPlaneInReticleCenter(planeAnchor, frame: frame) else { continue }
 
-            if isInReticle {
-                // Determine surface type
-                let isCeiling = (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
-                               planeY > cameraPosition.y + 0.3
-                let isWall = abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5
+            // Determine surface type
+            let isCeiling = (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
+                           planeY > cameraPosition.y + 0.3
+            let isWall = abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5
 
-                if (isCeiling || isWall) && !surfaceAlreadyDetected(anchorID: planeAnchor.identifier) {
-                    // Dwell-time tracking - only track ONE surface at a time
-                    if currentTargetAnchorID == planeAnchor.identifier {
-                        // Same surface we're tracking - update dwell progress
-                        if let startTime = dwellStartTime {
-                            let elapsed = Date().timeIntervalSince(startTime)
-                            dwellProgress = min(1.0, Float(elapsed / dwellDuration))
+            guard isCeiling || isWall else { continue }
 
-                            // Register surface after dwell duration
-                            if elapsed >= dwellDuration {
-                                if isCeiling {
-                                    registerCeiling(planeAnchor: planeAnchor, planeCenter: planeCenter, planeY: planeY)
-                                } else {
-                                    registerWall(planeAnchor: planeAnchor, planeY: planeY)
-                                }
-                                // Reset dwell state
-                                currentTargetAnchorID = nil
-                                dwellStartTime = nil
-                                dwellProgress = 0
-                            }
-                        }
-                    } else if currentTargetAnchorID == nil {
-                        // Not tracking anything - start tracking this surface
-                        currentTargetAnchorID = planeAnchor.identifier
-                        dwellStartTime = Date()
-                        dwellProgress = 0
+            // Check if we already have this exact surface (by plane similarity, not just anchor ID)
+            if isSurfaceSimilarToExisting(type: isCeiling ? .ceiling : .wall, normal: normal, position: planeCenter) {
+                continue
+            }
+
+            // Track the closest surface in the reticle
+            let distance = simd_distance(planeCenter, cameraPosition)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestAnchor = planeAnchor
+                bestSurfaceType = isCeiling ? .ceiling : .wall
+                bestNormal = normal
+            }
+        }
+
+        // Dwell logic - track by surface TYPE and DIRECTION, not anchor UUID
+        if let anchor = bestAnchor, let surfaceType = bestSurfaceType, let normal = bestNormal {
+            // Check if this matches what we're already tracking
+            let matchesCurrentDwell = isSimilarToCurrentDwell(type: surfaceType, normal: normal)
+
+            if matchesCurrentDwell, let startTime = dwellStartTime {
+                // Continue tracking - update progress
+                let elapsed = Date().timeIntervalSince(startTime)
+                dwellProgress = min(1.0, Float(elapsed / dwellDuration))
+                dwellPlaneAnchor = anchor  // Update to latest matching anchor
+
+                // Register after dwell completes
+                if elapsed >= dwellDuration {
+                    let planeCenter = SIMD3<Float>(
+                        anchor.transform.columns.3.x,
+                        anchor.transform.columns.3.y,
+                        anchor.transform.columns.3.z
+                    )
+                    let planeY = anchor.transform.columns.3.y
+
+                    if surfaceType == .ceiling {
+                        registerCeiling(planeAnchor: anchor, planeCenter: planeCenter, planeY: planeY)
+                    } else {
+                        registerWall(planeAnchor: anchor, planeY: planeY)
                     }
-                    // If tracking a DIFFERENT surface, ignore this one (don't switch mid-dwell)
+                    resetDwellState()
                 }
-            }
-        }
-
-        // Reset dwell if no valid surface in reticle
-        if currentTargetAnchorID != nil {
-            var foundTarget = false
-            for anchor in frame.anchors {
-                if let planeAnchor = anchor as? ARPlaneAnchor,
-                   planeAnchor.identifier == currentTargetAnchorID,
-                   isPlaneInReticleCenter(planeAnchor, frame: frame) {
-                    foundTarget = true
-                    break
-                }
-            }
-            if !foundTarget {
-                currentTargetAnchorID = nil
-                dwellStartTime = nil
+            } else if dwellStartTime == nil {
+                // Start new dwell
+                dwellStartTime = Date()
+                dwellSurfaceType = surfaceType
+                dwellNormalDirection = normal
+                dwellPlaneAnchor = anchor
                 dwellProgress = 0
+            } else {
+                // Different surface type/direction - reset and start new
+                resetDwellState()
+                dwellStartTime = Date()
+                dwellSurfaceType = surfaceType
+                dwellNormalDirection = normal
+                dwellPlaneAnchor = anchor
+            }
+        } else {
+            // No valid surface in reticle - reset dwell
+            if dwellStartTime != nil {
+                resetDwellState()
             }
         }
 
-        // Build boundary from captured points
-        buildCeilingBoundaryFromPoints()
         updateStatus()
+    }
+
+    /// Check if a surface is similar to one we already detected
+    private func isSurfaceSimilarToExisting(type: DetectedSurface.SurfaceType, normal: SIMD3<Float>, position: SIMD3<Float>) -> Bool {
+        for surface in detectedSurfaces {
+            guard surface.type == type else { continue }
+
+            // For ceiling, just check if we have any ceiling
+            if type == .ceiling {
+                return true
+            }
+
+            // For walls, check if normal is similar (same wall direction)
+            let dotProduct = abs(simd_dot(surface.planeNormal, normal))
+            if dotProduct > 0.95 {  // Nearly parallel normals = same wall
+                // Also check if roughly same distance from origin (same wall plane)
+                let d1 = simd_dot(surface.planeNormal, surface.planePoint)
+                let d2 = simd_dot(normal, position)
+                if abs(d1 - d2) < 0.5 {  // Within 50cm = same wall
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Check if current surface matches what we're dwelling on
+    private func isSimilarToCurrentDwell(type: DetectedSurface.SurfaceType, normal: SIMD3<Float>) -> Bool {
+        guard let dwellType = dwellSurfaceType else { return false }
+        guard dwellType == type else { return false }
+
+        // For ceiling, type match is enough
+        if type == .ceiling { return true }
+
+        // For walls, check normal direction similarity
+        guard let dwellNormal = dwellNormalDirection else { return false }
+        let dotProduct = abs(simd_dot(dwellNormal, normal))
+        return dotProduct > 0.85  // Allow some tolerance for same wall
+    }
+
+    /// Reset dwell tracking state
+    private func resetDwellState() {
+        dwellStartTime = nil
+        dwellSurfaceType = nil
+        dwellNormalDirection = nil
+        dwellPlaneAnchor = nil
+        dwellProgress = 0
     }
 
     /// Check if a plane is in the center reticle area
@@ -1134,9 +1201,7 @@ class TestModeDetector: ObservableObject {
             if !isPaused {
                 isPaused = true
                 // Reset dwell to prevent accidental registration
-                currentTargetAnchorID = nil
-                dwellStartTime = nil
-                dwellProgress = 0
+                resetDwellState()
                 hapticFeedback()
                 updateStatus()
             }
@@ -1187,9 +1252,7 @@ class TestModeDetector: ObservableObject {
         isPaused.toggle()
         if isPaused {
             // Reset dwell to prevent accidental registration
-            currentTargetAnchorID = nil
-            dwellStartTime = nil
-            dwellProgress = 0
+            resetDwellState()
         }
         hapticFeedback()
         updateStatus()
@@ -1210,8 +1273,6 @@ class TestModeDetector: ObservableObject {
         statusMessage = "Point at ceiling"
         detectionMethod = ""
         // Reset dwell state
-        currentTargetAnchorID = nil
-        dwellStartTime = nil
-        dwellProgress = 0
+        resetDwellState()
     }
 }
