@@ -233,6 +233,7 @@ struct SessionDetailView: View {
     @State private var isLoading = true
     @State private var error: String?
     @State private var showExport = false
+    @State private var showArchitecturalExtraction = false
     @State private var repairModeEnabled = true
     @Environment(\.dismiss) private var dismiss
 
@@ -260,6 +261,11 @@ struct SessionDetailView: View {
             .sheet(isPresented: $showExport) {
                 if let scan = loadedScan {
                     ExportView(scan: scan, scanMode: scanMode)
+                }
+            }
+            .sheet(isPresented: $showArchitecturalExtraction) {
+                if let scan = loadedScan {
+                    ArchitecturalExtractionView(scan: scan)
                 }
             }
         }
@@ -387,6 +393,20 @@ struct SessionDetailView: View {
                 .frame(maxWidth: .infinity)
                 .padding()
                 .background(Color.green)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+
+            // Extract Architecture (AI)
+            Button(action: { showArchitecturalExtraction = true }) {
+                HStack {
+                    Image(systemName: "wand.and.stars")
+                    Text("Extract Architecture")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.purple)
                 .foregroundColor(.white)
                 .cornerRadius(12)
             }
