@@ -160,7 +160,6 @@ class MeshManager: NSObject, ObservableObject {
 
             // Project onto window plane axes
             let right = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), normal))
-            let up = SIMD3<Float>(0, 1, 0)
 
             let horizontalDist = abs(simd_dot(toPoint, right))
             let verticalPos = point.y
@@ -194,7 +193,7 @@ class MeshManager: NSObject, ObservableObject {
 
     // Test mode visualization entities
     private var testModePlaneEntities: [UUID: AnchorEntity] = [:]  // Plane preview surfaces
-    private var testModeLineEntities: [UUID: AnchorEntity] = []   // Intersection lines
+    private var testModeLineEntities: [UUID: AnchorEntity] = [:]   // Intersection lines
     private var testModeVisualizationAnchor: AnchorEntity?
 
     // MARK: - Session Resume
@@ -700,7 +699,7 @@ class MeshManager: NSObject, ObservableObject {
         // Configure audio session - use mixWithOthers to avoid conflicts with ARKit
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothA2DP])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("[MeshManager] Audio session setup failed: \(error)")
@@ -1220,7 +1219,6 @@ class MeshManager: NSObject, ObservableObject {
             let totalCorners = max(autoCornerCount, userCornerCount)
 
             // Progress: need at least 4 corners, encourage more
-            let minCorners = 4
             let targetCorners = 6  // Encourage scanning more corners
             phaseProgress = Double(min(Float(totalCorners) / Float(targetCorners), 1.0))
 

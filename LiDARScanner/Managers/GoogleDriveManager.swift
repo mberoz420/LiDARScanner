@@ -397,7 +397,8 @@ class GoogleDriveManager: NSObject, ObservableObject {
 // MARK: - ASWebAuthenticationPresentationContextProviding
 
 extension GoogleDriveManager: ASWebAuthenticationPresentationContextProviding {
-    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+    @MainActor
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         // Return the key window
         let scenes = UIApplication.shared.connectedScenes
         let windowScene = scenes.first as? UIWindowScene
