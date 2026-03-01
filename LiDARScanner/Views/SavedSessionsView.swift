@@ -1,4 +1,5 @@
 import SwiftUI
+import simd
 
 /// List of saved scan sessions
 struct SavedSessionsView: View {
