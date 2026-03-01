@@ -86,59 +86,76 @@ class ScanSessionManager: ObservableObject {
         print("[ScanSessionManager] Starting save: '\(name)' with \(scan.meshes.count) meshes, \(scan.vertexCount) vertices")
         print("[ScanSessionManager] Save directory: \(sessionsDirectory.path)")
 
+        // Ensure directory exists
         do {
-            // Ensure directory exists
             if !FileManager.default.fileExists(atPath: sessionsDirectory.path) {
                 try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
-                print("[ScanSessionManager] Created directory: \(sessionsDirectory.path)")
+                print("[ScanSessionManager] Created directory")
             }
+        } catch {
+            print("[ScanSessionManager] Failed to create directory: \(error)")
+            lastError = "Cannot create save folder: \(error.localizedDescription)"
+            throw error
+        }
 
-            // Create session object
-            let session = try SavedScanSession(
+        // Create session object
+        let session: SavedScanSession
+        do {
+            session = try SavedScanSession(
                 name: name,
                 scan: scan,
                 mode: mode,
                 qualityScores: qualityScores
             )
-
-            // Save to file
-            let sessionURL = sessionsDirectory.appendingPathComponent("\(session.id.uuidString).json")
-            print("[ScanSessionManager] Saving to: \(sessionURL.path)")
-
-            let data = try JSONEncoder().encode(session)
-            print("[ScanSessionManager] Encoded \(data.count) bytes")
-
-            // Compress data
-            let compressedData = try (data as NSData).compressed(using: .lzfse) as Data
-            print("[ScanSessionManager] Compressed to \(compressedData.count) bytes")
-
-            try compressedData.write(to: sessionURL)
-            print("[ScanSessionManager] Written to disk")
-
-            // Verify file exists
-            if FileManager.default.fileExists(atPath: sessionURL.path) {
-                print("[ScanSessionManager] File verified on disk")
-            } else {
-                print("[ScanSessionManager] WARNING: File not found after write!")
-            }
-
-            // Update metadata list
-            let metadata = SessionMetadata(from: session)
-            savedSessions.insert(metadata, at: 0)
-            saveSessionsList()
-
-            currentSessionId = session.id
-
-            print("[ScanSessionManager] Saved session: \(name) - ID: \(session.id)")
-            print("[ScanSessionManager] Total sessions in list: \(savedSessions.count)")
-
-            return session.id
-
+            print("[ScanSessionManager] Session object created")
         } catch {
-            print("[ScanSessionManager] Save FAILED: \(error)")
-            lastError = "Failed to save: \(error.localizedDescription)"
+            print("[ScanSessionManager] Failed to create session: \(error)")
+            lastError = "Cannot create session: \(error.localizedDescription)"
             throw error
         }
+
+        // Encode to JSON
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(session)
+            print("[ScanSessionManager] Encoded to \(data.count) bytes")
+        } catch {
+            print("[ScanSessionManager] JSON encoding failed: \(error)")
+            lastError = "Cannot encode data: \(error.localizedDescription)"
+            throw error
+        }
+
+        // Compress
+        let compressedData: Data
+        do {
+            compressedData = try (data as NSData).compressed(using: .lzfse) as Data
+            print("[ScanSessionManager] Compressed to \(compressedData.count) bytes")
+        } catch {
+            print("[ScanSessionManager] Compression failed: \(error)")
+            lastError = "Cannot compress data: \(error.localizedDescription)"
+            throw error
+        }
+
+        // Write to disk
+        let sessionURL = sessionsDirectory.appendingPathComponent("\(session.id.uuidString).json")
+        do {
+            try compressedData.write(to: sessionURL)
+            print("[ScanSessionManager] Written to: \(sessionURL.path)")
+        } catch {
+            print("[ScanSessionManager] Write failed: \(error)")
+            lastError = "Cannot write file: \(error.localizedDescription)"
+            throw error
+        }
+
+        // Update metadata list
+        let metadata = SessionMetadata(from: session)
+        savedSessions.insert(metadata, at: 0)
+        saveSessionsList()
+
+        currentSessionId = session.id
+        print("[ScanSessionManager] Save complete! ID: \(session.id)")
+
+        return session.id
     }
 
     // MARK: - Load Session

@@ -811,13 +811,20 @@ struct SaveSessionSheet: View {
 
                 // Error message
                 if let error = errorMessage {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text("Save Failed")
+                                .font(.headline)
+                                .foregroundColor(.red)
+                        }
                         Text(error)
-                            .font(.subheadline)
+                            .font(.caption)
                             .foregroundColor(.red)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
                     .background(Color.red.opacity(0.1))
                     .cornerRadius(8)
