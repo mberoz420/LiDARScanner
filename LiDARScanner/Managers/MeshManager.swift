@@ -1557,11 +1557,6 @@ class MeshManager: NSObject, ObservableObject {
         guard let arView = arView else { return }
 
         // Skip mesh overlay when using edge visualization (room mode)
-        if useEdgeVisualization {
-            // Don't render mesh surfaces - only edges are shown
-            return
-        }
-
         guard let meshResource = try? MeshResource.generate(from: anchor.geometry) else { return }
 
         // Use surface-based color if classification is enabled, otherwise mode color
