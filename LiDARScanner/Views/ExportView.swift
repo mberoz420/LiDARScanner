@@ -705,13 +705,30 @@ struct ExportView: View {
     }
 
     private func uploadSessionToGoogleDrive(sessionId: UUID) async throws {
-        // Get the session file URL
+        // Get the session file URL (compressed binary, not raw JSON)
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let sessionsDir = docs.appendingPathComponent("ScanSessions", isDirectory: true)
         let sessionURL = sessionsDir.appendingPathComponent("\(sessionId.uuidString).json")
 
         guard FileManager.default.fileExists(atPath: sessionURL.path) else {
             throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found"])
+        }
+
+        // Create a copy with friendly name and correct extension
+        let safeSessionName = sessionName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "\\", with: "-")
+        let filename = "\(safeSessionName)_\(sessionId.uuidString.prefix(8)).lidarscan"
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+
+        do {
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                try FileManager.default.removeItem(at: tempURL)
+            }
+            try FileManager.default.copyItem(at: sessionURL, to: tempURL)
+        } catch {
+            throw NSError(domain: "ExportView", code: 4, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare file: \(error.localizedDescription)"])
         }
 
         // Sign in if needed
@@ -721,8 +738,11 @@ struct ExportView: View {
             }
         }
 
-        // Upload the file
-        let success = await driveManager.uploadFile(at: sessionURL, mimeType: "application/json")
+        // Upload the file with binary mime type (it's LZFSE compressed)
+        let success = await driveManager.uploadFile(at: tempURL, mimeType: "application/octet-stream")
+
+        // Clean up temp file
+        try? FileManager.default.removeItem(at: tempURL)
 
         guard success else {
             throw NSError(domain: "ExportView", code: 3, userInfo: [NSLocalizedDescriptionKey: driveManager.lastError ?? "Google Drive upload failed"])
@@ -742,10 +762,12 @@ struct ExportView: View {
         }
 
         // Create a user-friendly filename with the session name
+        // Use .lidarscan extension since the file is LZFSE compressed, not raw JSON
         let safeSessionName = sessionName
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
-        let filename = "\(safeSessionName)_\(sessionId.uuidString.prefix(8)).json"
+            .replacingOccurrences(of: "\\", with: "-")
+        let filename = "\(safeSessionName)_\(sessionId.uuidString.prefix(8)).lidarscan"
 
         // Copy to temp location with friendly name for the picker
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
