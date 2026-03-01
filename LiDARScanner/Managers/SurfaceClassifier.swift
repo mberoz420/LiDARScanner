@@ -253,8 +253,8 @@ struct OpeningCandidate {
     let wallDistance: Float               // Expected wall distance
     let openingDistance: Float            // Actual distance (much farther = opening)
     let bottomHeight: Float               // Height from floor
-    var detectionCount: Int = 1           // Times detected (higher = more confident)
     let detectionType: DetectionType
+    var detectionCount: Int = 1           // Times detected (higher = more confident)
 
     enum DetectionType: String {
         case distanceJump = "Distance Jump"       // Sudden far distance = open doorway
@@ -1514,8 +1514,8 @@ class SurfaceClassifier: ObservableObject {
                     wallDistance: wallDist,
                     openingDistance: openingDist,
                     bottomHeight: bottomHeight,
-                    detectionCount: 1,
-                    detectionType: .distanceJump
+                    detectionType: .distanceJump,
+                    detectionCount: 1
                 )
 
                 // Check if similar candidate exists
@@ -1577,8 +1577,8 @@ class SurfaceClassifier: ObservableObject {
                     wallDistance: mean,
                     openingDistance: mean + stdDev * 2,
                     bottomHeight: 0.8,  // Assume window height if glass detected
-                    detectionCount: 2,  // Give glass detection medium confidence
-                    detectionType: .noisePattern
+                    detectionType: .noisePattern,
+                    detectionCount: 2   // Give glass detection medium confidence
                 )
 
                 if !candidates.contains(where: { abs($0.wallAngle - centerAngle) < 15 }) {
