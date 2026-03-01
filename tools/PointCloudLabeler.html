@@ -170,6 +170,16 @@
                        onchange="updatePointSize(this.value)">
             </div>
 
+            <div class="slider-container">
+                <label>Color Mode:</label>
+                <select id="color-mode" onchange="updateColorMode(this.value)" style="width:100%;padding:5px;margin-top:5px;">
+                    <option value="label">By Label</option>
+                    <option value="normal" selected>By Normal (Auto-detect surfaces)</option>
+                    <option value="height">By Height</option>
+                    <option value="rgb">Original Colors (if available)</option>
+                </select>
+            </div>
+
             <h2>Statistics</h2>
             <div class="stats" id="stats">
                 <div><span>Total Points:</span><span id="stat-total">0</span></div>
@@ -198,11 +208,13 @@
     <script>
         // Global state
         let scene, camera, renderer, controls;
-        let pointCloud, points = [], labels = [], normals = [];
+        let pointCloud, points = [], labels = [], normals = [], rgbColors = [];
         let selectedIndices = new Set();
         let selectionRadius = 0.3;
         let raycaster, mouse;
         let originalData = null;
+        let colorMode = 'normal';  // 'label', 'normal', 'height', 'rgb'
+        let minY = 0, maxY = 1;  // For height coloring
 
         // Label colors
         const LABEL_COLORS = {
@@ -214,6 +226,56 @@
         };
 
         const SELECTION_COLOR = 0xffffff;
+
+        function updateColorMode(mode) {
+            colorMode = mode;
+            updatePointColors();
+        }
+
+        // Get color based on current color mode
+        function getPointColor(index) {
+            if (selectedIndices.has(index)) {
+                return new THREE.Color(SELECTION_COLOR);
+            }
+
+            switch (colorMode) {
+                case 'normal':
+                    // Color by normal direction
+                    const n = normals[index] || {x: 0, y: 1, z: 0};
+                    const ny = Math.abs(n.y);
+                    const horizontalMag = Math.sqrt(n.x * n.x + n.z * n.z);
+
+                    if (ny > 0.7) {
+                        // Horizontal surface
+                        if (n.y > 0) {
+                            return new THREE.Color(0x2ecc71);  // Floor - green (normal pointing up)
+                        } else {
+                            return new THREE.Color(0xf1c40f);  // Ceiling - yellow (normal pointing down)
+                        }
+                    } else if (horizontalMag > 0.7) {
+                        return new THREE.Color(0x3498db);  // Wall - blue (vertical surface)
+                    } else {
+                        return new THREE.Color(0xe74c3c);  // Object/other - red
+                    }
+
+                case 'height':
+                    // Color by Y coordinate (rainbow gradient)
+                    const p = points[index];
+                    const t = (p.y - minY) / (maxY - minY + 0.001);
+                    return new THREE.Color().setHSL(0.7 - t * 0.7, 1, 0.5);
+
+                case 'rgb':
+                    // Original colors if available
+                    if (rgbColors[index]) {
+                        return new THREE.Color(rgbColors[index].r, rgbColors[index].g, rgbColors[index].b);
+                    }
+                    return new THREE.Color(0x95a5a6);
+
+                case 'label':
+                default:
+                    return new THREE.Color(LABEL_COLORS[labels[index].toString()] || LABEL_COLORS['-1']);
+            }
+        }
 
         // Initialize Three.js
         function init() {
@@ -272,6 +334,7 @@
             points = [];
             labels = [];
             normals = [];
+            rgbColors = [];
 
             // Handle different JSON formats
             if (data.points && Array.isArray(data.points)) {
@@ -282,11 +345,18 @@
                         points.push({ x: p[0], y: p[1], z: p[2] });
                         normals.push({ x: p[3] || 0, y: p[4] || 0, z: p[5] || 0 });
                         labels.push(data.labels ? data.labels[i] : -1);
+                        rgbColors.push(null);
                     } else if (p.x !== undefined) {
-                        // Object format: {x, y, z, nx, ny, nz, label}
+                        // Object format: {x, y, z, nx, ny, nz, label, r, g, b}
                         points.push({ x: p.x, y: p.y, z: p.z });
                         normals.push({ x: p.nx || 0, y: p.ny || 0, z: p.nz || 0 });
                         labels.push(p.label !== undefined ? p.label : -1);
+                        // Store RGB if available
+                        if (p.r !== undefined) {
+                            rgbColors.push({ r: p.r, g: p.g, b: p.b });
+                        } else {
+                            rgbColors.push(null);
+                        }
                     }
                 });
             } else if (data.meshes || data.meshesData) {
@@ -300,6 +370,11 @@
                         points.push({ x: p.x, y: p.y, z: p.z });
                         normals.push({ x: p.nx || 0, y: p.ny || 0, z: p.nz || 0 });
                         labels.push(p.label !== undefined ? p.label : -1);
+                        if (p.r !== undefined) {
+                            rgbColors.push({ r: p.r, g: p.g, b: p.b });
+                        } else {
+                            rgbColors.push(null);
+                        }
                     }
                 });
             }
@@ -308,6 +383,20 @@
                 alert('No valid points found in file');
                 return;
             }
+
+            // Calculate Y bounds for height coloring
+            minY = Infinity;
+            maxY = -Infinity;
+            points.forEach(p => {
+                if (isFinite(p.y)) {
+                    minY = Math.min(minY, p.y);
+                    maxY = Math.max(maxY, p.y);
+                }
+            });
+
+            // Set color mode to 'normal' by default for better visualization
+            colorMode = 'normal';
+            document.getElementById('color-mode').value = 'normal';
 
             createPointCloud();
             updateStats();
@@ -334,7 +423,7 @@
                 positions[i * 3 + 1] = p.y;
                 positions[i * 3 + 2] = p.z;
 
-                const color = new THREE.Color(LABEL_COLORS[labels[i].toString()] || LABEL_COLORS['-1']);
+                const color = getPointColor(i);
                 colors[i * 3] = color.r;
                 colors[i * 3 + 1] = color.g;
                 colors[i * 3 + 2] = color.b;
@@ -374,12 +463,7 @@
             const colors = pointCloud.geometry.attributes.color.array;
 
             points.forEach((p, i) => {
-                let color;
-                if (selectedIndices.has(i)) {
-                    color = new THREE.Color(SELECTION_COLOR);
-                } else {
-                    color = new THREE.Color(LABEL_COLORS[labels[i].toString()] || LABEL_COLORS['-1']);
-                }
+                const color = getPointColor(i);
                 colors[i * 3] = color.r;
                 colors[i * 3 + 1] = color.g;
                 colors[i * 3 + 2] = color.b;
