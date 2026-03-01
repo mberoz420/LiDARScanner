@@ -4,16 +4,7 @@ import CoreMotion
 import CoreML
 import simd
 
-// MARK: - Debug Logging (disabled in release builds)
-#if DEBUG
-func debugLog(_ message: String) {
-    print(message)
-}
-#else
-@inline(__always) func debugLog(_ message: String) {
-    // No-op in release builds
-}
-#endif
+// Note: debugLog is defined in MeshManager.swift
 
 /// Surface type classification based on normal direction
 enum SurfaceType: String, CaseIterable, Sendable {
