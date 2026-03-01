@@ -12,7 +12,7 @@ enum ExportType: String, CaseIterable {
 enum SessionSaveLocation: String, CaseIterable, Identifiable {
     case local = "On Device"
     case googleDrive = "Google Drive"
-    case iCloud = "iCloud"
+    case iCloud = "iCloud Drive"
 
     var id: String { rawValue }
 
@@ -28,7 +28,7 @@ enum SessionSaveLocation: String, CaseIterable, Identifiable {
         switch self {
         case .local: return "Save to app's local storage"
         case .googleDrive: return "Upload to Google Drive"
-        case .iCloud: return "Save to iCloud Drive"
+        case .iCloud: return "Choose location in iCloud Drive"
         }
     }
 }
@@ -59,6 +59,9 @@ struct ExportView: View {
     @State private var saveErrorMessage: String?
     @State private var sessionSaveLocation: SessionSaveLocation = .local
     @State private var lastSaveLocation: SessionSaveLocation = .local
+    @State private var showDocumentPicker = false
+    @State private var pendingSessionURL: URL?
+    @State private var pendingSessionId: UUID?
     @ObservedObject private var sessionManager = ScanSessionManager.shared
     @ObservedObject private var driveManager = GoogleDriveManager.shared
 
@@ -69,7 +72,7 @@ struct ExportView: View {
         case .googleDrive:
             return "Uploaded to Google Drive → LiDAR Scans folder"
         case .iCloud:
-            return "Find in Files app → iCloud Drive → LiDARScanner"
+            return "Saved to iCloud Drive - visible on icloud.com"
         }
     }
     @Environment(\.dismiss) private var dismiss
@@ -116,6 +119,32 @@ struct ExportView: View {
                     defaultFilename: fileToSave?.lastPathComponent ?? "scan"
                 ) { result in
                     handleFileExportResult(result)
+                }
+                .sheet(isPresented: $showDocumentPicker) {
+                    if let url = pendingSessionURL {
+                        DocumentPickerView(
+                            url: url,
+                            onSuccess: {
+                                showDocumentPicker = false
+                                lastSaveLocation = .iCloud
+                                withAnimation {
+                                    sessionSaveSuccess = true
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                    withAnimation {
+                                        sessionSaveSuccess = false
+                                    }
+                                }
+                                // Clean up temp file
+                                try? FileManager.default.removeItem(at: url)
+                            },
+                            onCancel: {
+                                showDocumentPicker = false
+                                // Clean up temp file
+                                try? FileManager.default.removeItem(at: url)
+                            }
+                        )
+                    }
                 }
         }
     }
@@ -703,11 +732,6 @@ struct ExportView: View {
     }
 
     private func uploadSessionToiCloud(sessionId: UUID) async throws {
-        // Check if user is signed in to iCloud
-        guard FileManager.default.ubiquityIdentityToken != nil else {
-            throw NSError(domain: "ExportView", code: 10, userInfo: [NSLocalizedDescriptionKey: "Not signed in to iCloud. Go to Settings → Apple ID → iCloud and sign in."])
-        }
-
         // Get the session file URL
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let sessionsDir = docs.appendingPathComponent("ScanSessions", isDirectory: true)
@@ -717,56 +741,38 @@ struct ExportView: View {
             throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found locally"])
         }
 
-        // Try to get the iCloud container first
-        guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else {
-            throw NSError(domain: "ExportView", code: 11, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available. Please enable iCloud Drive:\n\n1. Open Settings → Apple ID → iCloud\n2. Enable 'iCloud Drive'\n3. Make sure LiDARScanner is allowed\n\nOr the app's iCloud capability may not be configured in Xcode."])
-        }
-
-        // Save to Documents folder within the container - this makes it visible in Files app
-        // The folder will appear as "LiDARScanner" in iCloud Drive
-        let iCloudURL = containerURL
-            .appendingPathComponent("Documents")
-            .appendingPathComponent("LiDAR Scans")
-
-        print("[ExportView] iCloud container URL: \(containerURL.path)")
-        print("[ExportView] iCloud destination folder: \(iCloudURL.path)")
-
-        // Create LiDAR Scans folder in iCloud if needed
-        do {
-            if !FileManager.default.fileExists(atPath: iCloudURL.path) {
-                try FileManager.default.createDirectory(at: iCloudURL, withIntermediateDirectories: true)
-                print("[ExportView] Created iCloud 'LiDAR Scans' folder")
-            }
-        } catch {
-            throw NSError(domain: "ExportView", code: 12, userInfo: [NSLocalizedDescriptionKey: "Failed to create iCloud folder: \(error.localizedDescription)"])
-        }
-
         // Create a user-friendly filename with the session name
         let safeSessionName = sessionName
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
         let filename = "\(safeSessionName)_\(sessionId.uuidString.prefix(8)).json"
-        let destinationURL = iCloudURL.appendingPathComponent(filename)
+
+        // Copy to temp location with friendly name for the picker
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
 
         do {
-            // Remove existing file if present
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                try FileManager.default.removeItem(at: tempURL)
             }
-
-            try FileManager.default.copyItem(at: sessionURL, to: destinationURL)
-            print("[ExportView] Session copied to iCloud: \(destinationURL.path)")
+            try FileManager.default.copyItem(at: sessionURL, to: tempURL)
         } catch {
-            throw NSError(domain: "ExportView", code: 13, userInfo: [NSLocalizedDescriptionKey: "Failed to copy to iCloud: \(error.localizedDescription)"])
+            throw NSError(domain: "ExportView", code: 14, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare file: \(error.localizedDescription)"])
         }
 
-        // Verify the file exists
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            print("[ExportView] Verified: File exists in iCloud")
-            print("[ExportView] File will appear in Files app → iCloud Drive → LiDARScanner → LiDAR Scans")
-        } else {
-            print("[ExportView] Warning: File may still be uploading to iCloud")
-        }
+        // Store for the document picker and show it
+        pendingSessionURL = tempURL
+        pendingSessionId = sessionId
+
+        // Dismiss the save session sheet first
+        showSaveSession = false
+
+        // Small delay to allow sheet to dismiss before showing picker
+        try await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+
+        // Show document picker - this will handle the actual save
+        showDocumentPicker = true
+
+        print("[ExportView] Opening document picker for iCloud Drive save")
     }
 
     private func saveToiCloud(url: URL) {
@@ -1073,8 +1079,8 @@ struct SaveSessionSheet: View {
         case .googleDrive:
             return isGoogleDriveConfigured
         case .iCloud:
-            // Need both: signed in AND container available
-            return iCloudStatus.isSignedIn && iCloudStatus.isContainerAvailable
+            // Document picker is always available - user can save to any location
+            return true
         }
     }
 
@@ -1085,7 +1091,7 @@ struct SaveSessionSheet: View {
         case .googleDrive:
             return "Save locally and upload to Google Drive for backup."
         case .iCloud:
-            return "Save locally and sync to iCloud Drive across your devices."
+            return "Save locally, then choose where in iCloud Drive. Visible on icloud.com."
         }
     }
 
@@ -1096,7 +1102,7 @@ struct SaveSessionSheet: View {
         case .googleDrive:
             return "Uploading to Drive..."
         case .iCloud:
-            return "Syncing to iCloud..."
+            return "Preparing..."
         }
     }
 }
@@ -1218,6 +1224,46 @@ struct iCloudStatus {
             return "iCloud Drive not enabled for this app"
         } else {
             return "iCloud ready"
+        }
+    }
+}
+
+// Document picker for saving to iCloud Drive (visible on icloud.com)
+struct DocumentPickerView: UIViewControllerRepresentable {
+    let url: URL
+    let onSuccess: () -> Void
+    let onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+        picker.delegate = context.coordinator
+        picker.shouldShowFileExtensions = true
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSuccess: onSuccess, onCancel: onCancel)
+    }
+
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onSuccess: () -> Void
+        let onCancel: () -> Void
+
+        init(onSuccess: @escaping () -> Void, onCancel: @escaping () -> Void) {
+            self.onSuccess = onSuccess
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            print("[DocumentPicker] File saved to: \(urls.first?.path ?? "unknown")")
+            onSuccess()
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            print("[DocumentPicker] Cancelled")
+            onCancel()
         }
     }
 }
