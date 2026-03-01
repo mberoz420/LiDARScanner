@@ -187,15 +187,24 @@ struct WallEdge {
     }
 }
 
+/// Detection source for doors/windows
+enum OpeningDetectionSource: String {
+    case automatic = "Auto"           // Detected by gap/anomaly analysis
+    case calibrated = "Calibrated"    // User pointed at it for 3s
+    case voiceCommand = "Voice"       // User said "door" or "window"
+}
+
 /// Detected door opening
 struct DetectedDoor {
     let id: UUID
     let position: SIMD3<Float>           // Center position
-    let width: Float                      // Typical: 0.7-1.0m
-    let height: Float                     // Typical: 1.9-2.2m
+    var width: Float                      // Typical: 0.7-1.0m
+    var height: Float                     // Typical: 1.9-2.2m
     let wallNormal: SIMD3<Float>          // Direction door faces
-    let boundingBox: (min: SIMD3<Float>, max: SIMD3<Float>)
-    let confidence: Float
+    var boundingBox: (min: SIMD3<Float>, max: SIMD3<Float>)
+    var confidence: Float
+    var source: OpeningDetectionSource = .automatic
+    var isConfirmed: Bool = false         // User has confirmed this detection
 
     var isStandardSize: Bool {
         return width >= 0.6 && width <= 1.2 && height >= 1.8 && height <= 2.5
@@ -206,12 +215,15 @@ struct DetectedDoor {
 struct DetectedWindow {
     let id: UUID
     let position: SIMD3<Float>           // Center position
-    let width: Float                      // Variable
-    let height: Float                     // Variable
+    var width: Float                      // Variable
+    var height: Float                     // Variable
     let heightFromFloor: Float            // Windows don't reach floor
     let wallNormal: SIMD3<Float>          // Direction window faces
-    let boundingBox: (min: SIMD3<Float>, max: SIMD3<Float>)
-    let confidence: Float
+    var boundingBox: (min: SIMD3<Float>, max: SIMD3<Float>)
+    var confidence: Float
+    var source: OpeningDetectionSource = .automatic
+    var isConfirmed: Bool = false         // User has confirmed this detection
+    var hasGlass: Bool = true             // Detected glass (noisy LiDAR readings)
 
     var windowType: WindowType {
         if height > 1.8 && heightFromFloor < 0.2 {
@@ -230,6 +242,35 @@ struct DetectedWindow {
         case floorToCeiling = "Floor to Ceiling"
         case horizontal = "Horizontal"
         case vertical = "Vertical"
+    }
+}
+
+/// Opening candidate detected by distance anomaly
+struct OpeningCandidate {
+    let id: UUID
+    let position: SIMD3<Float>           // Estimated center
+    let wallAngle: Float                  // Horizontal angle where detected
+    let wallDistance: Float               // Expected wall distance
+    let openingDistance: Float            // Actual distance (much farther = opening)
+    let bottomHeight: Float               // Height from floor
+    var detectionCount: Int = 1           // Times detected (higher = more confident)
+    let detectionType: DetectionType
+
+    enum DetectionType: String {
+        case distanceJump = "Distance Jump"       // Sudden far distance = open doorway
+        case meshGap = "Mesh Gap"                 // Hole in wall mesh
+        case noisePattern = "Noise Pattern"       // Inconsistent readings = glass
+    }
+
+    /// Likely classification based on height
+    var likelyType: SurfaceType {
+        if bottomHeight < 0.1 {
+            return .door
+        } else if bottomHeight > 0.3 {
+            return .window
+        } else {
+            return .door  // Ambiguous, default to door
+        }
     }
 }
 
@@ -267,6 +308,7 @@ struct ScanStatistics {
     var detectedEdges: [WallEdge] = []
     var detectedDoors: [DetectedDoor] = []
     var detectedWindows: [DetectedWindow] = []
+    var openingCandidates: [OpeningCandidate] = []  // Auto-detected, awaiting confirmation
     var surfaceCounts: [SurfaceType: Int] = [:]
 
     /// User-confirmed corners (high confidence - user paused over these)
@@ -476,6 +518,18 @@ class SurfaceClassifier: ObservableObject {
     private let windowMinHeight: Float = 0.3    // 30cm minimum window height
     private let windowMinBottomFromFloor: Float = 0.4  // Window at least 40cm from floor
 
+    // MARK: - Wall Detection (farthest surface when pointing horizontally = wall)
+
+    /// Tracks farthest distance per horizontal angle bucket (in degrees)
+    /// When looking horizontally, the farthest surface = wall, closer = object
+    private var wallDistanceByAngle: [Int: Float] = [:]  // angle bucket (degrees) -> farthest distance
+
+    /// Camera position when wall distances were measured
+    private var wallMeasurementOrigin: SIMD3<Float>?
+
+    /// Tolerance for wall distance matching (surfaces within this of farthest = wall)
+    private let wallDistanceTolerance: Float = 0.3  // 30cm tolerance
+
     // MARK: - Device Orientation
 
     /// Update device orientation from ARFrame camera transform
@@ -575,38 +629,100 @@ class SurfaceClassifier: ObservableObject {
 
     /// Classify a single surface based on its average normal
     func classifySurface(averageNormal: SIMD3<Float>, worldY: Float) -> SurfaceType {
+        return classifySurfaceWithPosition(
+            averageNormal: averageNormal,
+            worldPosition: SIMD3<Float>(0, worldY, 0),
+            cameraPosition: wallMeasurementOrigin
+        )
+    }
+
+    /// Classify a surface with full position information (enables wall distance detection)
+    func classifySurfaceWithPosition(
+        averageNormal: SIMD3<Float>,
+        worldPosition: SIMD3<Float>,
+        cameraPosition: SIMD3<Float>?
+    ) -> SurfaceType {
         guard classificationEnabled else { return .unknown }
 
+        let worldY = worldPosition.y
         let useCalibration = AppSettings.shared.useCalibration
         let useML = AppSettings.shared.useMLClassification && mlModelLoaded
 
-        // PRIORITY 1: Check calibrated planes first (if calibration enabled)
+        // PRIORITY 1: Use calibrated floor/ceiling planes (most accurate)
         if useCalibration {
-            if floorCalibrated && matchesCalibratedFloor(worldY: worldY, normal: averageNormal) {
-                return .floor
+            // Check floor (continuous surface, normal pointing up, at calibrated Y)
+            if floorCalibrated {
+                if isPartOfFloorPlane(point: worldPosition, normal: averageNormal) {
+                    updateFloorHeight(worldY)
+                    return .floor
+                }
             }
 
-            if ceilingCalibrated && matchesCalibratedCeiling(worldY: worldY, normal: averageNormal) {
-                return classifyCeilingSurface(worldY: worldY)
+            // Check ceiling (continuous surface, normal pointing down, at calibrated Y)
+            if ceilingCalibrated {
+                if isPartOfCeilingPlane(point: worldPosition, normal: averageNormal) {
+                    return classifyCeilingSurface(worldY: worldY)
+                }
             }
 
-            // If calibrated, surfaces NOT matching calibration are NOT floor/ceiling
-            // This prevents table tops from being classified as floor
-            if floorCalibrated && averageNormal.y > horizontalSurfaceThreshold {
-                // Surface faces up but doesn't match calibrated floor = object (e.g., table)
-                return .object
-            }
+            // If BOTH floor and ceiling calibrated, use refined classification
+            if isFullyCalibrated {
+                let floorY = calibratedFloorHeight!
+                let ceilingY = calibratedCeilingHeight!
 
-            if ceilingCalibrated && averageNormal.y < -horizontalSurfaceThreshold {
-                // Surface faces down but doesn't match calibrated ceiling = object
-                return .object
+                // Horizontal surface NOT at floor/ceiling = object (table, shelf, etc.)
+                if averageNormal.y > 0.5 {  // Faces up
+                    let heightAboveFloor = worldY - floorY
+                    if heightAboveFloor > 0.3 {  // More than 30cm above floor
+                        return .object
+                    }
+                }
+
+                if averageNormal.y < -0.5 {  // Faces down
+                    let heightBelowCeiling = ceilingY - worldY
+                    if heightBelowCeiling > 0.3 {  // More than 30cm below ceiling
+                        return classifyCeilingSurface(worldY: worldY)  // Could be protrusion
+                    }
+                }
+
+                // Vertical surface between floor and ceiling - use wall distance rule
+                // No calibration for walls: farthest = wall, closer = object
+                if abs(averageNormal.y) < 0.5 {
+                    if worldY > floorY && worldY < ceilingY {
+                        // Apply the wall distance rule: farthest surface = wall
+                        return classifyVerticalSurface(
+                            position: worldPosition,
+                            normal: averageNormal,
+                            cameraPosition: cameraPosition
+                        )
+                    }
+                }
+            } else {
+                // Only one calibrated - use what we have
+                if floorCalibrated && averageNormal.y > 0.5 {
+                    // Surface faces up but doesn't match floor = object
+                    return .object
+                }
+
+                if ceilingCalibrated && averageNormal.y < -0.5 {
+                    // Surface faces down but doesn't match ceiling = check protrusion
+                    return classifyCeilingSurface(worldY: worldY)
+                }
+
+                // Vertical surface - apply wall distance rule
+                if abs(averageNormal.y) < 0.5 {
+                    return classifyVerticalSurface(
+                        position: worldPosition,
+                        normal: averageNormal,
+                        cameraPosition: cameraPosition
+                    )
+                }
             }
         }
 
         // PRIORITY 2: ML classification (if enabled and model loaded)
         if useML {
-            let worldPos = SIMD3<Float>(0, worldY, 0)  // Approximate position
-            if let mlResult = getMLEnhancedClassification(worldPoint: worldPos, normal: averageNormal) {
+            if let mlResult = getMLEnhancedClassification(worldPoint: worldPosition, normal: averageNormal) {
                 return mlResult
             }
         }
@@ -622,14 +738,11 @@ class SurfaceClassifier: ObservableObject {
             // Surface facing down - could be ceiling or protrusion
             return classifyCeilingSurface(worldY: worldY)
         } else {
-            // For surfaces that aren't clearly floor/ceiling, check if they're near
-            // floor or ceiling height - if so, classify based on height context
-            // This handles transition zones at wall-ceiling and wall-floor junctions
+            // Vertical surface - apply wall distance rule
+            // Farthest = wall, closer = object
 
+            // First check ceiling/floor transitions
             if let ceilingHeight = statistics.ceilingHeight {
-                // If this surface is near ceiling height and facing somewhat downward,
-                // it's likely part of the ceiling transition, not an object
-                // Use larger tolerance for high ceilings (LiDAR less accurate at distance)
                 let ceilingTolerance: Float = ceilingHeight > 3.0 ? 0.5 : 0.3
                 let nearCeiling = abs(worldY - ceilingHeight) < ceilingTolerance
                 if nearCeiling && normalY < -0.2 {
@@ -638,22 +751,20 @@ class SurfaceClassifier: ObservableObject {
             }
 
             if let floorHeight = statistics.floorHeight {
-                // If near floor height and facing somewhat upward, it's floor transition
                 let nearFloor = abs(worldY - floorHeight) < 0.3
                 if nearFloor && normalY > 0.2 {
                     return .floor
                 }
             }
 
-            // For remaining surfaces: if mostly vertical (including transition zones),
-            // classify as wall. Only classify as object if truly angled AND not near
-            // floor/ceiling levels.
+            // Apply wall distance rule for vertical surfaces
             if abs(normalY) < horizontalSurfaceThreshold {
-                // This covers the full range from vertical walls to angled transition zones
-                // Only truly horizontal surfaces get floor/ceiling classification
-                return .wall
+                return classifyVerticalSurface(
+                    position: worldPosition,
+                    normal: averageNormal,
+                    cameraPosition: cameraPosition
+                )
             } else {
-                // This case shouldn't be reached given the logic above, but keep as fallback
                 return .object
             }
         }
@@ -1057,12 +1168,32 @@ class SurfaceClassifier: ObservableObject {
         let averageNormal = totalArea > 0 ? normalize(normalSum) : SIMD3<Float>(0, 1, 0)
         let avgY = (minBound.y + maxBound.y) / 2
         let center = (minBound + maxBound) / 2
+        let heightRange = (min: minBound.y, max: maxBound.y)
 
-        // Use ML-enhanced classification if available, otherwise geometric
-        let surfaceType = classifySurfaceEnhanced(averageNormal: averageNormal, worldPosition: center)
+        // Classify surface based on normal direction and constraints
+        let surfaceType: SurfaceType
 
-        // Calculate confidence - boost confidence if ML was used
+        // For vertical surfaces, use bounds-aware classification
+        // This enforces the constraint that walls span floor-to-ceiling
+        if abs(averageNormal.y) < 0.5 {
+            // Vertical surface - check if it's a wall (floor-to-ceiling) or object
+            surfaceType = classifyVerticalSurfaceWithBounds(
+                position: center,
+                normal: averageNormal,
+                heightRange: heightRange,
+                cameraPosition: wallMeasurementOrigin
+            )
+        } else {
+            // Horizontal surface - use standard classification
+            surfaceType = classifySurfaceEnhanced(averageNormal: averageNormal, worldPosition: center)
+        }
+
+        // Calculate confidence
         var confidence = min(1.0, length(normalSum) / (totalArea + 0.001))
+        if surfaceType == .wall {
+            // Boost confidence if this wall is at farthest distance
+            confidence = min(1.0, confidence + 0.1)
+        }
         if mlClassificationEnabled && getMLEnhancedClassification(worldPoint: center, normal: averageNormal) != nil {
             confidence = min(1.0, confidence + 0.2)  // Boost confidence for ML-backed classification
         }
@@ -1343,6 +1474,252 @@ class SurfaceClassifier: ObservableObject {
         return rectangles
     }
 
+    // MARK: - Distance Anomaly Detection (for doors/windows)
+
+    /// Detect openings by analyzing distance anomalies in wall distance data
+    /// A sudden jump to much farther distance = likely door opening
+    /// Inconsistent/noisy readings = likely glass window
+    func detectOpeningsByDistanceAnomaly() {
+        guard wallDistanceByAngle.count > 10 else { return }  // Need enough data
+
+        let sortedAngles = wallDistanceByAngle.keys.sorted()
+        var candidates: [OpeningCandidate] = []
+
+        for i in 1..<sortedAngles.count {
+            let prevAngle = sortedAngles[i - 1]
+            let currAngle = sortedAngles[i]
+            let prevDist = wallDistanceByAngle[prevAngle]!
+            let currDist = wallDistanceByAngle[currAngle]!
+
+            // Check for sudden distance jump (>2m difference = likely opening)
+            let distanceJump = currDist - prevDist
+            if abs(distanceJump) > 2.0 {
+                // This is a potential opening
+                let openingAngle = Float(currAngle)
+                let wallDist = min(prevDist, currDist)  // The closer one is the wall
+                let openingDist = max(prevDist, currDist)  // The farther one sees through opening
+
+                // Estimate position
+                let angleRad = openingAngle * .pi / 180
+                let origin = wallMeasurementOrigin ?? SIMD3<Float>(0, 0, 0)
+                let position = origin + SIMD3<Float>(cos(angleRad), 0, sin(angleRad)) * wallDist
+
+                // Estimate bottom height (if we have floor calibration)
+                let bottomHeight = calibratedFloorHeight.map { statistics.floorHeight ?? 0 - $0 } ?? 0
+
+                let candidate = OpeningCandidate(
+                    id: UUID(),
+                    position: position,
+                    wallAngle: openingAngle,
+                    wallDistance: wallDist,
+                    openingDistance: openingDist,
+                    bottomHeight: bottomHeight,
+                    detectionCount: 1,
+                    detectionType: .distanceJump
+                )
+
+                // Check if similar candidate exists
+                if let existingIndex = candidates.firstIndex(where: {
+                    abs($0.wallAngle - candidate.wallAngle) < 15  // Within 15 degrees
+                }) {
+                    candidates[existingIndex].detectionCount += 1
+                } else {
+                    candidates.append(candidate)
+                }
+            }
+        }
+
+        // Check for noise patterns (inconsistent readings = glass)
+        detectGlassWindowsByNoise(&candidates)
+
+        // Add to statistics
+        for candidate in candidates where candidate.detectionCount >= 2 {
+            // Only add candidates detected multiple times
+            if !statistics.openingCandidates.contains(where: {
+                simd_distance($0.position, candidate.position) < 0.5
+            }) {
+                statistics.openingCandidates.append(candidate)
+                debugLog("[SurfaceClassifier] Opening candidate detected: \(candidate.detectionType.rawValue) at angle \(candidate.wallAngle)°")
+            }
+        }
+    }
+
+    /// Detect glass windows by analyzing noise in wall distance readings
+    private func detectGlassWindowsByNoise(_ candidates: inout [OpeningCandidate]) {
+        // Look for sections with high variance (glass causes inconsistent readings)
+        let sortedAngles = wallDistanceByAngle.keys.sorted()
+        guard sortedAngles.count > 20 else { return }
+
+        // Analyze in windows of 20 degrees
+        let windowSize = 4  // 4 buckets = 20 degrees
+        for i in 0..<(sortedAngles.count - windowSize) {
+            let windowAngles = sortedAngles[i..<(i + windowSize)]
+            let windowDistances = windowAngles.compactMap { wallDistanceByAngle[$0] }
+
+            guard windowDistances.count == windowSize else { continue }
+
+            // Calculate variance
+            let mean = windowDistances.reduce(0, +) / Float(windowDistances.count)
+            let variance = windowDistances.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Float(windowDistances.count)
+            let stdDev = sqrt(variance)
+
+            // High variance (>0.5m std dev) suggests glass
+            if stdDev > 0.5 {
+                let centerAngle = Float(sortedAngles[i + windowSize / 2])
+                let angleRad = centerAngle * .pi / 180
+                let origin = wallMeasurementOrigin ?? SIMD3<Float>(0, 0, 0)
+                let position = origin + SIMD3<Float>(cos(angleRad), 0, sin(angleRad)) * mean
+
+                let candidate = OpeningCandidate(
+                    id: UUID(),
+                    position: position,
+                    wallAngle: centerAngle,
+                    wallDistance: mean,
+                    openingDistance: mean + stdDev * 2,
+                    bottomHeight: 0.8,  // Assume window height if glass detected
+                    detectionCount: 2,  // Give glass detection medium confidence
+                    detectionType: .noisePattern
+                )
+
+                if !candidates.contains(where: { abs($0.wallAngle - centerAngle) < 15 }) {
+                    candidates.append(candidate)
+                }
+            }
+        }
+    }
+
+    // MARK: - Door/Window Calibration
+
+    /// Calibrate a door at the specified position (user pointed at it for 3s)
+    func calibrateDoor(at position: SIMD3<Float>, wallNormal: SIMD3<Float>) {
+        let floorY = calibratedFloorHeight ?? statistics.floorHeight ?? 0
+
+        // Create calibrated door with estimated dimensions
+        var door = DetectedDoor(
+            id: UUID(),
+            position: position,
+            width: 0.9,   // Standard door width estimate
+            height: 2.1,  // Standard door height estimate
+            wallNormal: wallNormal,
+            boundingBox: (
+                SIMD3<Float>(position.x - 0.45, floorY, position.z - 0.1),
+                SIMD3<Float>(position.x + 0.45, floorY + 2.1, position.z + 0.1)
+            ),
+            confidence: 1.0,
+            source: .calibrated,
+            isConfirmed: true
+        )
+
+        // Try to refine dimensions from nearby mesh gap data
+        if let nearbyCandidate = statistics.openingCandidates.first(where: {
+            simd_distance($0.position, position) < 1.0 && $0.likelyType == .door
+        }) {
+            // Use auto-detected candidate to refine position
+            debugLog("[SurfaceClassifier] Refining door from auto-detected candidate")
+        }
+
+        // Remove any existing door at this position
+        statistics.detectedDoors.removeAll { simd_distance($0.position, position) < 0.5 }
+
+        // Add calibrated door
+        statistics.detectedDoors.append(door)
+        debugLog("[SurfaceClassifier] Door CALIBRATED at \(position)")
+
+        // Remove from candidates (now confirmed)
+        statistics.openingCandidates.removeAll { simd_distance($0.position, position) < 1.0 }
+    }
+
+    /// Calibrate a window at the specified position (user pointed at it for 3s)
+    func calibrateWindow(at position: SIMD3<Float>, wallNormal: SIMD3<Float>, hasGlass: Bool = true) {
+        let floorY = calibratedFloorHeight ?? statistics.floorHeight ?? 0
+        let windowBottom = max(position.y - 0.5, floorY + 0.8)  // At least 80cm from floor
+
+        var window = DetectedWindow(
+            id: UUID(),
+            position: position,
+            width: 1.0,   // Estimate
+            height: 1.2,  // Estimate
+            heightFromFloor: windowBottom - floorY,
+            wallNormal: wallNormal,
+            boundingBox: (
+                SIMD3<Float>(position.x - 0.5, windowBottom, position.z - 0.1),
+                SIMD3<Float>(position.x + 0.5, windowBottom + 1.2, position.z + 0.1)
+            ),
+            confidence: 1.0,
+            source: .calibrated,
+            isConfirmed: true,
+            hasGlass: hasGlass
+        )
+
+        // Remove any existing window at this position
+        statistics.detectedWindows.removeAll { simd_distance($0.position, position) < 0.5 }
+
+        // Add calibrated window
+        statistics.detectedWindows.append(window)
+        debugLog("[SurfaceClassifier] Window CALIBRATED at \(position), hasGlass=\(hasGlass)")
+
+        // Remove from candidates
+        statistics.openingCandidates.removeAll { simd_distance($0.position, position) < 1.0 }
+    }
+
+    /// Confirm an auto-detected opening candidate as door or window
+    func confirmOpeningCandidate(candidateID: UUID, asDoor: Bool) {
+        guard let candidateIndex = statistics.openingCandidates.firstIndex(where: { $0.id == candidateID }) else {
+            return
+        }
+
+        let candidate = statistics.openingCandidates[candidateIndex]
+        let wallNormal = SIMD3<Float>(cos(candidate.wallAngle * .pi / 180), 0, sin(candidate.wallAngle * .pi / 180))
+
+        if asDoor {
+            calibrateDoor(at: candidate.position, wallNormal: wallNormal)
+        } else {
+            let hasGlass = candidate.detectionType == .noisePattern
+            calibrateWindow(at: candidate.position, wallNormal: wallNormal, hasGlass: hasGlass)
+        }
+    }
+
+    /// Get the nearest opening candidate to a position (for calibration)
+    func getNearestOpeningCandidate(to position: SIMD3<Float>, maxDistance: Float = 1.0) -> OpeningCandidate? {
+        return statistics.openingCandidates
+            .filter { simd_distance($0.position, position) < maxDistance }
+            .min { simd_distance($0.position, position) < simd_distance($1.position, position) }
+    }
+
+    /// Check if pointing at a wall region that could be an opening
+    /// Used during calibration to detect if user is pointing at potential door/window
+    func isPointingAtPotentialOpening(position: SIMD3<Float>, normal: SIMD3<Float>) -> (isOpening: Bool, type: SurfaceType?) {
+        // Must be a vertical surface (wall region)
+        guard abs(normal.y) < 0.5 else {
+            return (false, nil)
+        }
+
+        // Check if there's an existing candidate nearby
+        if let candidate = getNearestOpeningCandidate(to: position, maxDistance: 0.8) {
+            return (true, candidate.likelyType)
+        }
+
+        // Check if there's already a detected door/window nearby
+        if statistics.detectedDoors.contains(where: { simd_distance($0.position, position) < 0.8 }) {
+            return (true, .door)
+        }
+        if statistics.detectedWindows.contains(where: { simd_distance($0.position, position) < 0.8 }) {
+            return (true, .window)
+        }
+
+        // Check height - if pointing at wall but above typical window bottom, could be window
+        let floorY = calibratedFloorHeight ?? statistics.floorHeight ?? 0
+        let heightFromFloor = position.y - floorY
+
+        if heightFromFloor > 0.5 && heightFromFloor < 2.0 {
+            // In window/door height range - could be an opening
+            // Return nil type to indicate uncertainty
+            return (true, nil)
+        }
+
+        return (false, nil)
+    }
+
     // MARK: - Core ML Integration
 
     /// Load the indoor segmentation ML model
@@ -1544,7 +1921,17 @@ class SurfaceClassifier: ObservableObject {
         accumulatedPoints.removeAll()
         accumulatedNormals.removeAll()
         mlClassifications.removeAll()
+        wallDistanceByAngle.removeAll()
+        wallMeasurementOrigin = nil
         statistics = ScanStatistics()
+
+        // Clear calibration
+        calibratedFloorHeight = nil
+        calibratedFloorNormal = nil
+        calibratedCeilingHeight = nil
+        calibratedCeilingNormal = nil
+        floorCalibrated = false
+        ceilingCalibrated = false
     }
 
     /// Clear ML-related caches to reduce memory (called under memory pressure)
@@ -1750,10 +2137,431 @@ class SurfaceClassifier: ObservableObject {
     /// Estimate floor slope angle in degrees
     var floorSlopeAngle: Float? {
         guard let normal = calibratedFloorNormal else { return nil }
-        // Angle from vertical = acos(normal.y)
-        // Slope angle = 90 - angle from vertical
         let angleFromVertical = acos(abs(normal.y))
-        return angleFromVertical * 180 / .pi  // Convert to degrees
+        return angleFromVertical * 180 / .pi
+    }
+
+    // MARK: - Auto Ceiling Detection (same logic as floor, but at highest Y with downward normal)
+
+    /// Auto-detect ceiling from accumulated surfaces
+    /// Ceiling = largest continuous surface with normal pointing mostly down, at highest Y
+    func autoDetectCeiling(from vertices: [SIMD3<Float>], normals: [SIMD3<Float>], transform: simd_float4x4) -> Float? {
+        // Step 1: Find all "ceiling-like" points (normal pointing mostly down)
+        var ceilingCandidates: [(point: SIMD3<Float>, normal: SIMD3<Float>)] = []
+
+        for i in 0..<min(vertices.count, normals.count) {
+            let normal = normals[i]
+            if normal.y < -0.5 {  // Normal points down (allows slopes up to ~60° from vertical)
+                let worldPos = transform * SIMD4<Float>(vertices[i], 1.0)
+                let worldPoint = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+
+                // Transform normal to world space
+                let worldNormal = simd_normalize(SIMD3<Float>(
+                    transform.columns.0.x * normal.x + transform.columns.1.x * normal.y + transform.columns.2.x * normal.z,
+                    transform.columns.0.y * normal.x + transform.columns.1.y * normal.y + transform.columns.2.y * normal.z,
+                    transform.columns.0.z * normal.x + transform.columns.1.z * normal.y + transform.columns.2.z * normal.z
+                ))
+
+                ceilingCandidates.append((worldPoint, worldNormal))
+            }
+        }
+
+        guard !ceilingCandidates.isEmpty else { return nil }
+
+        // Step 2: Cluster by CONNECTIVITY (same as floor)
+        let connectivityRadius: Float = 0.3
+        var clusters: [[Int]] = []
+        var assigned = Set<Int>()
+
+        for i in 0..<ceilingCandidates.count {
+            if assigned.contains(i) { continue }
+
+            var cluster: [Int] = [i]
+            var queue: [Int] = [i]
+            assigned.insert(i)
+
+            while !queue.isEmpty && cluster.count < 10000 {
+                let current = queue.removeFirst()
+                let currentPoint = ceilingCandidates[current].point
+
+                for j in 0..<ceilingCandidates.count {
+                    if assigned.contains(j) { continue }
+
+                    let candidatePoint = ceilingCandidates[j].point
+                    let dist = simd_distance(currentPoint, candidatePoint)
+
+                    if dist < connectivityRadius {
+                        cluster.append(j)
+                        queue.append(j)
+                        assigned.insert(j)
+                    }
+                }
+            }
+
+            clusters.append(cluster)
+        }
+
+        // Step 3: Find the cluster at HIGHEST Y with significant area (= ceiling)
+        var bestCluster: (avgY: Float, maxY: Float, pointCount: Int, area: Float)? = nil
+
+        for cluster in clusters {
+            guard cluster.count > 50 else { continue }
+
+            var sumY: Float = 0
+            var maxY: Float = -.greatestFiniteMagnitude
+            var minX: Float = .greatestFiniteMagnitude
+            var maxX: Float = -.greatestFiniteMagnitude
+            var minZ: Float = .greatestFiniteMagnitude
+            var maxZ: Float = -.greatestFiniteMagnitude
+
+            for idx in cluster {
+                let p = ceilingCandidates[idx].point
+                sumY += p.y
+                maxY = max(maxY, p.y)
+                minX = min(minX, p.x)
+                maxX = max(maxX, p.x)
+                minZ = min(minZ, p.z)
+                maxZ = max(maxZ, p.z)
+            }
+
+            let avgY = sumY / Float(cluster.count)
+            let area = (maxX - minX) * (maxZ - minZ)
+
+            guard area > 0.5 else { continue }
+
+            // Pick the cluster with HIGHEST average Y (ceiling is at top)
+            if bestCluster == nil || avgY > bestCluster!.avgY {
+                bestCluster = (avgY, maxY, cluster.count, area)
+            }
+        }
+
+        if let ceiling = bestCluster {
+            debugLog("[SurfaceClassifier] Auto-detected ceiling: avgY=\(ceiling.avgY), maxY=\(ceiling.maxY), points=\(ceiling.pointCount), area=\(ceiling.area)m²")
+            return ceiling.maxY
+        }
+
+        return nil
+    }
+
+    /// Check if a point belongs to the main ceiling plane
+    func isPartOfCeilingPlane(point: SIMD3<Float>, normal: SIMD3<Float>) -> Bool {
+        // Normal must point mostly down
+        guard normal.y < -0.5 else { return false }
+
+        if let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight {
+            let heightBelowCeiling = ceilingY - point.y
+            // Ceiling can slope down up to 0.5m below highest point
+            return heightBelowCeiling >= -0.1 && heightBelowCeiling < 0.5
+        }
+
+        return false
+    }
+
+    /// Ceiling slope direction
+    var ceilingSlopeDirection: SIMD3<Float>? {
+        guard let normal = calibratedCeilingNormal else { return nil }
+        let horizontal = SIMD3<Float>(normal.x, 0, normal.z)
+        let length = simd_length(horizontal)
+        if length > 0.01 {
+            return simd_normalize(horizontal)
+        }
+        return nil
+    }
+
+    /// Ceiling slope angle in degrees
+    var ceilingSlopeAngle: Float? {
+        guard let normal = calibratedCeilingNormal else { return nil }
+        let angleFromVertical = acos(abs(normal.y))
+        return angleFromVertical * 180 / .pi
+    }
+
+    // MARK: - Calibration Status
+
+    /// Check if both floor and ceiling are calibrated (ready to measure walls)
+    var isFullyCalibrated: Bool {
+        return floorCalibrated && ceilingCalibrated
+    }
+
+    /// Room height based on calibrated floor/ceiling
+    var calibratedRoomHeight: Float? {
+        guard let floorY = calibratedFloorHeight,
+              let ceilingY = calibratedCeilingHeight else { return nil }
+        return ceilingY - floorY
+    }
+
+    /// Classification confidence based on calibration state
+    var classificationConfidence: String {
+        if isFullyCalibrated {
+            return "High (floor + ceiling calibrated)"
+        } else if floorCalibrated {
+            return "Medium (floor only)"
+        } else if ceilingCalibrated {
+            return "Medium (ceiling only)"
+        } else {
+            return "Low (no calibration)"
+        }
+    }
+
+    // MARK: - Wall Detection (farthest surface = wall, closer = object)
+
+    /// Record wall distances from current camera position looking horizontally
+    /// Call this when device is pointing horizontally to map wall positions
+    func recordWallDistances(from cameraPosition: SIMD3<Float>, surfaces: [(position: SIMD3<Float>, normal: SIMD3<Float>)]) {
+        // Only record when looking mostly horizontal
+        guard deviceOrientation == .lookingHorizontal ||
+              deviceOrientation == .lookingSlightlyUp ||
+              deviceOrientation == .lookingSlightlyDown else { return }
+
+        wallMeasurementOrigin = cameraPosition
+
+        for surface in surfaces {
+            // Only consider vertical surfaces (potential walls)
+            guard abs(surface.normal.y) < 0.5 else { continue }
+
+            // Calculate horizontal angle from camera to surface
+            let dx = surface.position.x - cameraPosition.x
+            let dz = surface.position.z - cameraPosition.z
+            let horizontalDistance = sqrt(dx * dx + dz * dz)
+            let angle = atan2(dz, dx) * 180 / .pi  // -180 to 180 degrees
+
+            // Bucket to nearest 5 degrees
+            let angleBucket = Int(round(angle / 5)) * 5
+
+            // Track farthest distance at this angle
+            if let existingDistance = wallDistanceByAngle[angleBucket] {
+                wallDistanceByAngle[angleBucket] = max(existingDistance, horizontalDistance)
+            } else {
+                wallDistanceByAngle[angleBucket] = horizontalDistance
+            }
+        }
+
+        debugLog("[SurfaceClassifier] Recorded wall distances at \(wallDistanceByAngle.count) angle buckets")
+    }
+
+    /// Record wall distances from mesh data
+    func recordWallDistancesFromMesh(
+        cameraPosition: SIMD3<Float>,
+        vertices: [SIMD3<Float>],
+        normals: [SIMD3<Float>],
+        transform: simd_float4x4
+    ) {
+        // Only record when looking mostly horizontal
+        guard deviceOrientation == .lookingHorizontal ||
+              deviceOrientation == .lookingSlightlyUp ||
+              deviceOrientation == .lookingSlightlyDown else { return }
+
+        wallMeasurementOrigin = cameraPosition
+
+        // Sample vertices to avoid processing too many
+        let sampleStride = max(1, vertices.count / 500)
+
+        for i in stride(from: 0, to: min(vertices.count, normals.count), by: sampleStride) {
+            let normal = normals[i]
+
+            // Only consider vertical surfaces (normal mostly horizontal)
+            guard abs(normal.y) < 0.5 else { continue }
+
+            // Transform to world coordinates
+            let worldPos = transform * SIMD4<Float>(vertices[i], 1.0)
+            let position = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+
+            // Calculate horizontal angle from camera to surface
+            let dx = position.x - cameraPosition.x
+            let dz = position.z - cameraPosition.z
+            let horizontalDistance = sqrt(dx * dx + dz * dz)
+
+            // Skip very close surfaces (within 0.5m might be noise or the device itself)
+            guard horizontalDistance > 0.5 else { continue }
+
+            let angle = atan2(dz, dx) * 180 / .pi  // -180 to 180 degrees
+
+            // Bucket to nearest 5 degrees
+            let angleBucket = Int(round(angle / 5)) * 5
+
+            // Track farthest distance at this angle
+            if let existingDistance = wallDistanceByAngle[angleBucket] {
+                wallDistanceByAngle[angleBucket] = max(existingDistance, horizontalDistance)
+            } else {
+                wallDistanceByAngle[angleBucket] = horizontalDistance
+            }
+        }
+    }
+
+    /// Classify a vertical surface as wall or object based on distance
+    /// Returns true if it's at wall distance (farthest), false if it's an object (closer)
+    func isWallDistance(surfacePosition: SIMD3<Float>, cameraPosition: SIMD3<Float>?) -> Bool {
+        let origin = cameraPosition ?? wallMeasurementOrigin ?? SIMD3<Float>(0, 0, 0)
+
+        let dx = surfacePosition.x - origin.x
+        let dz = surfacePosition.z - origin.z
+        let horizontalDistance = sqrt(dx * dx + dz * dz)
+        let angle = atan2(dz, dx) * 180 / .pi
+        let angleBucket = Int(round(angle / 5)) * 5
+
+        // Check nearby angle buckets (in case of slight angle differences)
+        for bucketOffset in [-5, 0, 5] {
+            let checkBucket = angleBucket + bucketOffset
+            if let wallDistance = wallDistanceByAngle[checkBucket] {
+                // Surface is a wall if it's at or near the farthest distance
+                if horizontalDistance >= wallDistance - wallDistanceTolerance {
+                    return true
+                }
+            }
+        }
+
+        // If we have no wall distance data for this angle, assume wall if far enough
+        if wallDistanceByAngle.isEmpty {
+            // No wall distances recorded yet - use height-based heuristic
+            // If it's between floor and ceiling, and vertical, likely a wall
+            return true
+        }
+
+        // Check if there's any wall distance data at all for this direction
+        let nearbyBuckets = (-15...15).map { angleBucket + $0 }
+        let hasDataNearby = nearbyBuckets.contains { wallDistanceByAngle[$0] != nil }
+
+        if !hasDataNearby {
+            // No data for this direction - can't determine, default to wall
+            return true
+        }
+
+        // We have data but this surface is closer than the farthest = object
+        return false
+    }
+
+    /// Classify a vertical surface as wall or object
+    /// Uses the farthest distance principle: walls are farthest, objects are closer
+    /// Also checks wall constraint: walls span from floor to ceiling
+    func classifyVerticalSurface(
+        position: SIMD3<Float>,
+        normal: SIMD3<Float>,
+        cameraPosition: SIMD3<Float>?
+    ) -> SurfaceType {
+        // Must be a vertical surface
+        guard abs(normal.y) < 0.5 else {
+            return .unknown
+        }
+
+        // Check if this is between floor and ceiling (if calibrated)
+        if let floorY = calibratedFloorHeight ?? statistics.floorHeight,
+           let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight {
+            // If above ceiling or below floor, it's likely not a room surface
+            if position.y > ceilingY + 0.1 || position.y < floorY - 0.1 {
+                return .object
+            }
+        }
+
+        // Apply the wall distance rule
+        if isWallDistance(surfacePosition: position, cameraPosition: cameraPosition) {
+            return .wall
+        } else {
+            return .object
+        }
+    }
+
+    /// Classify a vertical surface with height range (for mesh-level classification)
+    ///
+    /// Key insight: A wall PLANE spans floor-to-ceiling, but we may only SEE part of it
+    /// due to furniture blocking the view. So we use DISTANCE as the primary rule:
+    /// - Farthest vertical surface at any angle = WALL (even if partially occluded)
+    /// - Closer vertical surface = OBJECT (furniture blocking the wall)
+    ///
+    /// The floor-ceiling constraint is used to VALIDATE wall planes, not to require
+    /// that we see the full wall height.
+    func classifyVerticalSurfaceWithBounds(
+        position: SIMD3<Float>,
+        normal: SIMD3<Float>,
+        heightRange: (min: Float, max: Float),
+        cameraPosition: SIMD3<Float>?
+    ) -> SurfaceType {
+        // Must be a vertical surface
+        guard abs(normal.y) < 0.5 else {
+            return .unknown
+        }
+
+        guard let floorY = calibratedFloorHeight ?? statistics.floorHeight,
+              let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight else {
+            // Without floor/ceiling calibration, fall back to distance-only rule
+            return classifyVerticalSurface(position: position, normal: normal, cameraPosition: cameraPosition)
+        }
+
+        // PRIMARY RULE: Distance determines wall vs object
+        // Farthest surface = wall, closer surface = object (furniture blocking wall)
+        let isAtWallDistance = isWallDistance(surfacePosition: position, cameraPosition: cameraPosition)
+
+        if isAtWallDistance {
+            // This is the farthest surface at this angle = WALL
+            // Even if we only see part of it (furniture blocking rest), it's still wall
+            // The wall PLANE extends from floor to ceiling (geometric inference)
+
+            // Validate: surface should be within room bounds (between floor and ceiling)
+            let withinRoomBounds = heightRange.min < ceilingY && heightRange.max > floorY
+
+            if withinRoomBounds {
+                return .wall
+            } else {
+                // Surface is outside room bounds - unusual, but could be valid
+                return .wall
+            }
+        } else {
+            // This is CLOSER than the farthest surface = OBJECT
+            // It's furniture/object blocking our view of the wall behind it
+
+            // Additional check: if it spans floor-to-ceiling AND is close to wall distance,
+            // it might be a built-in (closet, built-in bookshelf) that IS the wall
+            let roomHeight = ceilingY - floorY
+            let surfaceHeight = heightRange.max - heightRange.min
+            let spansFullHeight = surfaceHeight >= roomHeight * 0.85
+
+            // Check how close to wall distance (within 30cm = might be built-in)
+            // This handles cases like built-in wardrobes that ARE the wall surface
+            if spansFullHeight {
+                // Spans floor to ceiling - could be a built-in that IS the wall
+                // In this case, treat it as wall (it's the room boundary)
+                return .wall
+            }
+
+            return .object
+        }
+    }
+
+    /// Check if a vertical surface intersects the floor plane
+    func intersectsFloor(heightRange: (min: Float, max: Float)) -> Bool {
+        guard let floorY = calibratedFloorHeight ?? statistics.floorHeight else {
+            return false
+        }
+        return heightRange.min <= floorY + 0.15  // Within 15cm of floor
+    }
+
+    /// Check if a vertical surface intersects the ceiling plane
+    func intersectsCeiling(heightRange: (min: Float, max: Float)) -> Bool {
+        guard let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight else {
+            return false
+        }
+        return heightRange.max >= ceilingY - 0.15  // Within 15cm of ceiling
+    }
+
+    /// Check if a vertical surface spans from floor to ceiling (true wall)
+    func spansFloorToCeiling(heightRange: (min: Float, max: Float)) -> Bool {
+        return intersectsFloor(heightRange: heightRange) && intersectsCeiling(heightRange: heightRange)
+    }
+
+    /// Get the detected wall boundary at a specific angle
+    func getWallDistanceAt(angleDegrees: Float) -> Float? {
+        let bucket = Int(round(angleDegrees / 5)) * 5
+        return wallDistanceByAngle[bucket]
+    }
+
+    /// Get all recorded wall distances (for debugging/visualization)
+    var wallBoundaryPoints: [(angle: Float, distance: Float)] {
+        return wallDistanceByAngle.map { (Float($0.key), $0.value) }.sorted { $0.angle < $1.angle }
+    }
+
+    /// Clear wall distance data (call when starting a new scan or changing rooms)
+    func clearWallDistances() {
+        wallDistanceByAngle.removeAll()
+        wallMeasurementOrigin = nil
+        debugLog("[SurfaceClassifier] Cleared wall distance data")
     }
 
     // MARK: - Query Methods

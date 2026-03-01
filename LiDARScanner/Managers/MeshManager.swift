@@ -57,13 +57,29 @@ class MeshManager: NSObject, ObservableObject {
     private var lastConfirmedPosition: SIMD3<Float>?  // Prevent duplicate confirmations
     private let speechSynthesizer = AVSpeechSynthesizer()
 
-    // Calibration: user points at floor/ceiling for 3+ seconds to calibrate
+    // Calibration: user points at floor/ceiling/door/window for 3+ seconds to calibrate
     private let calibrationPauseDuration: TimeInterval = 3.0  // 3 seconds to calibrate
     private var calibrationStartTime: Date?
     private var calibrationSurface: SurfaceType?  // What surface are we looking at
     @Published var isCalibrating = false
     @Published var calibrationProgress: Double = 0  // 0 to 1 progress
+    @Published var calibrationSurfaceName: String = ""  // "Floor", "Ceiling", "Door", "Window"
     private var lastCalibrationFeedbackTime: Date = .distantPast
+
+    /// Number of auto-detected opening candidates (awaiting confirmation)
+    var openingCandidatesCount: Int {
+        surfaceClassifier.statistics.openingCandidates.count
+    }
+
+    /// Number of confirmed doors
+    var confirmedDoorsCount: Int {
+        surfaceClassifier.statistics.detectedDoors.filter { $0.isConfirmed }.count
+    }
+
+    /// Number of confirmed windows
+    var confirmedWindowsCount: Int {
+        surfaceClassifier.statistics.detectedWindows.filter { $0.isConfirmed }.count
+    }
 
     // Speech recognition for voice commands
     private var speechRecognizer: SFSpeechRecognizer?
@@ -907,73 +923,59 @@ class MeshManager: NSObject, ObservableObject {
         }
     }
 
-    /// Register a door at the given position
+    /// Register a door at the given position (via voice command)
     private func registerDoor(at position: SIMD3<Float>, frame: ARFrame) {
-        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
-        let width: Float = 0.9   // Default door width ~90cm
-        let height: Float = 2.1  // Default door height ~210cm
-
         // Estimate wall normal from camera direction (perpendicular to viewing direction)
         let cameraForward = frame.camera.transform.columns.2
         let wallNormal = SIMD3<Float>(-cameraForward.x, 0, -cameraForward.z)
         let normalizedWallNormal = simd_normalize(wallNormal)
 
-        // Calculate bounding box centered on position, from floor up
-        let halfWidth = width / 2
-        let boundingBox = (
-            min: SIMD3<Float>(position.x - halfWidth, floorY, position.z - 0.1),
-            max: SIMD3<Float>(position.x + halfWidth, floorY + height, position.z + 0.1)
-        )
+        // Use the calibration method which handles all the details
+        surfaceClassifier.calibrateDoor(at: position, wallNormal: normalizedWallNormal)
 
-        let door = DetectedDoor(
-            id: UUID(),
-            position: position,
-            width: width,
-            height: height,
-            wallNormal: normalizedWallNormal,
-            boundingBox: boundingBox,
-            confidence: 1.0  // User-confirmed = high confidence
-        )
-        surfaceClassifier.statistics.detectedDoors.append(door)
+        // Update the source to voice command
+        if var lastDoor = surfaceClassifier.statistics.detectedDoors.last {
+            lastDoor.source = .voiceCommand
+            surfaceClassifier.statistics.detectedDoors[surfaceClassifier.statistics.detectedDoors.count - 1] = lastDoor
+        }
     }
 
-    /// Register a window at the given position
+    /// Register a window at the given position (via voice command)
     private func registerWindow(at position: SIMD3<Float>, frame: ARFrame) {
-        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
-        let width: Float = 1.0           // Default window width ~100cm
-        let height: Float = 1.2          // Default window height ~120cm
-        let heightFromFloor: Float = 0.9 // Default sill height ~90cm
-
-        // Estimate wall normal from camera direction (perpendicular to viewing direction)
-        // Normal points OUTWARD (away from room, through window)
+        // Estimate wall normal from camera direction
         let cameraForward = frame.camera.transform.columns.2
         let outwardNormal = SIMD3<Float>(cameraForward.x, 0, cameraForward.z)
         let normalizedOutward = simd_normalize(outwardNormal)
-
-        // Wall normal points inward (into room)
         let wallNormal = -normalizedOutward
 
-        // Calculate bounding box for window
-        let halfWidth = width / 2
+        // Use the calibration method
+        surfaceClassifier.calibrateWindow(at: position, wallNormal: wallNormal, hasGlass: true)
+
+        // Update the source to voice command
+        if var lastWindow = surfaceClassifier.statistics.detectedWindows.last {
+            lastWindow.source = .voiceCommand
+            surfaceClassifier.statistics.detectedWindows[surfaceClassifier.statistics.detectedWindows.count - 1] = lastWindow
+        }
+
+        // Also create window plane for glass filtering
+        let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+        let heightFromFloor: Float = 0.9  // Default sill height
+        let width: Float = 1.0
+        let height: Float = 1.2
         let windowBottomY = floorY + heightFromFloor
-        let boundingBox = (
-            min: SIMD3<Float>(position.x - halfWidth, windowBottomY, position.z - 0.1),
-            max: SIMD3<Float>(position.x + halfWidth, windowBottomY + height, position.z + 0.1)
-        )
 
-        let windowId = UUID()
-
-        let window = DetectedWindow(
-            id: windowId,
+        let plane = WindowPlane(
+            id: UUID(),
             position: position,
+            normal: normalizedOutward,  // Points outward through glass
             width: width,
             height: height,
-            heightFromFloor: heightFromFloor,
-            wallNormal: wallNormal,
-            boundingBox: boundingBox,
-            confidence: 1.0  // User-confirmed = high confidence
+            bottomY: windowBottomY,
+            handling: .filter
         )
-        surfaceClassifier.statistics.detectedWindows.append(window)
+        windowPlanes.append(plane)
+
+        debugLog("[MeshManager] Window registered with glass filter plane at \(position)")
 
         // Create window plane for glass filtering
         // Default to "filter" mode - remove mesh data beyond the glass
@@ -1023,6 +1025,18 @@ class MeshManager: NSObject, ObservableObject {
         windowPlanes.append(plane)
 
         debugLog("[MeshManager] Glass plane registered at \(position), will filter data beyond")
+    }
+
+    // MARK: - Camera Position
+
+    /// Get the current camera position from the most recent AR frame
+    private func getCurrentCameraPosition() -> SIMD3<Float>? {
+        guard let frame = currentFrame else { return nil }
+        return SIMD3<Float>(
+            frame.camera.transform.columns.3.x,
+            frame.camera.transform.columns.3.y,
+            frame.camera.transform.columns.3.z
+        )
     }
 
     // MARK: - Reticle Target Position
@@ -1188,6 +1202,19 @@ class MeshManager: NSObject, ObservableObject {
         // Extract geometry data
         let meshData = extractMeshData(from: anchor)
 
+        // Record wall distances when looking horizontally (walls mode)
+        // This maps the farthest surface in each direction as "wall"
+        if currentMode == .walls {
+            if let cameraPos = getCurrentCameraPosition() {
+                surfaceClassifier.recordWallDistancesFromMesh(
+                    cameraPosition: cameraPos,
+                    vertices: meshData.vertices,
+                    normals: meshData.normals,
+                    transform: meshData.transform
+                )
+            }
+        }
+
         // Accumulate points for ML classification (walls mode)
         if currentMode == .walls && surfaceClassifier.mlClassificationEnabled {
             surfaceClassifier.accumulatePointsForML(
@@ -1214,10 +1241,17 @@ class MeshManager: NSObject, ObservableObject {
 
         // Detect doors/windows in wall meshes
         if classifiedSurface.surfaceType == .wall && AppSettings.shared.detectDoorsWindows {
+            // Method 1: Gap detection in mesh
             surfaceClassifier.detectOpenings(
                 in: meshData,
                 wallNormal: classifiedSurface.averageNormal
             )
+
+            // Method 2: Distance anomaly detection (run periodically)
+            // Detects openings by sudden jumps in wall distance
+            if meshUpdateCount % 20 == 0 {
+                surfaceClassifier.detectOpeningsByDistanceAnomaly()
+            }
         }
 
         // Process walls with intelligent room builder (walls mode only)
@@ -1998,11 +2032,45 @@ extension MeshManager: ARSessionDelegate {
                             }
                         }
 
-                        if (detectedFloorSurface || detectedCeilingSurface) && currentMode == .walls {
+                        // Check for door/window calibration (vertical surface with potential opening)
+                        var detectedDoorWindow = false
+                        var detectedOpeningType: SurfaceType? = nil
+
+                        if !detectedFloorSurface && !detectedCeilingSurface {
+                            // Check if pointing at a potential door/window
+                            let openingCheck = surfaceClassifier.isPointingAtPotentialOpening(
+                                position: SIMD3<Float>(0, surfaceHeight, 0),
+                                normal: surfaceNormal
+                            )
+                            detectedDoorWindow = openingCheck.isOpening
+                            detectedOpeningType = openingCheck.type
+                        }
+
+                        if (detectedFloorSurface || detectedCeilingSurface || detectedDoorWindow) && currentMode == .walls {
                             // Start or continue calibration
                             if calibrationStartTime == nil {
                                 calibrationStartTime = Date()
-                                calibrationSurface = detectedFloorSurface ? .floor : .ceiling
+                                if detectedFloorSurface {
+                                    calibrationSurface = .floor
+                                    calibrationSurfaceName = "Floor"
+                                } else if detectedCeilingSurface {
+                                    calibrationSurface = .ceiling
+                                    calibrationSurfaceName = "Ceiling"
+                                } else if let openingType = detectedOpeningType {
+                                    calibrationSurface = openingType
+                                    calibrationSurfaceName = openingType == .door ? "Door" : "Window"
+                                } else {
+                                    // Unknown opening type - determine by height
+                                    let floorY = surfaceClassifier.statistics.floorHeight ?? 0
+                                    let heightFromFloor = surfaceHeight - floorY
+                                    if heightFromFloor < 0.3 {
+                                        calibrationSurface = .door
+                                        calibrationSurfaceName = "Door"
+                                    } else {
+                                        calibrationSurface = .window
+                                        calibrationSurfaceName = "Window"
+                                    }
+                                }
                                 isCalibrating = true
                             }
 
@@ -2017,12 +2085,27 @@ extension MeshManager: ARSessionDelegate {
 
                             // Calibration complete!
                             if calibrationTime >= calibrationPauseDuration {
-                                if detectedFloorSurface {
+                                let position = SIMD3<Float>(0, surfaceHeight, 0)
+
+                                switch calibrationSurface {
+                                case .floor:
                                     surfaceClassifier.calibrateFloor(height: surfaceHeight, normal: surfaceNormal)
                                     speakConfirmation("Floor calibrated")
-                                } else {
+                                case .ceiling:
                                     surfaceClassifier.calibrateCeiling(height: surfaceHeight, normal: surfaceNormal)
                                     speakConfirmation("Ceiling calibrated")
+                                case .door:
+                                    if let targetPos = getReticleTargetPosition(frame: frame) {
+                                        surfaceClassifier.calibrateDoor(at: targetPos, wallNormal: surfaceNormal)
+                                        speakConfirmation("Door calibrated")
+                                    }
+                                case .window:
+                                    if let targetPos = getReticleTargetPosition(frame: frame) {
+                                        surfaceClassifier.calibrateWindow(at: targetPos, wallNormal: surfaceNormal)
+                                        speakConfirmation("Window calibrated")
+                                    }
+                                default:
+                                    break
                                 }
 
                                 hapticGenerator.impactOccurred(intensity: 1.0)
@@ -2032,14 +2115,16 @@ extension MeshManager: ARSessionDelegate {
                                 calibrationProgress = 0
                                 calibrationStartTime = nil
                                 calibrationSurface = nil
+                                calibrationSurfaceName = ""
                             }
                         } else {
-                            // Not looking at floor/ceiling - reset calibration
+                            // Not looking at calibratable surface - reset calibration
                             if isCalibrating {
                                 isCalibrating = false
                                 calibrationProgress = 0
                                 calibrationStartTime = nil
                                 calibrationSurface = nil
+                                calibrationSurfaceName = ""
                             }
                         }
 
@@ -2072,6 +2157,7 @@ extension MeshManager: ARSessionDelegate {
                         calibrationProgress = 0
                         calibrationStartTime = nil
                         calibrationSurface = nil
+                        calibrationSurfaceName = ""
                     }
                 }
                 lastCameraPosition = currentPosition
