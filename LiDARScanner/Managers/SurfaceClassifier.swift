@@ -577,28 +577,41 @@ class SurfaceClassifier: ObservableObject {
     func classifySurface(averageNormal: SIMD3<Float>, worldY: Float) -> SurfaceType {
         guard classificationEnabled else { return .unknown }
 
-        // PRIORITY 1: Check calibrated planes first (user-confirmed)
-        if floorCalibrated && matchesCalibratedFloor(worldY: worldY, normal: averageNormal) {
-            return .floor
+        let useCalibration = AppSettings.shared.useCalibration
+        let useML = AppSettings.shared.useMLClassification && mlModelLoaded
+
+        // PRIORITY 1: Check calibrated planes first (if calibration enabled)
+        if useCalibration {
+            if floorCalibrated && matchesCalibratedFloor(worldY: worldY, normal: averageNormal) {
+                return .floor
+            }
+
+            if ceilingCalibrated && matchesCalibratedCeiling(worldY: worldY, normal: averageNormal) {
+                return classifyCeilingSurface(worldY: worldY)
+            }
+
+            // If calibrated, surfaces NOT matching calibration are NOT floor/ceiling
+            // This prevents table tops from being classified as floor
+            if floorCalibrated && averageNormal.y > horizontalSurfaceThreshold {
+                // Surface faces up but doesn't match calibrated floor = object (e.g., table)
+                return .object
+            }
+
+            if ceilingCalibrated && averageNormal.y < -horizontalSurfaceThreshold {
+                // Surface faces down but doesn't match calibrated ceiling = object
+                return .object
+            }
         }
 
-        if ceilingCalibrated && matchesCalibratedCeiling(worldY: worldY, normal: averageNormal) {
-            return classifyCeilingSurface(worldY: worldY)
+        // PRIORITY 2: ML classification (if enabled and model loaded)
+        if useML {
+            let worldPos = SIMD3<Float>(0, worldY, 0)  // Approximate position
+            if let mlResult = getMLEnhancedClassification(worldPoint: worldPos, normal: averageNormal) {
+                return mlResult
+            }
         }
 
-        // If calibrated, surfaces NOT matching calibration are NOT floor/ceiling
-        // This prevents table tops from being classified as floor
-        if floorCalibrated && averageNormal.y > horizontalSurfaceThreshold {
-            // Surface faces up but doesn't match calibrated floor = object (e.g., table)
-            return .object
-        }
-
-        if ceilingCalibrated && averageNormal.y < -horizontalSurfaceThreshold {
-            // Surface faces down but doesn't match calibrated ceiling = object
-            return .object
-        }
-
-        // PRIORITY 2: If not calibrated, use heuristics
+        // PRIORITY 3: Geometric heuristics (fallback or when both toggles off)
         let normalY = averageNormal.y
 
         if normalY > horizontalSurfaceThreshold {

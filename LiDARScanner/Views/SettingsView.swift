@@ -251,6 +251,43 @@ struct SettingsView: View {
 
                     if settings.surfaceClassificationEnabled {
                         Toggle("Detect Doors & Windows", isOn: $settings.detectDoorsWindows)
+
+                        // Classification method toggles
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Classification Methods")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 8)
+
+                            Toggle(isOn: $settings.useCalibration) {
+                                VStack(alignment: .leading) {
+                                    Text("Use Floor/Ceiling Calibration")
+                                    Text("Point at floor/ceiling for 3s to calibrate")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            Toggle(isOn: $settings.useMLClassification) {
+                                VStack(alignment: .leading) {
+                                    Text("Use ML Classification")
+                                    Text("Neural network for surface detection")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            // Status indicator
+                            HStack {
+                                Text("Active Method:")
+                                    .font(.caption)
+                                Spacer()
+                                Text(classificationMethodDescription)
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                            .padding(.top, 4)
+                        }
                     }
 
                     if settings.surfaceClassificationEnabled {
@@ -434,6 +471,21 @@ struct SettingsView: View {
 
     private func checkFaceTrackingAvailability() -> Bool {
         return ARFaceTrackingConfiguration.isSupported
+    }
+
+    private var classificationMethodDescription: String {
+        let useML = settings.useMLClassification
+        let useCal = settings.useCalibration
+
+        if useML && useCal {
+            return "ML + Calibration"
+        } else if useML {
+            return "ML Only"
+        } else if useCal {
+            return "Calibration Only"
+        } else {
+            return "Geometric Heuristics"
+        }
     }
 }
 

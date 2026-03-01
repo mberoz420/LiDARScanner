@@ -117,6 +117,14 @@ class AppSettings: ObservableObject {
     @AppStorage("voiceCommandsEnabled") var voiceCommandsEnabled: Bool = false  // Speak to mark features (disabled by default - requires permissions)
     @AppStorage("autoDetectionEnabled") var autoDetectionEnabled: Bool = true  // Automatic edge detection
 
+    // Classification method toggles (for testing/comparison)
+    @AppStorage("useMLClassification") var useMLClassification: Bool = true   // Use ML model if available
+    @AppStorage("useCalibration") var useCalibration: Bool = true             // Use floor/ceiling calibration
+    // When both off: pure geometric heuristics (normal direction only)
+    // When ML only: model predicts without calibration constraints
+    // When calibration only: height-locked planes, no ML
+    // When both on: ML + calibration for best accuracy
+
     // Feedback settings
     @AppStorage("speechFeedbackEnabled") var speechFeedbackEnabled: Bool = true
     @AppStorage("hapticFeedbackEnabled") var hapticFeedbackEnabled: Bool = true
