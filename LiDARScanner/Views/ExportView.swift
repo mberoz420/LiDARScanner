@@ -58,8 +58,20 @@ struct ExportView: View {
     @State private var sessionSaveSuccess = false
     @State private var saveErrorMessage: String?
     @State private var sessionSaveLocation: SessionSaveLocation = .local
+    @State private var lastSaveLocation: SessionSaveLocation = .local
     @ObservedObject private var sessionManager = ScanSessionManager.shared
     @ObservedObject private var driveManager = GoogleDriveManager.shared
+
+    private var saveSuccessMessage: String {
+        switch lastSaveLocation {
+        case .local:
+            return "Find it in Saved Scans tab"
+        case .googleDrive:
+            return "Uploaded to Google Drive → LiDAR Scans folder"
+        case .iCloud:
+            return "Find in Files app → iCloud Drive → LiDARScanner"
+        }
+    }
     @Environment(\.dismiss) private var dismiss
 
     private let wallReconstructor = WallReconstructor()
@@ -394,9 +406,15 @@ struct ExportView: View {
         }
 
         if sessionSaveSuccess {
-            Label("Session saved! Find it in Saved Scans.", systemImage: "checkmark.circle.fill")
-                .foregroundColor(.green)
-                .transition(.opacity)
+            VStack(spacing: 4) {
+                Label("Session saved!", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text(saveSuccessMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .transition(.opacity)
         }
 
         if isSavingSession {
@@ -638,6 +656,7 @@ struct ExportView: View {
             // Dismiss sheet and show success
             showSaveSession = false
             saveErrorMessage = nil
+            lastSaveLocation = sessionSaveLocation
 
             withAnimation {
                 sessionSaveSuccess = true
@@ -698,30 +717,36 @@ struct ExportView: View {
             throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found locally"])
         }
 
-        // Get iCloud container URL
+        // Try to get the iCloud container first
         guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else {
             throw NSError(domain: "ExportView", code: 11, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available. Please enable iCloud Drive:\n\n1. Open Settings → Apple ID → iCloud\n2. Enable 'iCloud Drive'\n3. Make sure LiDARScanner is allowed\n\nOr the app's iCloud capability may not be configured in Xcode."])
         }
 
+        // Save to Documents folder within the container - this makes it visible in Files app
+        // The folder will appear as "LiDARScanner" in iCloud Drive
         let iCloudURL = containerURL
             .appendingPathComponent("Documents")
-            .appendingPathComponent("ScanSessions")
+            .appendingPathComponent("LiDAR Scans")
 
         print("[ExportView] iCloud container URL: \(containerURL.path)")
         print("[ExportView] iCloud destination folder: \(iCloudURL.path)")
 
-        // Create ScanSessions folder in iCloud if needed
+        // Create LiDAR Scans folder in iCloud if needed
         do {
             if !FileManager.default.fileExists(atPath: iCloudURL.path) {
                 try FileManager.default.createDirectory(at: iCloudURL, withIntermediateDirectories: true)
-                print("[ExportView] Created iCloud ScanSessions folder")
+                print("[ExportView] Created iCloud 'LiDAR Scans' folder")
             }
         } catch {
             throw NSError(domain: "ExportView", code: 12, userInfo: [NSLocalizedDescriptionKey: "Failed to create iCloud folder: \(error.localizedDescription)"])
         }
 
-        // Copy file to iCloud
-        let destinationURL = iCloudURL.appendingPathComponent("\(sessionId.uuidString).json")
+        // Create a user-friendly filename with the session name
+        let safeSessionName = sessionName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let filename = "\(safeSessionName)_\(sessionId.uuidString.prefix(8)).json"
+        let destinationURL = iCloudURL.appendingPathComponent(filename)
 
         do {
             // Remove existing file if present
@@ -738,6 +763,7 @@ struct ExportView: View {
         // Verify the file exists
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             print("[ExportView] Verified: File exists in iCloud")
+            print("[ExportView] File will appear in Files app → iCloud Drive → LiDARScanner → LiDAR Scans")
         } else {
             print("[ExportView] Warning: File may still be uploading to iCloud")
         }
