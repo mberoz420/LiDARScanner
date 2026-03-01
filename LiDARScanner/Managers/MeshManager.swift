@@ -57,6 +57,14 @@ class MeshManager: NSObject, ObservableObject {
     private var lastConfirmedPosition: SIMD3<Float>?  // Prevent duplicate confirmations
     private let speechSynthesizer = AVSpeechSynthesizer()
 
+    // Calibration: user points at floor/ceiling for 3+ seconds to calibrate
+    private let calibrationPauseDuration: TimeInterval = 3.0  // 3 seconds to calibrate
+    private var calibrationStartTime: Date?
+    private var calibrationSurface: SurfaceType?  // What surface are we looking at
+    @Published var isCalibrating = false
+    @Published var calibrationProgress: Double = 0  // 0 to 1 progress
+    private var lastCalibrationFeedbackTime: Date = .distantPast
+
     // Speech recognition for voice commands
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -1072,6 +1080,44 @@ class MeshManager: NSObject, ObservableObject {
         return closestPosition
     }
 
+    /// Get the surface normal at the point where the reticle is pointing
+    /// Used for floor/ceiling calibration to detect horizontal surfaces
+    private func getSurfaceNormalAtReticle(frame: ARFrame) -> SIMD3<Float>? {
+        guard let arView = arView else { return nil }
+
+        // Raycast from center of screen
+        let screenCenter = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+
+        // Try raycast against mesh (requires LiDAR)
+        if let raycastQuery = arView.makeRaycastQuery(
+            from: screenCenter,
+            allowing: .estimatedPlane,
+            alignment: .any
+        ) {
+            let results = arView.session.raycast(raycastQuery)
+            if let firstResult = results.first {
+                // Get the normal from the raycast result
+                // The worldTransform's columns.1 gives the surface normal
+                let normal = SIMD3<Float>(
+                    firstResult.worldTransform.columns.1.x,
+                    firstResult.worldTransform.columns.1.y,
+                    firstResult.worldTransform.columns.1.z
+                )
+                return simd_normalize(normal)
+            }
+        }
+
+        // Fallback: estimate from device orientation
+        let pitch = surfaceClassifier.devicePitch
+        if pitch < -0.5 {  // Looking down
+            return SIMD3<Float>(0, 1, 0)  // Floor normal points up
+        } else if pitch > 0.5 {  // Looking up
+            return SIMD3<Float>(0, -1, 0)  // Ceiling normal points down
+        }
+
+        return nil
+    }
+
     // MARK: - Memory Management
 
     /// Check if memory is getting low
@@ -1928,11 +1974,81 @@ extension MeshManager: ARSessionDelegate {
                         // Device is still
                         if pauseStartTime == nil {
                             pauseStartTime = Date()
-                        } else if Date().timeIntervalSince(pauseStartTime!) >= pauseDuration {
+                        }
+
+                        let pauseTime = Date().timeIntervalSince(pauseStartTime!)
+
+                        // Check for floor/ceiling calibration based on SURFACE normal (not device orientation)
+                        // User can look at floor/ceiling at any angle - we detect via surface normal
+                        var detectedFloorSurface = false
+                        var detectedCeilingSurface = false
+                        var surfaceHeight: Float = 0
+                        var surfaceNormal = SIMD3<Float>(0, 1, 0)
+
+                        if let targetPos = getReticleTargetPosition(frame: frame) {
+                            surfaceHeight = targetPos.y
+                            // Get the surface normal at the raycast hit point
+                            if let hitNormal = getSurfaceNormalAtReticle(frame: frame) {
+                                surfaceNormal = hitNormal
+                                // Floor: normal pointing up (within ~85-95 degrees of vertical)
+                                // normal.y > 0.7 means < 45 degrees from up
+                                detectedFloorSurface = hitNormal.y > 0.7
+                                // Ceiling: normal pointing down
+                                detectedCeilingSurface = hitNormal.y < -0.7
+                            }
+                        }
+
+                        if (detectedFloorSurface || detectedCeilingSurface) && currentMode == .walls {
+                            // Start or continue calibration
+                            if calibrationStartTime == nil {
+                                calibrationStartTime = Date()
+                                calibrationSurface = detectedFloorSurface ? .floor : .ceiling
+                                isCalibrating = true
+                            }
+
+                            let calibrationTime = Date().timeIntervalSince(calibrationStartTime!)
+                            calibrationProgress = min(1.0, calibrationTime / calibrationPauseDuration)
+
+                            // Provide haptic feedback during calibration (every 0.5s)
+                            if Date().timeIntervalSince(lastCalibrationFeedbackTime) > 0.5 {
+                                hapticGenerator.impactOccurred(intensity: 0.3)
+                                lastCalibrationFeedbackTime = Date()
+                            }
+
+                            // Calibration complete!
+                            if calibrationTime >= calibrationPauseDuration {
+                                if detectedFloorSurface {
+                                    surfaceClassifier.calibrateFloor(height: surfaceHeight, normal: surfaceNormal)
+                                    speakConfirmation("Floor calibrated")
+                                } else {
+                                    surfaceClassifier.calibrateCeiling(height: surfaceHeight, normal: surfaceNormal)
+                                    speakConfirmation("Ceiling calibrated")
+                                }
+
+                                hapticGenerator.impactOccurred(intensity: 1.0)
+
+                                // Reset calibration state
+                                isCalibrating = false
+                                calibrationProgress = 0
+                                calibrationStartTime = nil
+                                calibrationSurface = nil
+                            }
+                        } else {
+                            // Not looking at floor/ceiling - reset calibration
+                            if isCalibrating {
+                                isCalibrating = false
+                                calibrationProgress = 0
+                                calibrationStartTime = nil
+                                calibrationSurface = nil
+                            }
+                        }
+
+                        // Original corner confirmation logic (after short pause)
+                        if pauseTime >= pauseDuration {
                             if !isPaused {
                                 isPaused = true
-                                // Check if pause gesture is enabled
-                                if AppSettings.shared.pauseGestureEnabled && !edgeConfirmed {
+                                // Check if pause gesture is enabled (for corners, not calibration)
+                                if AppSettings.shared.pauseGestureEnabled && !edgeConfirmed && !isCalibrating {
                                     // If auto-detection is on, require edge to be detected
                                     // If auto-detection is off, allow marking anywhere (manual mode)
                                     let shouldConfirm = !AppSettings.shared.autoDetectionEnabled || edgeInReticle
@@ -1948,10 +2064,14 @@ extension MeshManager: ARSessionDelegate {
                             }
                         }
                     } else {
-                        // Device is moving
+                        // Device is moving - reset all states
                         isPaused = false
                         pauseStartTime = nil
                         edgeConfirmed = false
+                        isCalibrating = false
+                        calibrationProgress = 0
+                        calibrationStartTime = nil
+                        calibrationSurface = nil
                     }
                 }
                 lastCameraPosition = currentPosition

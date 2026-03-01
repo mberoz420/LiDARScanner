@@ -394,6 +394,21 @@ class SurfaceClassifier: ObservableObject {
     @Published var mlModelLoaded = false
     @Published var mlClassificationEnabled = false  // Use ML when available
 
+    // MARK: - Calibrated Reference Planes (user-confirmed by pointing)
+    @Published var floorCalibrated = false
+    @Published var ceilingCalibrated = false
+
+    /// Calibrated floor plane - user pointed at floor for 3+ seconds
+    private var calibratedFloorHeight: Float?
+    private var calibratedFloorNormal: SIMD3<Float>?
+
+    /// Calibrated ceiling plane - user pointed at ceiling for 3+ seconds
+    private var calibratedCeilingHeight: Float?
+    private var calibratedCeilingNormal: SIMD3<Float>?
+
+    /// Tolerance for matching calibrated planes (meters)
+    private let calibrationTolerance: Float = 0.15  // 15cm tolerance
+
     // MARK: - Core ML Model
     private var segmentationModel: MLModel?
     private var lastMLInferenceTime: Date = .distantPast
@@ -494,16 +509,100 @@ class SurfaceClassifier: ObservableObject {
         }
     }
 
+    // MARK: - Calibration (User teaches floor/ceiling by pointing)
+
+    /// Calibrate floor plane - called when user points at floor for 3+ seconds
+    func calibrateFloor(height: Float, normal: SIMD3<Float>) {
+        calibratedFloorHeight = height
+        calibratedFloorNormal = normal
+        floorCalibrated = true
+        statistics.floorHeight = height
+        debugLog("[SurfaceClassifier] Floor CALIBRATED at Y=\(height), normal=\(normal)")
+    }
+
+    /// Calibrate ceiling plane - called when user points at ceiling for 3+ seconds
+    func calibrateCeiling(height: Float, normal: SIMD3<Float>) {
+        calibratedCeilingHeight = height
+        calibratedCeilingNormal = normal
+        ceilingCalibrated = true
+        statistics.ceilingHeight = height
+        debugLog("[SurfaceClassifier] Ceiling CALIBRATED at Y=\(height), normal=\(normal)")
+    }
+
+    /// Clear floor calibration
+    func clearFloorCalibration() {
+        calibratedFloorHeight = nil
+        calibratedFloorNormal = nil
+        floorCalibrated = false
+        debugLog("[SurfaceClassifier] Floor calibration cleared")
+    }
+
+    /// Clear ceiling calibration
+    func clearCeilingCalibration() {
+        calibratedCeilingHeight = nil
+        calibratedCeilingNormal = nil
+        ceilingCalibrated = false
+        debugLog("[SurfaceClassifier] Ceiling calibration cleared")
+    }
+
+    /// Check if a point matches the calibrated floor plane
+    private func matchesCalibratedFloor(worldY: Float, normal: SIMD3<Float>) -> Bool {
+        guard let floorY = calibratedFloorHeight else { return false }
+
+        // Must be within tolerance of calibrated height
+        let heightMatch = abs(worldY - floorY) < calibrationTolerance
+
+        // Normal should be pointing up (similar to calibrated normal)
+        let normalMatch = normal.y > 0.5
+
+        return heightMatch && normalMatch
+    }
+
+    /// Check if a point matches the calibrated ceiling plane
+    private func matchesCalibratedCeiling(worldY: Float, normal: SIMD3<Float>) -> Bool {
+        guard let ceilingY = calibratedCeilingHeight else { return false }
+
+        // Must be within tolerance of calibrated height
+        let heightMatch = abs(worldY - ceilingY) < calibrationTolerance
+
+        // Normal should be pointing down (similar to calibrated normal)
+        let normalMatch = normal.y < -0.5
+
+        return heightMatch && normalMatch
+    }
+
     // MARK: - Surface Classification
 
     /// Classify a single surface based on its average normal
     func classifySurface(averageNormal: SIMD3<Float>, worldY: Float) -> SurfaceType {
         guard classificationEnabled else { return .unknown }
 
+        // PRIORITY 1: Check calibrated planes first (user-confirmed)
+        if floorCalibrated && matchesCalibratedFloor(worldY: worldY, normal: averageNormal) {
+            return .floor
+        }
+
+        if ceilingCalibrated && matchesCalibratedCeiling(worldY: worldY, normal: averageNormal) {
+            return classifyCeilingSurface(worldY: worldY)
+        }
+
+        // If calibrated, surfaces NOT matching calibration are NOT floor/ceiling
+        // This prevents table tops from being classified as floor
+        if floorCalibrated && averageNormal.y > horizontalSurfaceThreshold {
+            // Surface faces up but doesn't match calibrated floor = object (e.g., table)
+            return .object
+        }
+
+        if ceilingCalibrated && averageNormal.y < -horizontalSurfaceThreshold {
+            // Surface faces down but doesn't match calibrated ceiling = object
+            return .object
+        }
+
+        // PRIORITY 2: If not calibrated, use heuristics
         let normalY = averageNormal.y
 
         if normalY > horizontalSurfaceThreshold {
-            // Surface facing up = floor
+            // Surface facing up = floor (uncalibrated mode)
             updateFloorHeight(worldY)
             return .floor
         } else if normalY < -horizontalSurfaceThreshold {
