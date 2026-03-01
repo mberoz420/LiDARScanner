@@ -351,25 +351,15 @@ class ArchitecturalExtractor: ObservableObject {
         return .unknown
     }
 
-    // MARK: - Core ML Classification (Future)
+    // MARK: - Core ML Classification
 
     private func classifyWithML(
         vertices: [SIMD3<Float>],
         normals: [SIMD3<Float>],
         model: MLModel
     ) async -> [SurfaceCategory] {
-
-        // TODO: Implement Core ML inference
-        // 1. Convert vertices/normals to MLMultiArray input
-        // 2. Run model prediction
-        // 3. Parse output classifications
-
-        // For now, fall back to geometric
-        return classifyGeometric(
-            vertices: vertices,
-            normals: normals,
-            roomBounds: estimateRoomBounds(vertices: vertices)
-        )
+        // Use the ML model for classification
+        return await classifyWithMLModel(vertices: vertices, normals: normals, model: model)
     }
 
     // MARK: - RANSAC Plane Detection
@@ -724,14 +714,114 @@ class ArchitecturalExtractor: ObservableObject {
 
     /// Load a trained Core ML model for semantic segmentation
     func loadMLModel(named modelName: String) -> Bool {
-        // TODO: Load compiled .mlmodelc from bundle
-        // guard let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc"),
-        //       let model = try? MLModel(contentsOf: modelURL) else {
-        //     return false
-        // }
-        // segmentationModel = model
-        // return true
+        // Try to load compiled model from bundle
+        if let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") {
+            do {
+                let config = MLModelConfiguration()
+                config.computeUnits = .cpuAndNeuralEngine  // Use Neural Engine when available
+                segmentationModel = try MLModel(contentsOf: modelURL, configuration: config)
+                print("[ArchitecturalExtractor] Loaded ML model: \(modelName)")
+                return true
+            } catch {
+                print("[ArchitecturalExtractor] Failed to load model: \(error)")
+            }
+        }
 
-        return false  // No model available yet
+        // Try mlpackage
+        if let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlpackage") {
+            do {
+                let compiledURL = try MLModel.compileModel(at: modelURL)
+                let config = MLModelConfiguration()
+                config.computeUnits = .cpuAndNeuralEngine
+                segmentationModel = try MLModel(contentsOf: compiledURL, configuration: config)
+                print("[ArchitecturalExtractor] Loaded and compiled ML model: \(modelName)")
+                return true
+            } catch {
+                print("[ArchitecturalExtractor] Failed to compile/load model: \(error)")
+            }
+        }
+
+        print("[ArchitecturalExtractor] Model not found: \(modelName)")
+        return false
+    }
+
+    /// Check if ML model is loaded
+    var hasMLModel: Bool {
+        segmentationModel != nil
+    }
+
+    // MARK: - Core ML Inference
+
+    /// Classify points using Core ML model
+    private func classifyWithMLModel(
+        vertices: [SIMD3<Float>],
+        normals: [SIMD3<Float>],
+        model: MLModel
+    ) async -> [SurfaceCategory] {
+
+        // Prepare input: N x 6 array (x, y, z, nx, ny, nz)
+        let numPoints = vertices.count
+        guard numPoints > 0 else { return [] }
+
+        do {
+            // Create MLMultiArray for input
+            let inputArray = try MLMultiArray(shape: [1, NSNumber(value: numPoints), 6], dataType: .float32)
+
+            // Fill input data
+            for i in 0..<numPoints {
+                let vertex = vertices[i]
+                let normal = i < normals.count ? normals[i] : SIMD3<Float>(0, 1, 0)
+
+                inputArray[[0, i, 0] as [NSNumber]] = NSNumber(value: vertex.x)
+                inputArray[[0, i, 1] as [NSNumber]] = NSNumber(value: vertex.y)
+                inputArray[[0, i, 2] as [NSNumber]] = NSNumber(value: vertex.z)
+                inputArray[[0, i, 3] as [NSNumber]] = NSNumber(value: normal.x)
+                inputArray[[0, i, 4] as [NSNumber]] = NSNumber(value: normal.y)
+                inputArray[[0, i, 5] as [NSNumber]] = NSNumber(value: normal.z)
+            }
+
+            // Create feature provider
+            let inputFeatures = try MLDictionaryFeatureProvider(dictionary: ["points": inputArray])
+
+            // Run inference
+            let output = try model.prediction(from: inputFeatures)
+
+            // Parse output (N x 4 probabilities)
+            guard let outputArray = output.featureValue(for: "classifications")?.multiArrayValue else {
+                print("[ArchitecturalExtractor] Failed to get output array")
+                return classifyGeometric(vertices: vertices, normals: normals, roomBounds: estimateRoomBounds(vertices: vertices))
+            }
+
+            // Convert to classifications
+            var classifications: [SurfaceCategory] = []
+            for i in 0..<numPoints {
+                // Get probabilities for this point
+                let floorProb = outputArray[[0, i, 0] as [NSNumber]].floatValue
+                let ceilingProb = outputArray[[0, i, 1] as [NSNumber]].floatValue
+                let wallProb = outputArray[[0, i, 2] as [NSNumber]].floatValue
+                let objectProb = outputArray[[0, i, 3] as [NSNumber]].floatValue
+
+                // Find max probability
+                let probs = [floorProb, ceilingProb, wallProb, objectProb]
+                let maxIdx = probs.enumerated().max(by: { $0.element < $1.element })?.offset ?? 3
+
+                let category: SurfaceCategory
+                switch maxIdx {
+                case 0: category = .floor
+                case 1: category = .ceiling
+                case 2: category = .wall
+                default: category = .unknown
+                }
+                classifications.append(category)
+            }
+
+            print("[ArchitecturalExtractor] ML classification complete: \(numPoints) points")
+            return classifications
+
+        } catch {
+            print("[ArchitecturalExtractor] ML inference failed: \(error)")
+            // Fallback to geometric
+            return classifyGeometric(vertices: vertices, normals: normals, roomBounds: estimateRoomBounds(vertices: vertices))
+        }
     }
 }

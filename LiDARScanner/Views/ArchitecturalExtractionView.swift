@@ -15,21 +15,37 @@ struct ArchitecturalExtractionView: View {
             VStack(spacing: 20) {
                 // Header info
                 VStack(spacing: 8) {
-                    Image(systemName: "building.2")
+                    Image(systemName: extractor.hasMLModel ? "brain" : "building.2")
                         .font(.system(size: 50))
-                        .foregroundColor(.blue)
+                        .foregroundColor(extractor.hasMLModel ? .purple : .blue)
 
                     Text("Extract Architecture")
                         .font(.title2)
                         .fontWeight(.bold)
 
-                    Text("Separate walls, floor, and ceiling from furniture and objects")
+                    Text(extractor.hasMLModel
+                        ? "Using trained ML model for best results"
+                        : "Using geometric heuristics (add ML model for better results)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
+
+                    if extractor.hasMLModel {
+                        Label("Neural Engine", systemImage: "cpu")
+                            .font(.caption2)
+                            .foregroundColor(.purple)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.purple.opacity(0.1))
+                            .cornerRadius(8)
+                    }
                 }
                 .padding(.top)
+                .onAppear {
+                    // Try to load ML model
+                    _ = extractor.loadMLModel(named: "IndoorSegmentation")
+                }
 
                 // Scan info
                 GroupBox {
