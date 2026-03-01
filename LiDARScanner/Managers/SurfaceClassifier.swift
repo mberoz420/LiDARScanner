@@ -1276,7 +1276,7 @@ class SurfaceClassifier: ObservableObject {
     }
 
     /// Run ML inference on a batch of points
-    private func runMLInference(points: [SIMD3<Float>], normals: [SIMD3<Float>], model: MLModel) -> [SIMD3<Float>: SurfaceType] {
+    private nonisolated func runMLInference(points: [SIMD3<Float>], normals: [SIMD3<Float>], model: MLModel) -> [SIMD3<Float>: SurfaceType] {
         guard points.count == normals.count, !points.isEmpty else { return [:] }
 
         let numPoints = points.count
