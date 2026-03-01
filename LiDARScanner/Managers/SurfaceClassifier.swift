@@ -4,6 +4,17 @@ import CoreMotion
 import CoreML
 import simd
 
+// MARK: - Debug Logging (disabled in release builds)
+#if DEBUG
+func debugLog(_ message: String) {
+    print(message)
+}
+#else
+@inline(__always) func debugLog(_ message: String) {
+    // No-op in release builds
+}
+#endif
+
 /// Surface type classification based on normal direction
 enum SurfaceType: String, CaseIterable, Sendable {
     case floor = "Floor"
@@ -708,7 +719,7 @@ class SurfaceClassifier: ObservableObject {
         // Skip edge detection on very large meshes to avoid memory issues
         let maxFacesForEdgeDetection = 5000
         guard faces.count < maxFacesForEdgeDetection else {
-            print("[SurfaceClassifier] Skipping edge detection - mesh too large (\(faces.count) faces)")
+            debugLog("[SurfaceClassifier] Skipping edge detection - mesh too large (\(faces.count) faces)")
             return
         }
 
@@ -717,7 +728,7 @@ class SurfaceClassifier: ObservableObject {
             return
         }
 
-        print("[SurfaceClassifier] detectEdges called with \(faces.count) faces")
+        debugLog("[SurfaceClassifier] detectEdges called with \(faces.count) faces")
 
         // Build edge-to-face mapping
         var edgeToFaces: [String: [Int]] = [:]
@@ -786,7 +797,7 @@ class SurfaceClassifier: ObservableObject {
             }
         }
 
-        print("[SurfaceClassifier] Edge detection: \(typeChangeCount) type changes, \(sharpAngleCount) sharp angles, \(detectedEdgePoints.count) edges found")
+        debugLog("[SurfaceClassifier] Edge detection: \(typeChangeCount) type changes, \(sharpAngleCount) sharp angles, \(detectedEdgePoints.count) edges found")
 
         // Merge nearby edge segments into continuous edges
         mergeEdgeSegments(detectedEdgePoints)
@@ -894,7 +905,7 @@ class SurfaceClassifier: ObservableObject {
             statistics.detectedEdges = Array(statistics.detectedEdges.prefix(150))
         }
 
-        print("[SurfaceClassifier] Total accumulated edges: \(statistics.detectedEdges.count)")
+        debugLog("[SurfaceClassifier] Total accumulated edges: \(statistics.detectedEdges.count)")
     }
 
     /// Classify entire mesh anchor and return dominant surface type
@@ -1231,10 +1242,10 @@ class SurfaceClassifier: ObservableObject {
                 config.computeUnits = .cpuAndNeuralEngine
                 segmentationModel = try MLModel(contentsOf: modelURL, configuration: config)
                 mlModelLoaded = true
-                print("[SurfaceClassifier] Loaded ML model: IndoorSegmentation.mlmodelc")
+                debugLog("[SurfaceClassifier] Loaded ML model: IndoorSegmentation.mlmodelc")
                 return true
             } catch {
-                print("[SurfaceClassifier] Failed to load .mlmodelc: \(error)")
+                debugLog("[SurfaceClassifier] Failed to load .mlmodelc: \(error)")
             }
         }
 
@@ -1246,14 +1257,14 @@ class SurfaceClassifier: ObservableObject {
                 config.computeUnits = .cpuAndNeuralEngine
                 segmentationModel = try MLModel(contentsOf: compiledURL, configuration: config)
                 mlModelLoaded = true
-                print("[SurfaceClassifier] Loaded and compiled ML model: IndoorSegmentation.mlpackage")
+                debugLog("[SurfaceClassifier] Loaded and compiled ML model: IndoorSegmentation.mlpackage")
                 return true
             } catch {
-                print("[SurfaceClassifier] Failed to load .mlpackage: \(error)")
+                debugLog("[SurfaceClassifier] Failed to load .mlpackage: \(error)")
             }
         }
 
-        print("[SurfaceClassifier] No ML model found - using geometric heuristics only")
+        debugLog("[SurfaceClassifier] No ML model found - using geometric heuristics only")
         return false
     }
 
@@ -1261,7 +1272,7 @@ class SurfaceClassifier: ObservableObject {
     func setMLClassificationEnabled(_ enabled: Bool) {
         mlClassificationEnabled = enabled && mlModelLoaded
         if mlClassificationEnabled {
-            print("[SurfaceClassifier] ML classification enabled")
+            debugLog("[SurfaceClassifier] ML classification enabled")
         }
     }
 
@@ -1429,7 +1440,7 @@ class SurfaceClassifier: ObservableObject {
         accumulatedPoints.removeAll()
         accumulatedNormals.removeAll()
         mlClassifications.removeAll()
-        print("[SurfaceClassifier] Cleared ML cache to reduce memory")
+        debugLog("[SurfaceClassifier] Cleared ML cache to reduce memory")
     }
 
     // MARK: - Query Methods

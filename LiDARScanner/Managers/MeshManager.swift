@@ -6,6 +6,20 @@ import UIKit
 import AVFoundation
 import Speech
 
+// MARK: - Debug Logging (disabled in release builds)
+#if DEBUG
+func debugLog(_ message: String) {
+    print(message)
+}
+#else
+@inline(__always) func debugLog(_ message: String) {
+    // No-op in release builds - eliminates disk writes from logging
+}
+#endif
+
+// Maximum total vertices to store (prevents memory bloat)
+private let kMaxTotalVertices = 2_000_000  // 2 million vertices max
+
 @MainActor
 class MeshManager: NSObject, ObservableObject {
     // MARK: - Published State
@@ -273,7 +287,7 @@ class MeshManager: NSObject, ObservableObject {
             clearMeshVisualization()
             edgeVisualizer.clearEdges()
             // Don't reset roomBuilder - keep calibration if available
-            print("[MeshManager] Resuming scan with \(capturedScan?.meshes.count ?? 0) existing meshes")
+            debugLog("[MeshManager] Resuming scan with \(capturedScan?.meshes.count ?? 0) existing meshes")
         } else {
             // Fresh scan - clear everything
             clearMeshVisualization()
@@ -315,7 +329,7 @@ class MeshManager: NSObject, ObservableObject {
             // Load ML model for enhanced wall/floor/ceiling detection
             if surfaceClassifier.loadMLModel() {
                 surfaceClassifier.setMLClassificationEnabled(true)
-                print("[MeshManager] ML-enhanced classification enabled for Walls & Rooms")
+                debugLog("[MeshManager] ML-enhanced classification enabled for Walls & Rooms")
             }
 
             // Start voice commands for walls mode
@@ -484,7 +498,7 @@ class MeshManager: NSObject, ObservableObject {
         // Show overall scan bounds
         if let bounds = totalBounds {
             let size = bounds.max - bounds.min
-            print("[MeshManager] Existing scan bounds: \(size.x)m x \(size.y)m x \(size.z)m")
+            debugLog("[MeshManager] Existing scan bounds: \(size.x)m x \(size.y)m x \(size.z)m")
             scanStatus = String(format: "Loaded %.1fm x %.1fm x %.1fm - scan missing areas",
                               size.x, size.y, size.z)
         } else {
@@ -492,12 +506,12 @@ class MeshManager: NSObject, ObservableObject {
         }
 
         vertexCount = scan.vertexCount
-        print("[MeshManager] Loaded \(scan.meshes.count) existing meshes, repair mode: \(repairMode)")
+        debugLog("[MeshManager] Loaded \(scan.meshes.count) existing meshes, repair mode: \(repairMode)")
         if !classifiedObjects.isEmpty {
-            print("[MeshManager] Restored \(classifiedObjects.count) classified objects")
+            debugLog("[MeshManager] Restored \(classifiedObjects.count) classified objects")
         }
         if !windowPlanes.isEmpty {
-            print("[MeshManager] Restored \(windowPlanes.count) window planes")
+            debugLog("[MeshManager] Restored \(windowPlanes.count) window planes")
         }
     }
 
@@ -611,7 +625,7 @@ class MeshManager: NSObject, ObservableObject {
         // Speech feedback
         speakConfirmation("Corner \(userConfirmedCorners.count)")
 
-        print("[MeshManager] Corner CONFIRMED via \(source) at \(position), total: \(userConfirmedCorners.count)")
+        debugLog("[MeshManager] Corner CONFIRMED via \(source) at \(position), total: \(userConfirmedCorners.count)")
     }
 
     // MARK: - Speech Feedback
@@ -638,7 +652,7 @@ class MeshManager: NSObject, ObservableObject {
     /// Start listening for voice commands
     func startVoiceCommands() {
         guard AppSettings.shared.voiceCommandsEnabled else {
-            print("[MeshManager] Voice commands disabled in settings")
+            debugLog("[MeshManager] Voice commands disabled in settings")
             return
         }
 
@@ -653,7 +667,7 @@ class MeshManager: NSObject, ObservableObject {
                         self?.startListening()
                     }
                 case .denied, .restricted, .notDetermined:
-                    print("[MeshManager] Speech recognition not authorized: \(status)")
+                    debugLog("[MeshManager] Speech recognition not authorized: \(status)")
                 @unknown default:
                     break
                 }
@@ -665,7 +679,7 @@ class MeshManager: NSObject, ObservableObject {
     func stopVoiceCommands() {
         // Only clean up if we were actually listening
         guard isListening || recognitionTask != nil else {
-            print("[MeshManager] Voice commands - nothing to stop")
+            debugLog("[MeshManager] Voice commands - nothing to stop")
             return
         }
 
@@ -684,12 +698,12 @@ class MeshManager: NSObject, ObservableObject {
         }
 
         isListening = false
-        print("[MeshManager] Voice commands stopped")
+        debugLog("[MeshManager] Voice commands stopped")
     }
 
     private func startListening() {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("[MeshManager] Speech recognizer not available")
+            debugLog("[MeshManager] Speech recognizer not available")
             return
         }
 
@@ -709,7 +723,7 @@ class MeshManager: NSObject, ObservableObject {
             try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothA2DP])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
-            print("[MeshManager] Audio session setup failed: \(error)")
+            debugLog("[MeshManager] Audio session setup failed: \(error)")
             return
         }
 
@@ -746,7 +760,7 @@ class MeshManager: NSObject, ObservableObject {
 
         // Validate audio format - crash prevention
         guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
-            print("[MeshManager] Invalid audio format: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
+            debugLog("[MeshManager] Invalid audio format: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
             return
         }
 
@@ -760,9 +774,9 @@ class MeshManager: NSObject, ObservableObject {
         do {
             try audioEngine.start()
             isListening = true
-            print("[MeshManager] Voice commands listening started")
+            debugLog("[MeshManager] Voice commands listening started")
         } catch {
-            print("[MeshManager] Audio engine start failed: \(error)")
+            debugLog("[MeshManager] Audio engine start failed: \(error)")
             // Clean up on failure
             audioEngine.inputNode.removeTap(onBus: 0)
         }
@@ -833,7 +847,7 @@ class MeshManager: NSObject, ObservableObject {
                 let edgeHint = command == .counter || command == .sofa || command == .bed || command == .shelf
                     ? "(\(command.expectedEdges) edges, wall-adjacent)"
                     : "(\(command.expectedEdges) edges)"
-                print("[MeshManager] Voice: \(command.rawValue) at \(position) \(edgeHint)")
+                debugLog("[MeshManager] Voice: \(command.rawValue) at \(position) \(edgeHint)")
             }
         }
     }
@@ -862,7 +876,7 @@ class MeshManager: NSObject, ObservableObject {
         )
 
         classifiedObjects.append(classified)
-        print("[MeshManager] Classified \(category.rawValue) at \(position), group: \(category.exportGroup), total: \(classifiedObjects.count)")
+        debugLog("[MeshManager] Classified \(category.rawValue) at \(position), group: \(category.exportGroup), total: \(classifiedObjects.count)")
     }
 
     /// Default dimensions for object categories (width, height, depth in meters)
@@ -966,14 +980,14 @@ class MeshManager: NSObject, ObservableObject {
         )
         windowPlanes.append(plane)
 
-        print("[MeshManager] Window registered with glass filter plane at \(position)")
+        debugLog("[MeshManager] Window registered with glass filter plane at \(position)")
     }
 
     /// Register furniture to exclude from clean walls export
     private func registerFurniture(at position: SIMD3<Float>) {
         // Store furniture positions for exclusion during wall reconstruction
         // For now, we just log it - can be extended later
-        print("[MeshManager] Furniture registered at \(position) - will be excluded from clean walls")
+        debugLog("[MeshManager] Furniture registered at \(position) - will be excluded from clean walls")
     }
 
     /// Register a glass plane for filtering LiDAR data that passes through
@@ -1000,7 +1014,7 @@ class MeshManager: NSObject, ObservableObject {
         )
         windowPlanes.append(plane)
 
-        print("[MeshManager] Glass plane registered at \(position), will filter data beyond")
+        debugLog("[MeshManager] Glass plane registered at \(position), will filter data beyond")
     }
 
     // MARK: - Reticle Target Position
@@ -1080,7 +1094,7 @@ class MeshManager: NSObject, ObservableObject {
 
     /// Reduce memory usage by clearing caches
     private func reduceMemoryUsage() {
-        print("[MeshManager] Memory pressure detected, reducing usage")
+        debugLog("[MeshManager] Memory pressure detected, reducing usage")
 
         // Clear ML caches
         surfaceClassifier.clearMLCache()
@@ -1181,15 +1195,27 @@ class MeshManager: NSObject, ObservableObject {
             let edges = surfaceClassifier.statistics.detectedEdges
             if !edges.isEmpty {
                 edgeVisualizer.updateEdges(edges)
-                print("[MeshManager] Passing \(edges.count) edges to visualizer")
+                debugLog("[MeshManager] Passing \(edges.count) edges to visualizer")
             }
         }
 
-        // Store for export
-        if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
-            capturedScan?.meshes[index] = meshData
+        // Store for export (with vertex limit to prevent memory bloat)
+        let currentVertexCount = capturedScan?.vertexCount ?? 0
+        if currentVertexCount < kMaxTotalVertices {
+            if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
+                capturedScan?.meshes[index] = meshData
+            } else {
+                capturedScan?.meshes.append(meshData)
+            }
         } else {
-            capturedScan?.meshes.append(meshData)
+            // Over limit - only update existing meshes, don't add new ones
+            if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
+                capturedScan?.meshes[index] = meshData
+            }
+            // Log warning once
+            if meshUpdateCount % 100 == 0 {
+                debugLog("[MeshManager] Vertex limit reached (\(kMaxTotalVertices)), not adding new meshes")
+            }
         }
 
         vertexCount = capturedScan?.vertexCount ?? 0
@@ -1458,11 +1484,16 @@ class MeshManager: NSObject, ObservableObject {
         // Update visualization
         updateFaceVisualization(for: anchor)
 
-        // Store for export
-        if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
+        // Store for export (with vertex limit)
+        let currentVertexCount = capturedScan?.vertexCount ?? 0
+        if currentVertexCount < kMaxTotalVertices {
+            if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
+                capturedScan?.meshes[index] = meshData
+            } else {
+                capturedScan?.meshes.append(meshData)
+            }
+        } else if let index = capturedScan?.meshes.firstIndex(where: { $0.identifier == anchor.identifier }) {
             capturedScan?.meshes[index] = meshData
-        } else {
-            capturedScan?.meshes.append(meshData)
         }
 
         vertexCount = capturedScan?.vertexCount ?? 0

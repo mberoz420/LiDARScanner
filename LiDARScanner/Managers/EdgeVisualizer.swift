@@ -4,6 +4,17 @@ import ARKit
 import simd
 import UIKit
 
+// MARK: - Debug Logging (disabled in release builds)
+#if DEBUG
+func debugLog(_ message: String) {
+    print(message)
+}
+#else
+@inline(__always) func debugLog(_ message: String) {
+    // No-op in release builds
+}
+#endif
+
 /// Visualizes room corners as vertical glowing lines from floor to ceiling
 @MainActor
 class EdgeVisualizer {
@@ -71,7 +82,7 @@ class EdgeVisualizer {
         anchor.addChild(lineEntity)
         cornerEntities[key] = lineEntity
 
-        print("[EdgeVisualizer] Added corner line at (\(gridX), \(gridZ)), total: \(cornerEntities.count)")
+        debugLog("[EdgeVisualizer] Added corner line at (\(gridX), \(gridZ)), total: \(cornerEntities.count)")
     }
 
     /// Update from detected edges - only use vertical corners
