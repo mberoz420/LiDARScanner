@@ -951,10 +951,14 @@ struct SaveSessionSheet: View {
                     }
                     .padding(.horizontal)
 
-                    // Save location picker
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Save Location")
-                            .font(.headline)
+                    // Save location picker - prominent section
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "folder.badge.plus")
+                                .foregroundColor(.blue)
+                            Text("Save Location")
+                                .font(.headline)
+                        }
 
                         ForEach(SessionSaveLocation.allCases) { location in
                             SaveLocationRow(
@@ -969,6 +973,13 @@ struct SaveSessionSheet: View {
                             }
                         }
                     }
+                    .padding()
+                    .background(Color.blue.opacity(0.05))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                    )
                     .padding(.horizontal)
 
                     // Show scan info
