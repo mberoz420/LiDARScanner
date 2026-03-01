@@ -324,7 +324,6 @@ class MultiRoomManager: ObservableObject {
                 // Combine mesh transform with room alignment transform
                 let combinedTransform = room.transform * mesh.transform
 
-                var alignedMesh = mesh
                 // Note: We need to update the mesh transform
                 // Since CapturedMeshData has let properties, we create a new one
                 let newMesh = CapturedMeshData(

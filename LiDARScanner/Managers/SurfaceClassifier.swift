@@ -315,7 +315,7 @@ struct ScanStatistics {
     /// Room dimensions if fully captured
     var roomDimensions: (width: Float, depth: Float, height: Float)? {
         guard let height = estimatedRoomHeight,
-              let floor = floorHeight else { return nil }
+              floorHeight != nil else { return nil }
 
         // Calculate from floor edges
         let floorEdges = detectedEdges.filter { $0.edgeType == .floorWall }

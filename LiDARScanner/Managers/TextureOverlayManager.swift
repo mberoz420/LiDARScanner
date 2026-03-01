@@ -227,10 +227,10 @@ class TextureOverlayManager: NSObject, ObservableObject {
     // MARK: - Visualization
 
     private func showMeshGuide() {
-        guard let arView = arView, let scan = loadedScan else { return }
+        guard arView != nil, let scan = loadedScan else { return }
 
         // Show loaded mesh as semi-transparent guide
-        for mesh in scan.meshes {
+        for _ in scan.meshes {
             // Create simple visualization
             // This is a placeholder - would need proper mesh generation
         }

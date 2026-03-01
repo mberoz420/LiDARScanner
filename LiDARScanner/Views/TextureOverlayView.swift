@@ -100,7 +100,7 @@ struct TextureOverlayView: View {
                     VStack(spacing: 20) {
                         Spacer()
 
-                        if let scan = texturedScan {
+                        if texturedScan != nil {
                             // Finished
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 60))

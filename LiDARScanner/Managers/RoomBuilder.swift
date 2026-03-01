@@ -88,7 +88,6 @@ class RoomBuilder: ObservableObject {
         let heights = worldVertices.map { normalizedY($0.y) }
         guard let minH = heights.min(), let maxH = heights.max() else { return }
 
-        let surfaceHeight = maxH - minH
         let reachesCeiling = maxH >= roomHeight * ceilingReachThreshold
         let reachesFloor = minH <= heightTolerance
 
@@ -315,12 +314,12 @@ class RoomBuilder: ObservableObject {
             if heights.isEmpty { continue }
 
             let minH = heights.min() ?? 0
-            let maxH = heights.max() ?? roomHeight
+            _ = heights.max() ?? roomHeight  // maxH reserved for future window detection
 
             // Gap at bottom = door
             if minH > heightTolerance {
-                let position = segment.startPoint + wallDirection * Float(index) * 0.1
-                // Potential door detected
+                _ = segment.startPoint + wallDirection * Float(index) * 0.1  // position reserved for door creation
+                // Potential door detected - TODO: create door opening
             }
 
             // Gap in middle = window
