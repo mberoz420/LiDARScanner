@@ -26,6 +26,11 @@ struct SavedSessionsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onAppear {
+                // Reload sessions when view appears
+                sessionManager.loadSessionsList()
+                print("[SavedSessionsView] Loaded \(sessionManager.savedSessions.count) sessions")
+            }
             .sheet(item: $selectedSession) { session in
                 SessionDetailView(
                     sessionId: session.id,

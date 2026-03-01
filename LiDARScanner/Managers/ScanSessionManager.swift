@@ -77,7 +77,22 @@ class ScanSessionManager: ObservableObject {
 
         defer { isSaving = false }
 
+        // Validate scan has data
+        guard !scan.meshes.isEmpty else {
+            lastError = "Cannot save empty scan"
+            throw SessionError.invalidData
+        }
+
+        print("[ScanSessionManager] Starting save: '\(name)' with \(scan.meshes.count) meshes, \(scan.vertexCount) vertices")
+        print("[ScanSessionManager] Save directory: \(sessionsDirectory.path)")
+
         do {
+            // Ensure directory exists
+            if !FileManager.default.fileExists(atPath: sessionsDirectory.path) {
+                try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+                print("[ScanSessionManager] Created directory: \(sessionsDirectory.path)")
+            }
+
             // Create session object
             let session = try SavedScanSession(
                 name: name,
@@ -88,11 +103,24 @@ class ScanSessionManager: ObservableObject {
 
             // Save to file
             let sessionURL = sessionsDirectory.appendingPathComponent("\(session.id.uuidString).json")
+            print("[ScanSessionManager] Saving to: \(sessionURL.path)")
+
             let data = try JSONEncoder().encode(session)
+            print("[ScanSessionManager] Encoded \(data.count) bytes")
 
             // Compress data
             let compressedData = try (data as NSData).compressed(using: .lzfse) as Data
+            print("[ScanSessionManager] Compressed to \(compressedData.count) bytes")
+
             try compressedData.write(to: sessionURL)
+            print("[ScanSessionManager] Written to disk")
+
+            // Verify file exists
+            if FileManager.default.fileExists(atPath: sessionURL.path) {
+                print("[ScanSessionManager] File verified on disk")
+            } else {
+                print("[ScanSessionManager] WARNING: File not found after write!")
+            }
 
             // Update metadata list
             let metadata = SessionMetadata(from: session)
@@ -101,11 +129,13 @@ class ScanSessionManager: ObservableObject {
 
             currentSessionId = session.id
 
-            print("[ScanSessionManager] Saved session: \(name) (\(scan.vertexCount) vertices)")
+            print("[ScanSessionManager] Saved session: \(name) - ID: \(session.id)")
+            print("[ScanSessionManager] Total sessions in list: \(savedSessions.count)")
 
             return session.id
 
         } catch {
+            print("[ScanSessionManager] Save FAILED: \(error)")
             lastError = "Failed to save: \(error.localizedDescription)"
             throw error
         }
