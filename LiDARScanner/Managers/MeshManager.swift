@@ -976,21 +976,6 @@ class MeshManager: NSObject, ObservableObject {
         windowPlanes.append(plane)
 
         debugLog("[MeshManager] Window registered with glass filter plane at \(position)")
-
-        // Create window plane for glass filtering
-        // Default to "filter" mode - remove mesh data beyond the glass
-        let plane = WindowPlane(
-            id: windowId,
-            position: position,
-            normal: normalizedOutward,  // Points outward through glass
-            width: width,
-            height: height,
-            bottomY: windowBottomY,
-            handling: .filter  // Default: filter out data beyond window
-        )
-        windowPlanes.append(plane)
-
-        debugLog("[MeshManager] Window registered with glass filter plane at \(position)")
     }
 
     /// Register furniture to exclude from clean walls export
