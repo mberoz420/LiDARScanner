@@ -498,12 +498,41 @@ class SurfaceClassifier: ObservableObject {
         } else if normalY < -horizontalSurfaceThreshold {
             // Surface facing down - could be ceiling or protrusion
             return classifyCeilingSurface(worldY: worldY)
-        } else if abs(normalY) < wallThreshold {
-            // Mostly vertical surface = wall
-            return .wall
         } else {
-            // Angled surface = likely an object (furniture, stairs, etc.)
-            return .object
+            // For surfaces that aren't clearly floor/ceiling, check if they're near
+            // floor or ceiling height - if so, classify based on height context
+            // This handles transition zones at wall-ceiling and wall-floor junctions
+
+            if let ceilingHeight = statistics.ceilingHeight {
+                // If this surface is near ceiling height and facing somewhat downward,
+                // it's likely part of the ceiling transition, not an object
+                // Use larger tolerance for high ceilings (LiDAR less accurate at distance)
+                let ceilingTolerance: Float = ceilingHeight > 3.0 ? 0.5 : 0.3
+                let nearCeiling = abs(worldY - ceilingHeight) < ceilingTolerance
+                if nearCeiling && normalY < -0.2 {
+                    return .ceiling
+                }
+            }
+
+            if let floorHeight = statistics.floorHeight {
+                // If near floor height and facing somewhat upward, it's floor transition
+                let nearFloor = abs(worldY - floorHeight) < 0.3
+                if nearFloor && normalY > 0.2 {
+                    return .floor
+                }
+            }
+
+            // For remaining surfaces: if mostly vertical (including transition zones),
+            // classify as wall. Only classify as object if truly angled AND not near
+            // floor/ceiling levels.
+            if abs(normalY) < horizontalSurfaceThreshold {
+                // This covers the full range from vertical walls to angled transition zones
+                // Only truly horizontal surfaces get floor/ceiling classification
+                return .wall
+            } else {
+                // This case shouldn't be reached given the logic above, but keep as fallback
+                return .object
+            }
         }
     }
 

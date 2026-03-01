@@ -541,9 +541,25 @@ struct SessionDetailView: View {
         var pointsArray: [[String: Any]] = []
 
         for mesh in scan.meshes {
+            // Get the mesh transform to convert local vertices to world coordinates
+            let transform = mesh.transform
+
             for i in 0..<mesh.vertices.count {
-                let vertex = mesh.vertices[i]
-                let normal = i < mesh.normals.count ? mesh.normals[i] : SIMD3<Float>(0, 1, 0)
+                let localVertex = mesh.vertices[i]
+                let localNormal = i < mesh.normals.count ? mesh.normals[i] : SIMD3<Float>(0, 1, 0)
+
+                // Transform vertex from local to world coordinates
+                let worldPos = transform * SIMD4<Float>(localVertex.x, localVertex.y, localVertex.z, 1.0)
+                let vertex = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+
+                // Transform normal (rotation only, no translation)
+                // Extract the 3x3 rotation matrix from the 4x4 transform
+                let rotationMatrix = simd_float3x3(
+                    SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
+                    SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z),
+                    SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+                )
+                let normal = simd_normalize(rotationMatrix * localNormal)
 
                 var point: [String: Any] = [
                     "x": vertex.x,
