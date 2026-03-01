@@ -1435,15 +1435,9 @@ class MeshManager: NSObject, ObservableObject {
     private func extractMeshDataForTestMode(from anchor: ARMeshAnchor) -> (vertices: [SIMD3<Float>], normals: [SIMD3<Float>]) {
         let geometry = anchor.geometry
 
-        var vertices: [SIMD3<Float>] = []
-        for i in 0..<geometry.vertices.count {
-            vertices.append(geometry.vertex(at: i))
-        }
-
-        var normals: [SIMD3<Float>] = []
-        for i in 0..<geometry.normals.count {
-            normals.append(geometry.normal(at: i))
-        }
+        // Use batch extraction to avoid buffer deallocation crashes
+        let vertices = geometry.extractAllVertices()
+        let normals = geometry.extractAllNormals()
 
         return (vertices, normals)
     }
@@ -1451,21 +1445,11 @@ class MeshManager: NSObject, ObservableObject {
     private func extractMeshData(from anchor: ARMeshAnchor) -> CapturedMeshData {
         let geometry = anchor.geometry
 
-        var vertices: [SIMD3<Float>] = []
-        for i in 0..<geometry.vertices.count {
-            vertices.append(geometry.vertex(at: i))
-        }
-
-        var normals: [SIMD3<Float>] = []
-        for i in 0..<geometry.normals.count {
-            normals.append(geometry.normal(at: i))
-        }
-
-        var faces: [[UInt32]] = []
-        for i in 0..<geometry.faces.count {
-            let face = geometry.faceIndices(at: i)
-            faces.append(face)
-        }
+        // Use batch extraction to avoid buffer deallocation crashes
+        // This copies all data at once while the buffer is still valid
+        let vertices = geometry.extractAllVertices()
+        let normals = geometry.extractAllNormals()
+        let faces = geometry.extractAllFaceIndices()
 
         // Sample colors from camera frame (skip for Walls mode - geometry only)
         var colors: [VertexColor] = []
