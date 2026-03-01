@@ -119,6 +119,11 @@ struct TestModeOverlayView: View {
                 HStack {
                     Text("Surfaces: \(detector.detectedSurfaces.count)")
                         .font(.caption)
+                    if !detector.planeIntersectionLines.isEmpty {
+                        Text("| Lines: \(detector.planeIntersectionLines.count)")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
                     Spacer()
                     if detector.isPaused {
                         Text("PAUSED")

@@ -192,6 +192,11 @@ class MeshManager: NSObject, ObservableObject {
     // Test mode detector for wall-ceiling intersection
     let testModeDetector = TestModeDetector()
 
+    // Test mode visualization entities
+    private var testModePlaneEntities: [UUID: AnchorEntity] = [:]  // Plane preview surfaces
+    private var testModeLineEntities: [UUID: AnchorEntity] = []   // Intersection lines
+    private var testModeVisualizationAnchor: AnchorEntity?
+
     // MARK: - Session Resume
     @Published var isRepairMode = false
     @Published var resumedSessionId: UUID?
@@ -313,6 +318,7 @@ class MeshManager: NSObject, ObservableObject {
         } else if currentMode == .test {
             // Test mode: ceiling and wall-ceiling intersection detection
             testModeDetector.reset()
+            clearTestModeVisualizations()  // Clear any previous visualizations
             surfaceClassifier.classificationEnabled = true
             scanStatus = "Point at ceiling"
             // Voice control disabled - use manual pause button instead
@@ -510,6 +516,7 @@ class MeshManager: NSObject, ObservableObject {
         // Stop test mode
         if currentMode == .test {
             testModeDetector.stopListening()
+            clearTestModeVisualizations()
         }
 
         // Include user-confirmed corners in statistics
@@ -1590,6 +1597,219 @@ class MeshManager: NSObject, ObservableObject {
             anchor.removeFromParent()
         }
     }
+
+    // MARK: - Test Mode Visualization
+
+    /// Setup anchor for test mode visualizations
+    private func setupTestModeVisualization() {
+        guard let arView = arView else { return }
+
+        // Create main anchor for all test mode visuals
+        if testModeVisualizationAnchor == nil {
+            let anchor = AnchorEntity(world: .zero)
+            arView.scene.addAnchor(anchor)
+            testModeVisualizationAnchor = anchor
+        }
+    }
+
+    /// Update plane preview visualizations based on detected surfaces
+    func updateTestModePlaneVisualizations() {
+        guard let arView = arView, currentMode == .test else { return }
+
+        setupTestModeVisualization()
+
+        let surfaces = testModeDetector.detectedSurfaces
+
+        // Track which surfaces we've visualized
+        var visualizedIDs: Set<UUID> = []
+
+        for surface in surfaces {
+            visualizedIDs.insert(surface.anchorID)
+
+            // Skip if already visualized
+            if testModePlaneEntities[surface.anchorID] != nil { continue }
+
+            // Create plane preview based on surface type
+            let anchor: AnchorEntity
+
+            if surface.type == .ceiling {
+                anchor = createCeilingPlanePreview(surface: surface)
+            } else {
+                anchor = createWallPlanePreview(surface: surface)
+            }
+
+            arView.scene.addAnchor(anchor)
+            testModePlaneEntities[surface.anchorID] = anchor
+        }
+
+        // Remove visualizations for surfaces that no longer exist
+        for (id, anchor) in testModePlaneEntities {
+            if !visualizedIDs.contains(id) {
+                anchor.removeFromParent()
+                testModePlaneEntities.removeValue(forKey: id)
+            }
+        }
+
+        // Update intersection lines
+        updateTestModeIntersectionLines()
+    }
+
+    /// Create a semi-transparent ceiling plane preview
+    private func createCeilingPlanePreview(surface: TestModeDetector.DetectedSurface) -> AnchorEntity {
+        // Create horizontal plane at ceiling height
+        let planeSize: Float = 3.0  // 3m x 3m preview
+
+        let planeMesh = MeshResource.generatePlane(width: planeSize, depth: planeSize)
+
+        var material = SimpleMaterial()
+        material.color = .init(tint: UIColor.cyan.withAlphaComponent(0.3))
+        material.metallic = 0.0
+        material.roughness = 1.0
+
+        let planeEntity = ModelEntity(mesh: planeMesh, materials: [material])
+
+        // Position at ceiling height, centered on detected point
+        let position = SIMD3<Float>(surface.planePoint.x, surface.height, surface.planePoint.z)
+        let anchor = AnchorEntity(world: position)
+        anchor.addChild(planeEntity)
+
+        return anchor
+    }
+
+    /// Create a semi-transparent wall plane preview
+    private func createWallPlanePreview(surface: TestModeDetector.DetectedSurface) -> AnchorEntity {
+        // Wall dimensions
+        let wallWidth: Float = 3.0  // 3m wide
+        let wallHeight: Float = 2.5  // 2.5m tall (or use ceiling height if available)
+
+        let actualHeight: Float
+        if let ceiling = testModeDetector.ceilingPlane {
+            let floorY = surface.height - 1.0  // Estimate floor
+            actualHeight = ceiling.y - floorY
+        } else {
+            actualHeight = wallHeight
+        }
+
+        // Create vertical plane
+        let planeMesh = MeshResource.generatePlane(width: wallWidth, height: actualHeight)
+
+        var material = SimpleMaterial()
+        material.color = .init(tint: UIColor.orange.withAlphaComponent(0.3))
+        material.metallic = 0.0
+        material.roughness = 1.0
+
+        let planeEntity = ModelEntity(mesh: planeMesh, materials: [material])
+
+        // Calculate rotation to face the wall normal direction
+        // The plane normal points in +Z by default, we need to rotate it to match wall normal
+        let wallNormal = surface.planeNormal
+        let defaultNormal = SIMD3<Float>(0, 0, 1)
+
+        // Calculate rotation quaternion from default normal to wall normal
+        let rotationAxis = simd_cross(defaultNormal, wallNormal)
+        let rotationAngle = acos(simd_clamp(simd_dot(defaultNormal, wallNormal), -1.0, 1.0))
+
+        if simd_length(rotationAxis) > 0.001 {
+            let normalizedAxis = simd_normalize(rotationAxis)
+            planeEntity.orientation = simd_quatf(angle: rotationAngle, axis: normalizedAxis)
+        }
+
+        // Position the wall plane
+        let centerY: Float
+        if let ceiling = testModeDetector.ceilingPlane {
+            let floorY = surface.height - 1.0
+            centerY = floorY + actualHeight / 2
+        } else {
+            centerY = surface.height
+        }
+
+        let position = SIMD3<Float>(surface.planePoint.x, centerY, surface.planePoint.z)
+        let anchor = AnchorEntity(world: position)
+        anchor.addChild(planeEntity)
+
+        return anchor
+    }
+
+    /// Update intersection line visualizations
+    private func updateTestModeIntersectionLines() {
+        guard let arView = arView else { return }
+
+        // Clear existing line entities
+        for (_, anchor) in testModeLineEntities {
+            anchor.removeFromParent()
+        }
+        testModeLineEntities.removeAll()
+
+        let lines = testModeDetector.planeIntersectionLines
+
+        for line in lines {
+            let anchor = createIntersectionLine(line: line)
+            arView.scene.addAnchor(anchor)
+            testModeLineEntities[line.id] = anchor
+        }
+    }
+
+    /// Create a bright white line entity for plane intersection
+    private func createIntersectionLine(line: TestModeDetector.PlaneIntersectionLine) -> AnchorEntity {
+        let start = line.startPoint
+        let end = line.endPoint
+
+        let length = simd_distance(start, end)
+        let midpoint = (start + end) / 2
+
+        // Create thin cylinder/box for the line
+        let lineThickness: Float = 0.015  // 15mm thick - visible but not too chunky
+
+        let lineMesh = MeshResource.generateBox(width: lineThickness, height: length, depth: lineThickness)
+
+        // Bright white unlit material for maximum visibility
+        var material = UnlitMaterial()
+        material.color = .init(tint: .white)
+
+        let lineEntity = ModelEntity(mesh: lineMesh, materials: [material])
+
+        // Calculate rotation to align the line from start to end
+        let direction = simd_normalize(end - start)
+        let up = SIMD3<Float>(0, 1, 0)
+
+        // If line is mostly vertical, use default orientation
+        if abs(simd_dot(direction, up)) > 0.99 {
+            // Line is vertical, no rotation needed (box height is along Y)
+            // Just check if it needs to be flipped
+            if direction.y < 0 {
+                lineEntity.orientation = simd_quatf(angle: .pi, axis: SIMD3<Float>(1, 0, 0))
+            }
+        } else {
+            // Calculate rotation to align Y-axis with line direction
+            let rotationAxis = simd_cross(up, direction)
+            let rotationAngle = acos(simd_clamp(simd_dot(up, direction), -1.0, 1.0))
+
+            if simd_length(rotationAxis) > 0.001 {
+                lineEntity.orientation = simd_quatf(angle: rotationAngle, axis: simd_normalize(rotationAxis))
+            }
+        }
+
+        let anchor = AnchorEntity(world: midpoint)
+        anchor.addChild(lineEntity)
+
+        return anchor
+    }
+
+    /// Clear all test mode visualizations
+    func clearTestModeVisualizations() {
+        for (_, anchor) in testModePlaneEntities {
+            anchor.removeFromParent()
+        }
+        testModePlaneEntities.removeAll()
+
+        for (_, anchor) in testModeLineEntities {
+            anchor.removeFromParent()
+        }
+        testModeLineEntities.removeAll()
+
+        testModeVisualizationAnchor?.removeFromParent()
+        testModeVisualizationAnchor = nil
+    }
 }
 
 // MARK: - ARSessionDelegate
@@ -1605,6 +1825,8 @@ extension MeshManager: ARSessionDelegate {
             // Test mode processing - only ARKit planes for now
             if isScanning && currentMode == .test {
                 testModeDetector.processFrame(frame)
+                // Update plane and intersection line visualizations
+                updateTestModePlaneVisualizations()
             }
 
             // Check if edge is in reticle and detect pause (for walls mode)

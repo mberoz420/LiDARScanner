@@ -24,6 +24,22 @@ class TestModeDetector: ObservableObject {
     @Published var detectedSurfaces: [DetectedSurface] = []
     @Published var lastDetectedSurface: String = ""  // Shows briefly when new surface detected
 
+    // Plane intersection lines (where two non-parallel planes meet)
+    @Published var planeIntersectionLines: [PlaneIntersectionLine] = []
+
+    /// Represents an intersection line between two planes
+    struct PlaneIntersectionLine: Identifiable {
+        let id = UUID()
+        let surface1Label: String
+        let surface2Label: String
+        let startPoint: SIMD3<Float>
+        let endPoint: SIMD3<Float>
+        let direction: SIMD3<Float>  // Normalized direction along the line
+    }
+
+    // Threshold for considering planes as "close to parallel" (dot product > this = parallel)
+    private let parallelThreshold: Float = 0.95
+
     // Dwell-time detection (hold reticle on surface for 2 seconds to register)
     @Published var dwellProgress: Float = 0  // 0 to 1 progress indicator
     private var dwellStartTime: Date?
@@ -351,6 +367,9 @@ class TestModeDetector: ObservableObject {
 
         // Recalculate boundary from wall intersections
         calculateBoundaryFromPlaneIntersections()
+
+        // Calculate intersection lines with all walls
+        calculatePlaneIntersectionLines()
     }
 
     /// Register a wall surface after dwell time
@@ -384,6 +403,9 @@ class TestModeDetector: ObservableObject {
 
         // Recalculate boundary from wall intersections
         calculateBoundaryFromPlaneIntersections()
+
+        // Calculate intersection lines between all non-parallel planes
+        calculatePlaneIntersectionLines()
     }
 
     // MARK: - Plane Intersection Boundary Calculation
@@ -510,6 +532,123 @@ class TestModeDetector: ObservableObject {
         let t = (dx * d2.y - dy * d2.x) / cross
 
         return SIMD2<Float>(p1.x + t * d1.x, p1.y + t * d1.y)
+    }
+
+    // MARK: - Live Plane Intersection Lines
+
+    /// Calculate intersection lines between all pairs of non-parallel detected surfaces
+    private func calculatePlaneIntersectionLines() {
+        var newLines: [PlaneIntersectionLine] = []
+
+        // Need at least 2 surfaces to have intersections
+        guard detectedSurfaces.count >= 2 else {
+            planeIntersectionLines = []
+            return
+        }
+
+        // Check each pair of surfaces
+        for i in 0..<detectedSurfaces.count {
+            for j in (i + 1)..<detectedSurfaces.count {
+                let surface1 = detectedSurfaces[i]
+                let surface2 = detectedSurfaces[j]
+
+                // Check if planes are NOT parallel (dot product of normals < threshold)
+                let dotProduct = abs(simd_dot(surface1.planeNormal, surface2.planeNormal))
+
+                if dotProduct < parallelThreshold {
+                    // Planes are not parallel - calculate intersection line
+                    if let intersection = intersectPlanesForLine(
+                        plane1Point: surface1.planePoint,
+                        plane1Normal: surface1.planeNormal,
+                        plane2Point: surface2.planePoint,
+                        plane2Normal: surface2.planeNormal
+                    ) {
+                        // Clip the line to reasonable bounds (e.g., 5m in each direction)
+                        let lineLength: Float = 5.0
+                        let startPoint = intersection.point - intersection.direction * lineLength
+                        let endPoint = intersection.point + intersection.direction * lineLength
+
+                        // For wall-ceiling intersections, clip to ceiling height
+                        var clippedStart = startPoint
+                        var clippedEnd = endPoint
+
+                        if let ceiling = ceilingPlane {
+                            // If one surface is ceiling, make the line horizontal at ceiling height
+                            if surface1.type == .ceiling || surface2.type == .ceiling {
+                                clippedStart.y = ceiling.y
+                                clippedEnd.y = ceiling.y
+                            }
+                        }
+
+                        // For wall-wall intersections, make vertical line from floor to ceiling
+                        if surface1.type == .wall && surface2.type == .wall {
+                            // Find the intersection point in XZ plane
+                            let intersectX = intersection.point.x
+                            let intersectZ = intersection.point.z
+
+                            // Create vertical line
+                            let floorY = cameraPosition.y - 1.5  // Estimate floor
+                            let ceilingY = ceilingPlane?.y ?? (cameraPosition.y + 1.5)
+
+                            clippedStart = SIMD3<Float>(intersectX, floorY, intersectZ)
+                            clippedEnd = SIMD3<Float>(intersectX, ceilingY, intersectZ)
+                        }
+
+                        let line = PlaneIntersectionLine(
+                            surface1Label: surface1.label,
+                            surface2Label: surface2.label,
+                            startPoint: clippedStart,
+                            endPoint: clippedEnd,
+                            direction: simd_normalize(clippedEnd - clippedStart)
+                        )
+                        newLines.append(line)
+                    }
+                }
+            }
+        }
+
+        planeIntersectionLines = newLines
+    }
+
+    /// Intersect two planes and return a point on the line + direction
+    private func intersectPlanesForLine(
+        plane1Point: SIMD3<Float>, plane1Normal: SIMD3<Float>,
+        plane2Point: SIMD3<Float>, plane2Normal: SIMD3<Float>
+    ) -> (point: SIMD3<Float>, direction: SIMD3<Float>)? {
+        // Line direction is perpendicular to both normals
+        let direction = simd_cross(plane1Normal, plane2Normal)
+        let dirLength = simd_length(direction)
+
+        // If normals are parallel, planes don't intersect in a line
+        guard dirLength > 0.001 else { return nil }
+
+        let normalizedDir = direction / dirLength
+
+        // Find a point on the intersection line using plane equations
+        // Plane 1: dot(n1, p) = dot(n1, p1)
+        // Plane 2: dot(n2, p) = dot(n2, p2)
+        let d1 = simd_dot(plane1Normal, plane1Point)
+        let d2 = simd_dot(plane2Normal, plane2Point)
+
+        // Solve for a point on the line
+        // We need to find p such that both plane equations are satisfied
+        // Use the formula for plane-plane intersection
+        let n1 = plane1Normal
+        let n2 = plane2Normal
+
+        let n1n2 = simd_dot(n1, n2)
+        let n1n1 = simd_dot(n1, n1)
+        let n2n2 = simd_dot(n2, n2)
+
+        let det = n1n1 * n2n2 - n1n2 * n1n2
+        guard abs(det) > 0.0001 else { return nil }
+
+        let c1 = (d1 * n2n2 - d2 * n1n2) / det
+        let c2 = (d2 * n1n1 - d1 * n1n2) / det
+
+        let point = c1 * n1 + c2 * n2
+
+        return (point: point, direction: normalizedDir)
     }
 
     /// Add a boundary point (with duplicate filtering)
@@ -1273,6 +1412,7 @@ class TestModeDetector: ObservableObject {
         detectedWallIntersections = [:]
         detectedSurfaces = []
         lastDetectedSurface = ""
+        planeIntersectionLines = []
         rawCeilingY = []
         isPaused = false
         wallCount = 0
