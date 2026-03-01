@@ -4,16 +4,7 @@ import ARKit
 import simd
 import UIKit
 
-// MARK: - Debug Logging (disabled in release builds)
-#if DEBUG
-func debugLog(_ message: String) {
-    print(message)
-}
-#else
-@inline(__always) func debugLog(_ message: String) {
-    // No-op in release builds
-}
-#endif
+// Note: debugLog is defined in MeshManager.swift
 
 /// Visualizes room corners as vertical glowing lines from floor to ceiling
 @MainActor
