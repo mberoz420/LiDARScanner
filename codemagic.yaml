@@ -63,16 +63,20 @@ workflows:
       - name: Build Core ML model
         script: |
           echo "Converting PyTorch model to Core ML..."
-          cd ML/pretrained
-          pip3 install torch coremltools numpy --quiet
+          cd ML/pretrained || exit 0
           if [ -f "IndoorSegmentation.pt" ]; then
-            python3 convert_on_mac.py
-            mkdir -p ../../LiDARScanner/ML
-            cp -r IndoorSegmentation.mlpackage ../../LiDARScanner/ML/
-            echo "Core ML model created and copied to LiDARScanner/ML/"
+            pip3 install torch coremltools numpy || echo "Warning: pip install failed"
+            python3 convert_on_mac.py || echo "Warning: Core ML conversion failed"
+            if [ -d "IndoorSegmentation.mlpackage" ]; then
+              mkdir -p ../../LiDARScanner/ML
+              cp -r IndoorSegmentation.mlpackage ../../LiDARScanner/ML/
+              echo "Core ML model created and copied to LiDARScanner/ML/"
+            fi
           else
             echo "No PyTorch checkpoint found, skipping Core ML conversion"
           fi
+          # Always succeed - ML model is optional
+          exit 0
 
       - name: Build archive
         script: |
@@ -279,16 +283,20 @@ workflows:
       - name: Build Core ML model
         script: |
           echo "Converting PyTorch model to Core ML..."
-          cd ML/pretrained
-          pip3 install torch coremltools numpy --quiet
+          cd ML/pretrained || exit 0
           if [ -f "IndoorSegmentation.pt" ]; then
-            python3 convert_on_mac.py
-            mkdir -p ../../LiDARScanner/ML
-            cp -r IndoorSegmentation.mlpackage ../../LiDARScanner/ML/
-            echo "Core ML model created and copied to LiDARScanner/ML/"
+            pip3 install torch coremltools numpy || echo "Warning: pip install failed"
+            python3 convert_on_mac.py || echo "Warning: Core ML conversion failed"
+            if [ -d "IndoorSegmentation.mlpackage" ]; then
+              mkdir -p ../../LiDARScanner/ML
+              cp -r IndoorSegmentation.mlpackage ../../LiDARScanner/ML/
+              echo "Core ML model created and copied to LiDARScanner/ML/"
+            fi
           else
             echo "No PyTorch checkpoint found, skipping Core ML conversion"
           fi
+          # Always succeed - ML model is optional
+          exit 0
 
       - name: Build archive
         script: |
