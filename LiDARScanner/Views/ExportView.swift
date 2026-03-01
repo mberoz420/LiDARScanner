@@ -31,6 +31,7 @@ struct ExportView: View {
     @State private var sessionName = ""
     @State private var isSavingSession = false
     @State private var sessionSaveSuccess = false
+    @State private var saveErrorMessage: String?
     @ObservedObject private var sessionManager = ScanSessionManager.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -60,6 +61,7 @@ struct ExportView: View {
                     SaveSessionSheet(
                         sessionName: $sessionName,
                         isSaving: $isSavingSession,
+                        errorMessage: $saveErrorMessage,
                         meshCount: scan.meshes.count,
                         vertexCount: scan.vertexCount,
                         onSave: { Task { await saveSession() } },
@@ -564,14 +566,16 @@ struct ExportView: View {
     }
 
     private func saveSession() async {
+        // Clear previous error
+        saveErrorMessage = nil
+
         guard !sessionName.isEmpty else {
-            exporter.lastError = "Session name is empty"
+            saveErrorMessage = "Please enter a session name"
             return
         }
 
         guard !scan.meshes.isEmpty else {
-            exporter.lastError = "No mesh data to save. Try scanning first."
-            showSaveSession = false
+            saveErrorMessage = "No mesh data to save. Scan something first."
             return
         }
 
@@ -590,6 +594,7 @@ struct ExportView: View {
 
             // Dismiss sheet and show success
             showSaveSession = false
+            saveErrorMessage = nil
 
             withAnimation {
                 sessionSaveSuccess = true
@@ -601,8 +606,8 @@ struct ExportView: View {
             }
         } catch {
             print("[ExportView] Save failed: \(error)")
-            exporter.lastError = "Failed to save: \(error.localizedDescription)"
-            showSaveSession = false
+            saveErrorMessage = "Save failed: \(error.localizedDescription)"
+            // Don't dismiss sheet - let user see the error and retry
         }
 
         isSavingSession = false
@@ -751,6 +756,7 @@ struct SurfaceStatItem: View {
 struct SaveSessionSheet: View {
     @Binding var sessionName: String
     @Binding var isSaving: Bool
+    @Binding var errorMessage: String?
     let meshCount: Int
     let vertexCount: Int
     let onSave: () -> Void
@@ -763,7 +769,7 @@ struct SaveSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
+            VStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Session Name")
                         .font(.headline)
@@ -772,6 +778,10 @@ struct SaveSessionSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($isNameFocused)
                         .submitLabel(.done)
+                        .onChange(of: sessionName) { _ in
+                            // Clear error when user starts typing
+                            errorMessage = nil
+                        }
                 }
                 .padding(.horizontal)
 
@@ -781,6 +791,7 @@ struct SaveSessionSheet: View {
                         Text("\(meshCount)")
                             .font(.title2)
                             .fontWeight(.bold)
+                            .foregroundColor(meshCount > 0 ? .primary : .red)
                         Text("Meshes")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -798,13 +809,28 @@ struct SaveSessionSheet: View {
                 .background(Color.gray.opacity(0.1))
                 .cornerRadius(10)
 
+                // Error message
+                if let error = errorMessage {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.red)
+                    }
+                    .padding()
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
+                }
+
                 if meshCount == 0 {
                     Text("No scan data to save. Please scan something first.")
                         .font(.caption)
                         .foregroundColor(.red)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
-                } else {
+                } else if errorMessage == nil {
                     Text("Save this scan to continue editing later or annotate for ML training.")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -847,6 +873,7 @@ struct SaveSessionSheet: View {
             }
             .onAppear {
                 isNameFocused = true
+                errorMessage = nil
             }
         }
         .presentationDetents([.medium])
