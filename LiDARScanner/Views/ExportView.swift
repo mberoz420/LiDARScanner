@@ -1069,7 +1069,7 @@ struct SaveSessionSheet: View {
                 errorMessage = nil
             }
         }
-        .presentationDetents([.large, .medium])
+        .presentationDetents([.large])
     }
 
     private func isLocationAvailable(_ location: SessionSaveLocation) -> Bool {
@@ -1235,9 +1235,16 @@ struct DocumentPickerView: UIViewControllerRepresentable {
     let onCancel: () -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        // Use move mode which gives more save location options
         let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
         picker.delegate = context.coordinator
         picker.shouldShowFileExtensions = true
+
+        // Try to start in iCloud Drive if available
+        if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)?.appendingPathComponent("Documents") {
+            picker.directoryURL = iCloudURL
+        }
+
         return picker
     }
 
