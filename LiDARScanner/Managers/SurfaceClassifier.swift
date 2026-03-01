@@ -1555,6 +1555,207 @@ class SurfaceClassifier: ObservableObject {
         debugLog("[SurfaceClassifier] Cleared ML cache to reduce memory")
     }
 
+    // MARK: - Auto Floor Detection (finds largest continuous horizontal plane at lowest Y)
+
+    /// Horizontal surface cluster for floor detection
+    private struct HorizontalCluster {
+        var points: [SIMD3<Float>] = []
+        var ySum: Float = 0
+        var averageY: Float { points.isEmpty ? 0 : ySum / Float(points.count) }
+        var minX: Float = .greatestFiniteMagnitude
+        var maxX: Float = -.greatestFiniteMagnitude
+        var minZ: Float = .greatestFiniteMagnitude
+        var maxZ: Float = -.greatestFiniteMagnitude
+
+        mutating func add(_ point: SIMD3<Float>) {
+            points.append(point)
+            ySum += point.y
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minZ = min(minZ, point.z)
+            maxZ = max(maxZ, point.z)
+        }
+
+        var area: Float {
+            (maxX - minX) * (maxZ - minZ)
+        }
+    }
+
+    /// Auto-detect floor from accumulated horizontal surfaces
+    /// Floor = largest continuous surface with normal pointing mostly up
+    /// Handles sloped floors where Y varies continuously with X,Z
+    func autoDetectFloor(from vertices: [SIMD3<Float>], normals: [SIMD3<Float>], transform: simd_float4x4) -> Float? {
+        // Step 1: Find all "floor-like" points (normal pointing mostly up)
+        // Allow up to ~30° slope (normal.y > 0.5)
+        var floorCandidates: [(point: SIMD3<Float>, normal: SIMD3<Float>)] = []
+
+        for i in 0..<min(vertices.count, normals.count) {
+            let normal = normals[i]
+            if normal.y > 0.5 {  // Normal points up (allows slopes up to ~60° from vertical)
+                let worldPos = transform * SIMD4<Float>(vertices[i], 1.0)
+                let worldPoint = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
+
+                // Transform normal to world space (rotation only)
+                let worldNormal = simd_normalize(SIMD3<Float>(
+                    transform.columns.0.x * normal.x + transform.columns.1.x * normal.y + transform.columns.2.x * normal.z,
+                    transform.columns.0.y * normal.x + transform.columns.1.y * normal.y + transform.columns.2.y * normal.z,
+                    transform.columns.0.z * normal.x + transform.columns.1.z * normal.y + transform.columns.2.z * normal.z
+                ))
+
+                floorCandidates.append((worldPoint, worldNormal))
+            }
+        }
+
+        guard !floorCandidates.isEmpty else { return nil }
+
+        // Step 2: Cluster by CONNECTIVITY (nearby points = same surface)
+        // This handles sloped floors where Y varies
+        let connectivityRadius: Float = 0.3  // Points within 30cm are connected
+        var clusters: [[Int]] = []  // Each cluster is a list of point indices
+        var assigned = Set<Int>()
+
+        for i in 0..<floorCandidates.count {
+            if assigned.contains(i) { continue }
+
+            // Start new cluster with this point
+            var cluster: [Int] = [i]
+            var queue: [Int] = [i]
+            assigned.insert(i)
+
+            // BFS to find all connected points
+            while !queue.isEmpty && cluster.count < 10000 {  // Limit for performance
+                let current = queue.removeFirst()
+                let currentPoint = floorCandidates[current].point
+
+                for j in 0..<floorCandidates.count {
+                    if assigned.contains(j) { continue }
+
+                    let candidatePoint = floorCandidates[j].point
+                    let dist = simd_distance(currentPoint, candidatePoint)
+
+                    if dist < connectivityRadius {
+                        cluster.append(j)
+                        queue.append(j)
+                        assigned.insert(j)
+                    }
+                }
+            }
+
+            clusters.append(cluster)
+        }
+
+        // Step 3: Find the cluster that's:
+        // - Large (many points)
+        // - At the lowest average Y
+        // - Has significant horizontal extent
+        var bestCluster: (avgY: Float, minY: Float, pointCount: Int, area: Float)? = nil
+
+        for cluster in clusters {
+            guard cluster.count > 50 else { continue }  // Need enough points
+
+            var sumY: Float = 0
+            var minY: Float = .greatestFiniteMagnitude
+            var minX: Float = .greatestFiniteMagnitude
+            var maxX: Float = -.greatestFiniteMagnitude
+            var minZ: Float = .greatestFiniteMagnitude
+            var maxZ: Float = -.greatestFiniteMagnitude
+
+            for idx in cluster {
+                let p = floorCandidates[idx].point
+                sumY += p.y
+                minY = min(minY, p.y)
+                minX = min(minX, p.x)
+                maxX = max(maxX, p.x)
+                minZ = min(minZ, p.z)
+                maxZ = max(maxZ, p.z)
+            }
+
+            let avgY = sumY / Float(cluster.count)
+            let area = (maxX - minX) * (maxZ - minZ)
+
+            // Floor should have significant area (> 0.5 m²)
+            guard area > 0.5 else { continue }
+
+            // Pick the cluster with lowest average Y (floor is at bottom)
+            if bestCluster == nil || avgY < bestCluster!.avgY {
+                bestCluster = (avgY, minY, cluster.count, area)
+            }
+        }
+
+        if let floor = bestCluster {
+            debugLog("[SurfaceClassifier] Auto-detected floor: avgY=\(floor.avgY), minY=\(floor.minY), points=\(floor.pointCount), area=\(floor.area)m²")
+            // Return the minimum Y of the floor cluster (lowest point of floor, even if sloped)
+            return floor.minY
+        }
+
+        return nil
+    }
+
+    /// Check if a point belongs to the main floor plane
+    /// Handles sloped floors - checks if point is near the lowest detected floor level
+    func isPartOfFloorPlane(point: SIMD3<Float>, normal: SIMD3<Float>) -> Bool {
+        // Normal must point mostly up (allows slopes up to ~45°)
+        guard normal.y > 0.5 else { return false }
+
+        // Check against calibrated/detected floor height
+        if let floorY = calibratedFloorHeight ?? statistics.floorHeight {
+            // For sloped floors: allow points above floorY (sloping up)
+            // but not too far above (that would be a table)
+            let heightAboveFloor = point.y - floorY
+
+            // Floor can slope up to 0.5m above the lowest point
+            // (covers most ramps, drainage slopes, uneven floors)
+            return heightAboveFloor >= -0.1 && heightAboveFloor < 0.5
+        }
+
+        return false
+    }
+
+    /// Check if a horizontal surface is likely a table/object (not floor)
+    func isLikelyTableTop(point: SIMD3<Float>, normal: SIMD3<Float>) -> Bool {
+        // Must have upward-facing normal
+        guard normal.y > 0.5 else { return false }
+
+        // If we know floor height, check if this is significantly above it
+        if let floorY = calibratedFloorHeight ?? statistics.floorHeight {
+            let heightAboveFloor = point.y - floorY
+
+            // Tables are typically 0.5m to 1.2m above floor
+            // Below 0.5m could be a sloped floor or low platform
+            // Above 1.2m could be a shelf or counter
+            if heightAboveFloor > 0.5 && heightAboveFloor < 1.5 {
+                return true
+            }
+
+            // Also check: is the surface small/isolated?
+            // (Floor is continuous, tables are bounded objects)
+            // This would require checking neighbors - simplified for now
+        }
+
+        return false
+    }
+
+    /// Estimate floor slope direction from calibrated floor normal
+    var floorSlopeDirection: SIMD3<Float>? {
+        guard let normal = calibratedFloorNormal else { return nil }
+        // Slope direction is the horizontal component of the normal
+        let horizontal = SIMD3<Float>(normal.x, 0, normal.z)
+        let length = simd_length(horizontal)
+        if length > 0.01 {  // Has meaningful slope
+            return simd_normalize(horizontal)
+        }
+        return nil  // Flat floor
+    }
+
+    /// Estimate floor slope angle in degrees
+    var floorSlopeAngle: Float? {
+        guard let normal = calibratedFloorNormal else { return nil }
+        // Angle from vertical = acos(normal.y)
+        // Slope angle = 90 - angle from vertical
+        let angleFromVertical = acos(abs(normal.y))
+        return angleFromVertical * 180 / .pi  // Convert to degrees
+    }
+
     // MARK: - Query Methods
 
     /// Get all wall corners (vertical edges where walls meet)
