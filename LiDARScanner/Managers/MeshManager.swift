@@ -1716,7 +1716,7 @@ class MeshManager: NSObject, ObservableObject {
 
         // Position the wall plane
         let centerY: Float
-        if let ceiling = testModeDetector.ceilingPlane {
+        if testModeDetector.ceilingPlane != nil {
             let floorY = surface.height - 1.0
             centerY = floorY + actualHeight / 2
         } else {
