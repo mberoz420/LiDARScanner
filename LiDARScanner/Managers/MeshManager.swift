@@ -207,7 +207,7 @@ class MeshManager: NSObject, ObservableObject {
     private var faceAnchors: [UUID: AnchorEntity] = [:]
     private var surfaceTypes: [UUID: SurfaceType] = [:]  // Track surface type per mesh
     private var capturedScan: CapturedScan?
-    private var lastMeshUpdateTime: Date = .distantPast
+    private var meshUpdateTimes: [UUID: Date] = [:]  // Per-anchor throttling
     private var currentFrame: ARFrame?
 
     // MARK: - Setup
@@ -577,6 +577,7 @@ class MeshManager: NSObject, ObservableObject {
             anchor.removeFromParent()
         }
         meshAnchors.removeAll()
+        meshUpdateTimes.removeAll()
 
         for (_, anchor) in faceAnchors {
             anchor.removeFromParent()
@@ -1076,14 +1077,15 @@ class MeshManager: NSObject, ObservableObject {
             return
         }
 
-        // Adaptive throttling based on surface type
+        // Adaptive throttling based on surface type (per-anchor to avoid blocking other meshes)
         let baseInterval = currentMode.updateInterval
         let multiplier = surfaceClassifier.updateIntervalMultiplier(for: classifiedSurface.surfaceType)
         let adjustedInterval = baseInterval * multiplier
 
         let now = Date()
-        guard now.timeIntervalSince(lastMeshUpdateTime) > adjustedInterval else { return }
-        lastMeshUpdateTime = now
+        let lastUpdate = meshUpdateTimes[anchor.identifier] ?? .distantPast
+        guard now.timeIntervalSince(lastUpdate) > adjustedInterval else { return }
+        meshUpdateTimes[anchor.identifier] = now
 
         // Extract geometry data
         let meshData = extractMeshData(from: anchor)
@@ -1408,8 +1410,9 @@ class MeshManager: NSObject, ObservableObject {
         guard isScanning else { return }
 
         let now = Date()
-        guard now.timeIntervalSince(lastMeshUpdateTime) > currentMode.updateInterval else { return }
-        lastMeshUpdateTime = now
+        let lastUpdate = meshUpdateTimes[anchor.identifier] ?? .distantPast
+        guard now.timeIntervalSince(lastUpdate) > currentMode.updateInterval else { return }
+        meshUpdateTimes[anchor.identifier] = now
 
         // Extract face geometry
         let meshData = extractFaceData(from: anchor)

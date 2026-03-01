@@ -15,16 +15,30 @@ struct SerializableMesh: Codable {
     let qualityScore: Float
     let capturedAt: Date
 
+    /// Sanitize a float value - replace NaN and Infinity with 0
+    private static func sanitize(_ value: Float) -> Float {
+        if value.isNaN || value.isInfinite {
+            return 0
+        }
+        return value
+    }
+
+    /// Sanitize an array of floats
+    private static func sanitize(_ values: [Float]) -> [Float] {
+        return values.map { sanitize($0) }
+    }
+
     /// Convert from CapturedMeshData
     init(from mesh: CapturedMeshData, qualityScore: Float = 0.5) {
         self.identifier = mesh.identifier
-        self.vertices = mesh.vertices.map { [$0.x, $0.y, $0.z] }
-        self.normals = mesh.normals.map { [$0.x, $0.y, $0.z] }
-        self.colors = mesh.colors.isEmpty ? nil : mesh.colors.map { [$0.r, $0.g, $0.b] }
+        // Sanitize all float values to avoid JSON encoding errors
+        self.vertices = mesh.vertices.map { Self.sanitize([$0.x, $0.y, $0.z]) }
+        self.normals = mesh.normals.map { Self.sanitize([$0.x, $0.y, $0.z]) }
+        self.colors = mesh.colors.isEmpty ? nil : mesh.colors.map { Self.sanitize([$0.r, $0.g, $0.b]) }
         self.faces = mesh.faces
-        self.transform = mesh.transform.flattenedArray
+        self.transform = Self.sanitize(mesh.transform.flattenedArray)
         self.surfaceType = mesh.surfaceType?.rawValue
-        self.qualityScore = qualityScore
+        self.qualityScore = Self.sanitize(qualityScore)
         self.capturedAt = Date()
     }
 
