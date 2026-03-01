@@ -705,6 +705,18 @@ class SurfaceClassifier: ObservableObject {
         faceNormals: [SIMD3<Float>],
         faceCenters: [SIMD3<Float>]
     ) {
+        // Skip edge detection on very large meshes to avoid memory issues
+        let maxFacesForEdgeDetection = 5000
+        guard faces.count < maxFacesForEdgeDetection else {
+            print("[SurfaceClassifier] Skipping edge detection - mesh too large (\(faces.count) faces)")
+            return
+        }
+
+        // Also skip if we already have enough edges
+        guard statistics.detectedEdges.count < 150 else {
+            return
+        }
+
         print("[SurfaceClassifier] detectEdges called with \(faces.count) faces")
 
         // Build edge-to-face mapping
@@ -1410,6 +1422,14 @@ class SurfaceClassifier: ObservableObject {
         accumulatedNormals.removeAll()
         mlClassifications.removeAll()
         statistics = ScanStatistics()
+    }
+
+    /// Clear ML-related caches to reduce memory (called under memory pressure)
+    func clearMLCache() {
+        accumulatedPoints.removeAll()
+        accumulatedNormals.removeAll()
+        mlClassifications.removeAll()
+        print("[SurfaceClassifier] Cleared ML cache to reduce memory")
     }
 
     // MARK: - Query Methods

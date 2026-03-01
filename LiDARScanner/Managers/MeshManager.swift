@@ -1058,9 +1058,47 @@ class MeshManager: NSObject, ObservableObject {
         return closestPosition
     }
 
+    // MARK: - Memory Management
+
+    /// Check if memory is getting low
+    private func isMemoryLow() -> Bool {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+
+        if result == KERN_SUCCESS {
+            let usedMB = info.resident_size / 1024 / 1024
+            // Warn if using more than 800MB (leave room for system)
+            return usedMB > 800
+        }
+        return false
+    }
+
+    /// Reduce memory usage by clearing caches
+    private func reduceMemoryUsage() {
+        print("[MeshManager] Memory pressure detected, reducing usage")
+
+        // Clear ML caches
+        surfaceClassifier.clearMLCache()
+
+        // Reduce edge count
+        if surfaceClassifier.statistics.detectedEdges.count > 100 {
+            surfaceClassifier.statistics.detectedEdges = Array(surfaceClassifier.statistics.detectedEdges.prefix(50))
+        }
+    }
+
     // MARK: - Mesh Processing
     private func processMeshAnchor(_ anchor: ARMeshAnchor) {
         guard isScanning else { return }
+
+        // Check memory and reduce if needed
+        if meshUpdateCount % 50 == 0 && isMemoryLow() {
+            reduceMemoryUsage()
+        }
 
         // Classify the surface
         let classifiedSurface = surfaceClassifier.classifyMeshAnchor(anchor)
