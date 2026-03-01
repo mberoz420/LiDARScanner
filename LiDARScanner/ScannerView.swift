@@ -184,7 +184,7 @@ struct ScannerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showExport) {
             if let scan = capturedScan {
-                ExportView(scan: scan)
+                ExportView(scan: scan, scanMode: meshManager.currentMode)
             }
         }
         .sheet(isPresented: $showModeSelector) {

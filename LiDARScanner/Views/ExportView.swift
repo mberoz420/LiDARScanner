@@ -56,10 +56,13 @@ struct ExportView: View {
                 } message: {
                     Text(googleDriveInstruction)
                 }
-                .alert("Save Session", isPresented: $showSaveSession) {
-                    saveSessionAlertButtons
-                } message: {
-                    Text("Save this scan to continue editing later.")
+                .sheet(isPresented: $showSaveSession) {
+                    SaveSessionSheet(
+                        sessionName: $sessionName,
+                        isSaving: isSavingSession,
+                        onSave: { Task { await saveSession() } },
+                        onCancel: { showSaveSession = false }
+                    )
                 }
                 .fileExporter(
                     isPresented: $showFilePicker,
@@ -391,14 +394,6 @@ struct ExportView: View {
         Button("Cancel", role: .cancel) {}
     }
 
-    @ViewBuilder
-    private var saveSessionAlertButtons: some View {
-        TextField("Session Name", text: $sessionName)
-        Button("Save") {
-            Task { await saveSession() }
-        }
-        Button("Cancel", role: .cancel) {}
-    }
 
     private func handleFileExportResult(_ result: Result<URL, Error>) {
         switch result {
@@ -578,6 +573,9 @@ struct ExportView: View {
                 mode: scanMode
             )
 
+            // Dismiss sheet and show success
+            showSaveSession = false
+
             withAnimation {
                 sessionSaveSuccess = true
             }
@@ -730,5 +728,73 @@ struct SurfaceStatItem: View {
                 .font(.caption)
                 .fontWeight(.medium)
         }
+    }
+}
+
+struct SaveSessionSheet: View {
+    @Binding var sessionName: String
+    let isSaving: Bool
+    let onSave: () -> Void
+    let onCancel: () -> Void
+    @FocusState private var isNameFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Session Name")
+                        .font(.headline)
+
+                    TextField("Enter name for this scan", text: $sessionName)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isNameFocused)
+                        .submitLabel(.done)
+                }
+                .padding(.horizontal)
+
+                Text("Save this scan to continue editing later or annotate for ML training.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                Spacer()
+
+                VStack(spacing: 12) {
+                    Button(action: onSave) {
+                        HStack {
+                            if isSaving {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            }
+                            Text(isSaving ? "Saving..." : "Save Session")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(sessionName.isEmpty ? Color.gray : Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                    .disabled(sessionName.isEmpty || isSaving)
+
+                    Button("Cancel", action: onCancel)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.bottom)
+            }
+            .padding(.top)
+            .navigationTitle("Save Session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+            .onAppear {
+                isNameFocused = true
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
