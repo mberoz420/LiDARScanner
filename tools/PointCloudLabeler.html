@@ -180,6 +180,26 @@
                 </select>
             </div>
 
+            <h2>Visibility</h2>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="show-floors" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#2ecc71"></span> Floors
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="show-ceilings" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#f1c40f"></span> Ceilings
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="show-walls" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#3498db"></span> Walls
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="show-objects" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#e74c3c"></span> Objects
+                </label>
+            </div>
+
             <h2>Statistics</h2>
             <div class="stats" id="stats">
                 <div><span>Total Points:</span><span id="stat-total">0</span></div>
@@ -230,6 +250,113 @@
         function updateColorMode(mode) {
             colorMode = mode;
             updatePointColors();
+        }
+
+        // Visibility filters
+        let showFloors = true, showCeilings = true, showWalls = true, showObjects = true;
+
+        function updateVisibility() {
+            showFloors = document.getElementById('show-floors').checked;
+            showCeilings = document.getElementById('show-ceilings').checked;
+            showWalls = document.getElementById('show-walls').checked;
+            showObjects = document.getElementById('show-objects').checked;
+            rebuildPointCloud();
+        }
+
+        // Determine surface type from normal
+        function getSurfaceType(index) {
+            const n = normals[index] || {x: 0, y: 1, z: 0};
+            const ny = Math.abs(n.y);
+            const horizontalMag = Math.sqrt(n.x * n.x + n.z * n.z);
+
+            if (ny > 0.7) {
+                return n.y > 0 ? 'floor' : 'ceiling';
+            } else if (horizontalMag > 0.7) {
+                return 'wall';
+            } else {
+                return 'object';
+            }
+        }
+
+        function isPointVisible(index) {
+            const type = getSurfaceType(index);
+            switch (type) {
+                case 'floor': return showFloors;
+                case 'ceiling': return showCeilings;
+                case 'wall': return showWalls;
+                case 'object': return showObjects;
+                default: return true;
+            }
+        }
+
+        function rebuildPointCloud() {
+            if (points.length === 0) return;
+
+            // Remove existing point cloud
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloud.geometry.dispose();
+                pointCloud.material.dispose();
+            }
+
+            // Filter visible points
+            const visibleIndices = [];
+            points.forEach((p, i) => {
+                if (isPointVisible(i)) {
+                    visibleIndices.push(i);
+                }
+            });
+
+            if (visibleIndices.length === 0) {
+                document.getElementById('selection-info').textContent = 'No points visible. Check visibility filters.';
+                return;
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(visibleIndices.length * 3);
+            const colors = new Float32Array(visibleIndices.length * 3);
+
+            visibleIndices.forEach((origIndex, i) => {
+                const p = points[origIndex];
+                positions[i * 3] = p.x;
+                positions[i * 3 + 1] = p.y;
+                positions[i * 3 + 2] = p.z;
+
+                const color = getPointColor(origIndex);
+                colors[i * 3] = color.r;
+                colors[i * 3 + 1] = color.g;
+                colors[i * 3 + 2] = color.b;
+            });
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // Calculate adaptive point size
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+            let minZ = Infinity, maxZ = -Infinity;
+            visibleIndices.forEach(i => {
+                const p = points[i];
+                if (isFinite(p.x)) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+                if (isFinite(p.y)) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+                if (isFinite(p.z)) { minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z); }
+            });
+            const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+            const baseSize = extent / 100;
+
+            const sliderValue = parseFloat(document.getElementById('size-slider').value);
+            const material = new THREE.PointsMaterial({
+                size: baseSize * sliderValue,
+                vertexColors: true,
+                sizeAttenuation: true
+            });
+
+            pointCloud = new THREE.Points(geometry, material);
+            pointCloud.userData.visibleIndices = visibleIndices;  // Store mapping
+            scene.add(pointCloud);
+
+            document.getElementById('selection-info').textContent =
+                `Showing ${visibleIndices.length.toLocaleString()} of ${points.length.toLocaleString()} points.`;
         }
 
         // Get color based on current color mode
@@ -407,54 +534,8 @@
         }
 
         function createPointCloud() {
-            // Remove existing point cloud
-            if (pointCloud) {
-                scene.remove(pointCloud);
-                pointCloud.geometry.dispose();
-                pointCloud.material.dispose();
-            }
-
-            const geometry = new THREE.BufferGeometry();
-            const positions = new Float32Array(points.length * 3);
-            const colors = new Float32Array(points.length * 3);
-
-            points.forEach((p, i) => {
-                positions[i * 3] = p.x;
-                positions[i * 3 + 1] = p.y;
-                positions[i * 3 + 2] = p.z;
-
-                const color = getPointColor(i);
-                colors[i * 3] = color.r;
-                colors[i * 3 + 1] = color.g;
-                colors[i * 3 + 2] = color.b;
-            });
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-            // Calculate adaptive point size based on point cloud extent
-            let minX = Infinity, maxX = -Infinity;
-            let minY = Infinity, maxY = -Infinity;
-            let minZ = Infinity, maxZ = -Infinity;
-            points.forEach(p => {
-                if (isFinite(p.x)) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
-                if (isFinite(p.y)) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
-                if (isFinite(p.z)) { minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z); }
-            });
-            const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-            const baseSize = extent / 100; // 1% of scene size
-
-            const sliderValue = parseFloat(document.getElementById('size-slider').value);
-            const material = new THREE.PointsMaterial({
-                size: baseSize * sliderValue,
-                vertexColors: true,
-                sizeAttenuation: true
-            });
-
-            console.log('Point size:', baseSize * sliderValue, 'extent:', extent);
-
-            pointCloud = new THREE.Points(geometry, material);
-            scene.add(pointCloud);
+            // Use rebuildPointCloud which handles visibility filtering
+            rebuildPointCloud();
         }
 
         function updatePointColors() {
