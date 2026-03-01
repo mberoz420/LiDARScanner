@@ -135,7 +135,13 @@ class TestModeDetector: ObservableObject {
     /// Captured boundary points
     private var capturedBoundaryPoints: [SIMD3<Float>] = []
 
+    // Store current frame for capture button
+    private var currentFrame: ARFrame?
+
     func processFrame(_ frame: ARFrame) {
+        // Store frame for manual capture
+        currentFrame = frame
+
         guard !isPaused else { return }
 
         // Get camera position and direction
@@ -143,10 +149,50 @@ class TestModeDetector: ObservableObject {
         cameraPosition = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         cameraForward = -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
 
-        // Find the best surface currently in the reticle
+        // Find what surface is in the reticle (for display only, no auto-capture)
+        currentReticleSurface = findSurfaceInReticle(frame: frame)
+
+        updateStatus()
+    }
+
+    /// What's currently in the reticle (for UI feedback)
+    @Published var currentReticleSurface: String = "No surface"
+
+    /// Find the surface currently in the reticle
+    private func findSurfaceInReticle(frame: ARFrame) -> String {
+        for anchor in frame.anchors {
+            guard let planeAnchor = anchor as? ARPlaneAnchor else { continue }
+
+            guard isPlaneInReticleCenter(planeAnchor, frame: frame) else { continue }
+
+            let normal = simd_normalize(SIMD3<Float>(
+                planeAnchor.transform.columns.1.x,
+                planeAnchor.transform.columns.1.y,
+                planeAnchor.transform.columns.1.z
+            ))
+            let planeY = planeAnchor.transform.columns.3.y
+
+            // Determine surface type
+            let isCeiling = (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
+                           planeY > cameraPosition.y + 0.3
+            let isWall = abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5
+
+            if isCeiling {
+                return "CEILING detected"
+            } else if isWall {
+                return "WALL detected"
+            }
+        }
+        return "No surface"
+    }
+
+    /// CAPTURE BUTTON - manually capture whatever is in reticle
+    func captureCurrentSurface() {
+        guard let frame = currentFrame else { return }
+
+        // Find best surface in reticle
         var bestAnchor: ARPlaneAnchor?
-        var bestSurfaceType: DetectedSurface.SurfaceType?
-        var bestNormal: SIMD3<Float>?
+        var isCeilingSurface = false
         var bestDistance: Float = .infinity
 
         for anchor in frame.anchors {
@@ -164,81 +210,42 @@ class TestModeDetector: ObservableObject {
             ))
             let planeY = planeAnchor.transform.columns.3.y
 
-            // Check if this plane is in the reticle
             guard isPlaneInReticleCenter(planeAnchor, frame: frame) else { continue }
 
-            // Determine surface type
             let isCeiling = (planeAnchor.classification == .ceiling || normal.y < -0.7) &&
                            planeY > cameraPosition.y + 0.3
             let isWall = abs(normal.y) < 0.3 && planeY > cameraPosition.y - 0.5
 
             guard isCeiling || isWall else { continue }
 
-            // Check if we already have this exact surface (by plane similarity, not just anchor ID)
+            // Check if already captured (by similarity)
             if isSurfaceSimilarToExisting(type: isCeiling ? .ceiling : .wall, normal: normal, position: planeCenter) {
                 continue
             }
 
-            // Track the closest surface in the reticle
             let distance = simd_distance(planeCenter, cameraPosition)
             if distance < bestDistance {
                 bestDistance = distance
                 bestAnchor = planeAnchor
-                bestSurfaceType = isCeiling ? .ceiling : .wall
-                bestNormal = normal
+                isCeilingSurface = isCeiling
             }
         }
 
-        // Dwell logic - track by surface TYPE and DIRECTION, not anchor UUID
-        if let anchor = bestAnchor, let surfaceType = bestSurfaceType, let normal = bestNormal {
-            // Check if this matches what we're already tracking
-            let matchesCurrentDwell = isSimilarToCurrentDwell(type: surfaceType, normal: normal)
+        // Register the surface
+        if let anchor = bestAnchor {
+            let planeCenter = SIMD3<Float>(
+                anchor.transform.columns.3.x,
+                anchor.transform.columns.3.y,
+                anchor.transform.columns.3.z
+            )
+            let planeY = anchor.transform.columns.3.y
 
-            if matchesCurrentDwell, let startTime = dwellStartTime {
-                // Continue tracking - update progress
-                let elapsed = Date().timeIntervalSince(startTime)
-                dwellProgress = min(1.0, Float(elapsed / dwellDuration))
-                dwellPlaneAnchor = anchor  // Update to latest matching anchor
-
-                // Register after dwell completes
-                if elapsed >= dwellDuration {
-                    let planeCenter = SIMD3<Float>(
-                        anchor.transform.columns.3.x,
-                        anchor.transform.columns.3.y,
-                        anchor.transform.columns.3.z
-                    )
-                    let planeY = anchor.transform.columns.3.y
-
-                    if surfaceType == .ceiling {
-                        registerCeiling(planeAnchor: anchor, planeCenter: planeCenter, planeY: planeY)
-                    } else {
-                        registerWall(planeAnchor: anchor, planeY: planeY)
-                    }
-                    resetDwellState()
-                }
-            } else if dwellStartTime == nil {
-                // Start new dwell
-                dwellStartTime = Date()
-                dwellSurfaceType = surfaceType
-                dwellNormalDirection = normal
-                dwellPlaneAnchor = anchor
-                dwellProgress = 0
+            if isCeilingSurface {
+                registerCeiling(planeAnchor: anchor, planeCenter: planeCenter, planeY: planeY)
             } else {
-                // Different surface type/direction - reset and start new
-                resetDwellState()
-                dwellStartTime = Date()
-                dwellSurfaceType = surfaceType
-                dwellNormalDirection = normal
-                dwellPlaneAnchor = anchor
-            }
-        } else {
-            // No valid surface in reticle - reset dwell
-            if dwellStartTime != nil {
-                resetDwellState()
+                registerWall(planeAnchor: anchor, planeY: planeY)
             }
         }
-
-        updateStatus()
     }
 
     /// Check if a surface is similar to one we already detected

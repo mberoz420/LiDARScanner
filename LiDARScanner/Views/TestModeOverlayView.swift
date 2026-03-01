@@ -10,21 +10,11 @@ struct TestModeOverlayView: View {
             VStack {
                 Spacer().frame(height: 80)
 
-                // Clean midsize reticle with dwell progress
+                // Clean midsize reticle
                 ZStack {
-                    // Dwell progress ring (outer)
-                    if detector.dwellProgress > 0 {
-                        Circle()
-                            .trim(from: 0, to: CGFloat(detector.dwellProgress))
-                            .stroke(Color.green, lineWidth: 6)
-                            .frame(width: 116, height: 116)
-                            .rotationEffect(.degrees(-90))
-                            .animation(.linear(duration: 0.1), value: detector.dwellProgress)
-                    }
-
                     // Main reticle circle
                     Circle()
-                        .stroke(reticleColor, lineWidth: 2)
+                        .stroke(reticleColor, lineWidth: 3)
                         .frame(width: 100, height: 100)
 
                     // Crosshairs
@@ -41,18 +31,33 @@ struct TestModeOverlayView: View {
                         .frame(width: 8, height: 8)
                 }
 
-                // Instruction under reticle
-                Text(instructionText)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(8)
-                    .padding(.top, 12)
+                // What's in reticle + CAPTURE button
+                VStack(spacing: 8) {
+                    Text(detector.currentReticleSurface)
+                        .font(.headline)
+                        .foregroundColor(detector.currentReticleSurface.contains("detected") ? .green : .gray)
 
-                Spacer().frame(height: 40)
+                    // BIG CAPTURE BUTTON
+                    Button(action: {
+                        detector.captureCurrentSurface()
+                    }) {
+                        HStack {
+                            Image(systemName: "camera.fill")
+                            Text("CAPTURE")
+                                .fontWeight(.bold)
+                        }
+                        .font(.title3)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 30)
+                        .padding(.vertical, 12)
+                        .background(detector.currentReticleSurface.contains("detected") ? Color.blue : Color.gray)
+                        .cornerRadius(25)
+                    }
+                    .disabled(!detector.currentReticleSurface.contains("detected"))
+                }
+                .padding(.top, 12)
+
+                Spacer().frame(height: 20)
             }
 
             // MIDDLE TO BOTTOM: Detected surfaces list
@@ -97,7 +102,7 @@ struct TestModeOverlayView: View {
                         }
 
                         if detector.detectedSurfaces.isEmpty {
-                            Text("Point reticle at ceiling, then each wall")
+                            Text("Point reticle at ceiling/wall, tap CAPTURE")
                                 .font(.caption)
                                 .foregroundColor(.gray)
                                 .padding()
@@ -105,33 +110,21 @@ struct TestModeOverlayView: View {
                     }
                     .padding(.horizontal)
                 }
-                .frame(maxHeight: 300)
+                .frame(maxHeight: 250)
                 .background(Color.black.opacity(0.7))
                 .cornerRadius(16)
                 .padding(.horizontal)
 
-                // Bottom status with pause button
+                // Bottom status
                 HStack {
                     Text("Surfaces: \(detector.detectedSurfaces.count)")
                         .font(.caption)
-
                     Spacer()
-
-                    // Manual pause/resume button
-                    Button(action: {
-                        detector.togglePause()
-                    }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: detector.isPaused ? "play.fill" : "pause.fill")
-                            Text(detector.isPaused ? "Resume" : "Pause")
-                                .fontWeight(.semibold)
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(detector.isPaused ? Color.green : Color.red.opacity(0.8))
-                        .cornerRadius(20)
+                    if detector.isPaused {
+                        Text("PAUSED")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.red)
                     }
                 }
                 .foregroundColor(.white)
@@ -142,20 +135,12 @@ struct TestModeOverlayView: View {
     }
 
     private var reticleColor: Color {
-        if detector.ceilingPlane == nil {
-            return .orange  // Looking for ceiling
+        if detector.currentReticleSurface.contains("CEILING") {
+            return .cyan
+        } else if detector.currentReticleSurface.contains("WALL") {
+            return .orange
         } else {
-            return .cyan    // Looking for walls
-        }
-    }
-
-    private var instructionText: String {
-        if detector.dwellProgress > 0 {
-            return "Hold steady..."
-        } else if detector.ceilingPlane == nil {
-            return "Point at CEILING (hold 2s)"
-        } else {
-            return "Point at each WALL (hold 2s)"
+            return .white.opacity(0.5)
         }
     }
 }
