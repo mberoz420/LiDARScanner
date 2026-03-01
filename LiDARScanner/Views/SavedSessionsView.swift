@@ -234,6 +234,7 @@ struct SessionDetailView: View {
     @State private var error: String?
     @State private var showExport = false
     @State private var showArchitecturalExtraction = false
+    @State private var showAnnotation = false
     @State private var repairModeEnabled = true
     @Environment(\.dismiss) private var dismiss
 
@@ -266,6 +267,11 @@ struct SessionDetailView: View {
             .sheet(isPresented: $showArchitecturalExtraction) {
                 if let scan = loadedScan {
                     ArchitecturalExtractionView(scan: scan)
+                }
+            }
+            .sheet(isPresented: $showAnnotation) {
+                if let scan = loadedScan {
+                    AnnotationView(scan: scan)
                 }
             }
         }
@@ -407,6 +413,20 @@ struct SessionDetailView: View {
                 .frame(maxWidth: .infinity)
                 .padding()
                 .background(Color.purple)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+
+            // Annotate for ML Training
+            Button(action: { showAnnotation = true }) {
+                HStack {
+                    Image(systemName: "brain")
+                    Text("Annotate for Training")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.orange)
                 .foregroundColor(.white)
                 .cornerRadius(12)
             }
