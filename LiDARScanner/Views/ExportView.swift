@@ -75,12 +75,13 @@ struct ExportView: View {
     // MARK: - Main Content
 
     private var mainContent: some View {
-        VStack(spacing: 20) {
-            exportModeSection
-            exportFormatSection
-            actionButtonsSection
-            statusMessagesSection
-            Spacer()
+        ScrollView {
+            VStack(spacing: 20) {
+                exportModeSection
+                exportFormatSection
+                actionButtonsSection
+                statusMessagesSection
+            }
         }
     }
 
