@@ -241,6 +241,9 @@ struct SessionDetailView: View {
     @State private var showArchitecturalExtraction = false
     @State private var showAnnotation = false
     @State private var repairModeEnabled = true
+    @State private var showLabelingExport = false
+    @State private var labelingExportURL: URL?
+    @State private var isExportingForLabeling = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -277,6 +280,15 @@ struct SessionDetailView: View {
             .sheet(isPresented: $showAnnotation) {
                 if let scan = loadedScan {
                     AnnotationView(scan: scan)
+                }
+            }
+            .sheet(isPresented: $showLabelingExport) {
+                if let url = labelingExportURL {
+                    LabelingExportShareSheet(url: url) {
+                        showLabelingExport = false
+                        // Clean up temp file
+                        try? FileManager.default.removeItem(at: url)
+                    }
                 }
             }
         }
@@ -449,6 +461,26 @@ struct SessionDetailView: View {
                 .foregroundColor(.white)
                 .cornerRadius(12)
             }
+
+            // Export for Desktop Labeling
+            Button(action: { exportForLabeling() }) {
+                HStack {
+                    if isExportingForLabeling {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Image(systemName: "desktopcomputer")
+                    }
+                    Text("Export for Desktop Labeling")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.teal)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            .disabled(isExportingForLabeling)
         }
     }
 
@@ -481,6 +513,102 @@ struct SessionDetailView: View {
         dismiss()
         onResume()
     }
+
+    private func exportForLabeling() {
+        guard let scan = loadedScan else { return }
+
+        isExportingForLabeling = true
+
+        Task {
+            do {
+                let url = try await createLabelingJSON(from: scan)
+                await MainActor.run {
+                    labelingExportURL = url
+                    showLabelingExport = true
+                    isExportingForLabeling = false
+                }
+            } catch {
+                print("[SessionDetail] Export for labeling failed: \(error)")
+                await MainActor.run {
+                    isExportingForLabeling = false
+                }
+            }
+        }
+    }
+
+    private func createLabelingJSON(from scan: CapturedScan) async throws -> URL {
+        // Create JSON structure compatible with PointCloudLabeler.html
+        var pointsArray: [[String: Any]] = []
+
+        for mesh in scan.meshes {
+            for i in 0..<mesh.vertices.count {
+                let vertex = mesh.vertices[i]
+                let normal = i < mesh.normals.count ? mesh.normals[i] : SIMD3<Float>(0, 1, 0)
+
+                var point: [String: Any] = [
+                    "x": vertex.x,
+                    "y": vertex.y,
+                    "z": vertex.z,
+                    "nx": normal.x,
+                    "ny": normal.y,
+                    "nz": normal.z
+                ]
+
+                // Add color if available
+                if i < mesh.colors.count {
+                    let color = mesh.colors[i]
+                    point["r"] = color.r
+                    point["g"] = color.g
+                    point["b"] = color.b
+                }
+
+                // Add surface type if available
+                if let surfaceType = mesh.surfaceType {
+                    point["label"] = surfaceType.rawValue
+                }
+
+                pointsArray.append(point)
+            }
+        }
+
+        let exportData: [String: Any] = [
+            "points": pointsArray,
+            "metadata": [
+                "sessionId": sessionId.uuidString,
+                "exportDate": ISO8601DateFormatter().string(from: Date()),
+                "vertexCount": scan.vertexCount,
+                "meshCount": scan.meshes.count
+            ]
+        ]
+
+        let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted, .sortedKeys])
+
+        // Save to temp file with .json extension
+        let filename = "labeling_\(sessionId.uuidString.prefix(8)).json"
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+
+        try jsonData.write(to: tempURL)
+
+        print("[SessionDetail] Created labeling JSON: \(tempURL.path) (\(jsonData.count) bytes)")
+
+        return tempURL
+    }
+}
+
+// Share sheet for labeling export
+struct LabelingExportShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    let onDismiss: () -> Void
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            onDismiss()
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Stat Item
