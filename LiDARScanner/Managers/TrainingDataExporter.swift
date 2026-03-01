@@ -32,7 +32,7 @@ class TrainingDataExporter: ObservableObject {
     }
 
     /// Label categories matching the ML model
-    enum PointLabel: Int, CaseIterable, Codable {
+    enum PointLabel: Int, CaseIterable, Codable, Sendable {
         case floor = 0
         case ceiling = 1
         case wall = 2

@@ -5,7 +5,7 @@ import CoreML
 import simd
 
 /// Surface type classification based on normal direction
-enum SurfaceType: String, CaseIterable {
+enum SurfaceType: String, CaseIterable, Sendable {
     case floor = "Floor"
     case ceiling = "Ceiling"
     case ceilingProtrusion = "Ceiling Protrusion"  // Beams, ducts, fixtures
