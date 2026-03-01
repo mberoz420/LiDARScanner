@@ -684,38 +684,63 @@ struct ExportView: View {
     }
 
     private func uploadSessionToiCloud(sessionId: UUID) async throws {
+        // Check if user is signed in to iCloud
+        guard FileManager.default.ubiquityIdentityToken != nil else {
+            throw NSError(domain: "ExportView", code: 10, userInfo: [NSLocalizedDescriptionKey: "Not signed in to iCloud. Go to Settings → Apple ID → iCloud and sign in."])
+        }
+
         // Get the session file URL
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let sessionsDir = docs.appendingPathComponent("ScanSessions", isDirectory: true)
         let sessionURL = sessionsDir.appendingPathComponent("\(sessionId.uuidString).json")
 
         guard FileManager.default.fileExists(atPath: sessionURL.path) else {
-            throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found"])
+            throw NSError(domain: "ExportView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Session file not found locally"])
         }
 
         // Get iCloud container URL
-        guard let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)?
-            .appendingPathComponent("Documents")
-            .appendingPathComponent("ScanSessions") else {
-            throw NSError(domain: "ExportView", code: 4, userInfo: [NSLocalizedDescriptionKey: "iCloud not available. Please sign in to iCloud in Settings."])
+        guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else {
+            throw NSError(domain: "ExportView", code: 11, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available. Please enable iCloud Drive:\n\n1. Open Settings → Apple ID → iCloud\n2. Enable 'iCloud Drive'\n3. Make sure LiDARScanner is allowed\n\nOr the app's iCloud capability may not be configured in Xcode."])
         }
 
+        let iCloudURL = containerURL
+            .appendingPathComponent("Documents")
+            .appendingPathComponent("ScanSessions")
+
+        print("[ExportView] iCloud container URL: \(containerURL.path)")
+        print("[ExportView] iCloud destination folder: \(iCloudURL.path)")
+
         // Create ScanSessions folder in iCloud if needed
-        if !FileManager.default.fileExists(atPath: iCloudURL.path) {
-            try FileManager.default.createDirectory(at: iCloudURL, withIntermediateDirectories: true)
+        do {
+            if !FileManager.default.fileExists(atPath: iCloudURL.path) {
+                try FileManager.default.createDirectory(at: iCloudURL, withIntermediateDirectories: true)
+                print("[ExportView] Created iCloud ScanSessions folder")
+            }
+        } catch {
+            throw NSError(domain: "ExportView", code: 12, userInfo: [NSLocalizedDescriptionKey: "Failed to create iCloud folder: \(error.localizedDescription)"])
         }
 
         // Copy file to iCloud
         let destinationURL = iCloudURL.appendingPathComponent("\(sessionId.uuidString).json")
 
-        // Remove existing file if present
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
+        do {
+            // Remove existing file if present
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+
+            try FileManager.default.copyItem(at: sessionURL, to: destinationURL)
+            print("[ExportView] Session copied to iCloud: \(destinationURL.path)")
+        } catch {
+            throw NSError(domain: "ExportView", code: 13, userInfo: [NSLocalizedDescriptionKey: "Failed to copy to iCloud: \(error.localizedDescription)"])
         }
 
-        try FileManager.default.copyItem(at: sessionURL, to: destinationURL)
-
-        print("[ExportView] Session uploaded to iCloud: \(destinationURL.path)")
+        // Verify the file exists
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            print("[ExportView] Verified: File exists in iCloud")
+        } else {
+            print("[ExportView] Warning: File may still be uploading to iCloud")
+        }
     }
 
     private func saveToiCloud(url: URL) {
@@ -1022,7 +1047,8 @@ struct SaveSessionSheet: View {
         case .googleDrive:
             return isGoogleDriveConfigured
         case .iCloud:
-            return FileManager.default.ubiquityIdentityToken != nil
+            // Need both: signed in AND container available
+            return iCloudStatus.isSignedIn && iCloudStatus.isContainerAvailable
         }
     }
 
@@ -1064,9 +1090,17 @@ struct SaveLocationRow: View {
                     .frame(width: 30)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(location.rawValue)
-                        .font(.body)
-                        .foregroundColor(isAvailable ? .primary : .secondary)
+                    HStack {
+                        Text(location.rawValue)
+                            .font(.body)
+                            .foregroundColor(isAvailable ? .primary : .secondary)
+
+                        if !isAvailable {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
 
                     if !isAvailable {
                         Text(unavailableReason)
@@ -1084,11 +1118,14 @@ struct SaveLocationRow: View {
                 if isSelected && isAvailable {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
+                } else if !isAvailable {
+                    Image(systemName: "xmark.circle")
+                        .foregroundColor(.gray)
                 }
             }
             .padding(.vertical, 10)
             .padding(.horizontal, 12)
-            .background(isSelected && isAvailable ? Color.green.opacity(0.1) : Color.gray.opacity(0.05))
+            .background(backgroundForState)
             .cornerRadius(8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
@@ -1096,6 +1133,16 @@ struct SaveLocationRow: View {
             )
         }
         .disabled(!isAvailable)
+    }
+
+    private var backgroundForState: Color {
+        if !isAvailable {
+            return Color.orange.opacity(0.05)
+        } else if isSelected {
+            return Color.green.opacity(0.1)
+        } else {
+            return Color.gray.opacity(0.05)
+        }
     }
 
     private var iconColor: Color {
@@ -1117,9 +1164,34 @@ struct SaveLocationRow: View {
         case .local:
             return ""
         case .googleDrive:
-            return "Configure in Settings"
+            return "Configure in Settings → Google Drive"
         case .iCloud:
-            return "Sign in to iCloud in Settings"
+            if FileManager.default.ubiquityIdentityToken == nil {
+                return "Sign in to iCloud in device Settings"
+            } else {
+                return "Enable iCloud Drive in device Settings"
+            }
+        }
+    }
+}
+
+// Helper to check iCloud status
+struct iCloudStatus {
+    static var isSignedIn: Bool {
+        FileManager.default.ubiquityIdentityToken != nil
+    }
+
+    static var isContainerAvailable: Bool {
+        FileManager.default.url(forUbiquityContainerIdentifier: nil) != nil
+    }
+
+    static var statusMessage: String {
+        if !isSignedIn {
+            return "Not signed in to iCloud"
+        } else if !isContainerAvailable {
+            return "iCloud Drive not enabled for this app"
+        } else {
+            return "iCloud ready"
         }
     }
 }
