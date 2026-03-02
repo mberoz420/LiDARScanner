@@ -1527,7 +1527,7 @@ class SurfaceClassifier: ObservableObject {
     /// Returns true if we should skip detailed processing for this surface type
     func shouldReduceDetail(for surfaceType: SurfaceType) -> Bool {
         switch surfaceType {
-        case .ceiling, .ceilingProtrusion:
+        case .ceiling, .ceilingProtrusion, .cove:
             return true // Ceilings are usually flat, less detail needed
         case .floor, .floorEdge:
             return false // Floors may have furniture, keep detail
@@ -1535,8 +1535,10 @@ class SurfaceClassifier: ObservableObject {
             return false // Walls have features
         case .door, .doorFrame, .window, .windowFrame:
             return false // Openings need detail
-        case .object:
+        case .object, .objectTop:
             return false // Objects need detail
+        case .backReflection:
+            return true // Back reflections don't need detail
         case .unknown:
             return false
         }
