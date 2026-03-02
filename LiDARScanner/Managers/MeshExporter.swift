@@ -7,9 +7,16 @@ enum ExportFormat: String, CaseIterable, Identifiable {
     case usdz = "USDZ"
     case ply = "PLY"
     case obj = "OBJ"
+    case roomBoundary = "Room Boundary"  // Infinite planes (scaled 5x)
 
     var id: String { rawValue }
-    var fileExtension: String { rawValue.lowercased() }
+    var fileExtension: String {
+        switch self {
+        case .usdz: return "usdz"
+        case .ply: return "ply"
+        case .obj, .roomBoundary: return "obj"
+        }
+    }
 }
 
 @MainActor
@@ -282,6 +289,116 @@ class MeshExporter: ObservableObject {
         print("[MeshExporter] OBJ exported with groups: \(groupedMeshes.filter { !$0.value.isEmpty }.keys.joined(separator: ", "))")
     }
 
+    // MARK: - Room Boundary Export (infinite planes scaled 5x)
+
+    /// Export room boundary as OBJ with infinite planes (scaled 5x, no holes)
+    func exportRoomBoundary(_ boundary: RoomBoundary, to url: URL) throws {
+        var objContent = "# LiDAR Scanner - Room Boundary Export\n"
+        objContent += "# Infinite planes fitted to point clusters (scaled 5x)\n"
+        objContent += "# Floor, Ceiling, and Walls form closed 3D boundary\n\n"
+
+        var globalVertexIndex: UInt32 = 1  // OBJ is 1-indexed
+
+        // Calculate room bounds from corners
+        var minBound = SIMD3<Float>(Float.infinity, Float.infinity, Float.infinity)
+        var maxBound = SIMD3<Float>(-Float.infinity, -Float.infinity, -Float.infinity)
+
+        for corner in boundary.corners {
+            minBound = min(minBound, corner)
+            maxBound = max(maxBound, corner)
+        }
+
+        // Scale bounds 5x to ensure no holes (planes are "infinite")
+        let center = (minBound + maxBound) / 2
+        let halfSize = (maxBound - minBound) / 2
+        let scaledHalfSize = halfSize * 5  // 5x scale
+
+        let floorY = boundary.floorPlane.point.y
+        let ceilingY = boundary.ceilingPlane.point.y
+
+        // FLOOR PLANE (large quad at floor height)
+        objContent += "# Floor Plane (infinite, scaled 5x)\n"
+        objContent += "g Floor\n"
+        objContent += "o Floor_Plane\n"
+
+        let floorVerts = [
+            SIMD3<Float>(center.x - scaledHalfSize.x, floorY, center.z - scaledHalfSize.z),
+            SIMD3<Float>(center.x + scaledHalfSize.x, floorY, center.z - scaledHalfSize.z),
+            SIMD3<Float>(center.x + scaledHalfSize.x, floorY, center.z + scaledHalfSize.z),
+            SIMD3<Float>(center.x - scaledHalfSize.x, floorY, center.z + scaledHalfSize.z)
+        ]
+        for v in floorVerts {
+            objContent += String(format: "v %.6f %.6f %.6f\n", v.x, v.y, v.z)
+        }
+        objContent += "vn 0 1 0\n"  // Floor normal points up
+        let floorStart = globalVertexIndex
+        objContent += "f \(floorStart)//1 \(floorStart+1)//1 \(floorStart+2)//1 \(floorStart+3)//1\n\n"
+        globalVertexIndex += 4
+
+        // CEILING PLANE (large quad at ceiling height)
+        objContent += "# Ceiling Plane (infinite, scaled 5x)\n"
+        objContent += "g Ceiling\n"
+        objContent += "o Ceiling_Plane\n"
+
+        let ceilingVerts = [
+            SIMD3<Float>(center.x - scaledHalfSize.x, ceilingY, center.z - scaledHalfSize.z),
+            SIMD3<Float>(center.x + scaledHalfSize.x, ceilingY, center.z - scaledHalfSize.z),
+            SIMD3<Float>(center.x + scaledHalfSize.x, ceilingY, center.z + scaledHalfSize.z),
+            SIMD3<Float>(center.x - scaledHalfSize.x, ceilingY, center.z + scaledHalfSize.z)
+        ]
+        for v in ceilingVerts {
+            objContent += String(format: "v %.6f %.6f %.6f\n", v.x, v.y, v.z)
+        }
+        objContent += "vn 0 -1 0\n"  // Ceiling normal points down
+        let ceilingStart = globalVertexIndex
+        // Reverse winding for ceiling (facing down)
+        objContent += "f \(ceilingStart+3)//2 \(ceilingStart+2)//2 \(ceilingStart+1)//2 \(ceilingStart)//2\n\n"
+        globalVertexIndex += 4
+
+        // WALL PLANES (vertical quads from floor to ceiling)
+        objContent += "# Wall Planes (infinite, scaled 5x)\n"
+        objContent += "g Walls\n"
+
+        var normalIndex: UInt32 = 3
+        for (index, wallPlane) in boundary.wallPlanes.enumerated() {
+            objContent += "o Wall_\(index)\n"
+
+            // Create wall quad perpendicular to wall normal
+            let wallNormal = wallPlane.normal
+            let wallPoint = wallPlane.point
+
+            // Calculate wall tangent (horizontal direction along wall)
+            let up = SIMD3<Float>(0, 1, 0)
+            let tangent = simd_normalize(simd_cross(up, wallNormal))
+
+            // Wall extends 5x in tangent direction
+            let wallHalfWidth = scaledHalfSize.x  // Use room scale
+
+            let wallVerts = [
+                wallPoint + tangent * wallHalfWidth + SIMD3<Float>(0, floorY - wallPoint.y, 0),
+                wallPoint - tangent * wallHalfWidth + SIMD3<Float>(0, floorY - wallPoint.y, 0),
+                wallPoint - tangent * wallHalfWidth + SIMD3<Float>(0, ceilingY - wallPoint.y, 0),
+                wallPoint + tangent * wallHalfWidth + SIMD3<Float>(0, ceilingY - wallPoint.y, 0)
+            ]
+
+            for v in wallVerts {
+                objContent += String(format: "v %.6f %.6f %.6f\n", v.x, v.y, v.z)
+            }
+            objContent += String(format: "vn %.6f %.6f %.6f\n", wallNormal.x, wallNormal.y, wallNormal.z)
+
+            let wallStart = globalVertexIndex
+            objContent += "f \(wallStart)//\(normalIndex) \(wallStart+1)//\(normalIndex) \(wallStart+2)//\(normalIndex) \(wallStart+3)//\(normalIndex)\n"
+            globalVertexIndex += 4
+            normalIndex += 1
+        }
+
+        // Write file
+        let data = objContent.data(using: .utf8)!
+        try data.write(to: url)
+
+        print("[MeshExporter] Room boundary exported: floor at Y=\(floorY), ceiling at Y=\(ceilingY), \(boundary.wallPlanes.count) walls")
+    }
+
     // MARK: - Helpers
 
     /// Combine all mesh anchors into single mesh with world-space transforms applied
@@ -298,9 +415,9 @@ class MeshExporter: ObservableObject {
         let windowPlanes = scan.windowPlanes
 
         for (meshIndex, mesh) in scan.meshes.enumerated() {
-            // Skip entire meshes classified as objectTop or backReflection at mesh level
+            // Skip entire meshes classified as objects or backReflection at mesh level
             if let surfaceType = mesh.surfaceType {
-                if surfaceType == .objectTop || surfaceType == .backReflection {
+                if surfaceType.isObject || surfaceType == .backReflection {
                     skippedMeshCount += 1
                     continue
                 }
@@ -326,10 +443,10 @@ class MeshExporter: ObservableObject {
                       idx1 < meshWorldVertices.count,
                       idx2 < meshWorldVertices.count else { continue }
 
-                // Check per-face classification - skip objectTop and backReflection faces
+                // Check per-face classification - skip object and backReflection faces
                 if let classifications = faceClassifications, faceIndex < classifications.count {
                     let faceType = classifications[faceIndex]
-                    if faceType == .objectTop || faceType == .backReflection {
+                    if faceType.isObject || faceType == .backReflection {
                         filteredByClassificationCount += 1
                         continue
                     }
@@ -370,7 +487,7 @@ class MeshExporter: ObservableObject {
         for (meshIndex, mesh) in scan.meshes.enumerated() {
             // Skip meshes we already skipped
             if let surfaceType = mesh.surfaceType {
-                if surfaceType == .objectTop || surfaceType == .backReflection {
+                if surfaceType.isObject || surfaceType == .backReflection {
                     continue
                 }
             }

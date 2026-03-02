@@ -537,55 +537,71 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Point data for classification during export
+    private struct ExportPointData {
+        let vertex: SIMD3<Float>
+        let normal: SIMD3<Float>
+        let color: (r: Float, g: Float, b: Float)?
+    }
+
     private func createLabelingJSON(from scan: CapturedScan) async throws -> URL {
         // Create JSON structure compatible with PointCloudLabeler.html
-        var pointsArray: [[String: Any]] = []
+        // Phase 1: Collect all points with world coordinates
+        var allPoints: [ExportPointData] = []
 
         for mesh in scan.meshes {
-            // Get the mesh transform to convert local vertices to world coordinates
             let transform = mesh.transform
+            let rotationMatrix = simd_float3x3(
+                SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
+                SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z),
+                SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+            )
 
             for i in 0..<mesh.vertices.count {
                 let localVertex = mesh.vertices[i]
                 let localNormal = i < mesh.normals.count ? mesh.normals[i] : SIMD3<Float>(0, 1, 0)
 
-                // Transform vertex from local to world coordinates
                 let worldPos = transform * SIMD4<Float>(localVertex.x, localVertex.y, localVertex.z, 1.0)
                 let vertex = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
-
-                // Transform normal (rotation only, no translation)
-                // Extract the 3x3 rotation matrix from the 4x4 transform
-                let rotationMatrix = simd_float3x3(
-                    SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
-                    SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z),
-                    SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
-                )
                 let normal = simd_normalize(rotationMatrix * localNormal)
 
-                var point: [String: Any] = [
-                    "x": vertex.x,
-                    "y": vertex.y,
-                    "z": vertex.z,
-                    "nx": normal.x,
-                    "ny": normal.y,
-                    "nz": normal.z
-                ]
+                let color: (r: Float, g: Float, b: Float)? = i < mesh.colors.count ?
+                    (mesh.colors[i].r, mesh.colors[i].g, mesh.colors[i].b) : nil
 
-                // Add color if available
-                if i < mesh.colors.count {
-                    let color = mesh.colors[i]
-                    point["r"] = color.r
-                    point["g"] = color.g
-                    point["b"] = color.b
-                }
-
-                // Add surface type if available
-                if let surfaceType = mesh.surfaceType {
-                    point["label"] = surfaceType.rawValue
-                }
-
-                pointsArray.append(point)
+                allPoints.append(ExportPointData(vertex: vertex, normal: normal, color: color))
             }
+        }
+
+        // Phase 2: Determine room boundaries (floor/ceiling heights, wall distances)
+        let roomBounds = calculateRoomBounds(points: allPoints)
+
+        // Phase 3: Classify each point individually and build JSON
+        var pointsArray: [[String: Any]] = []
+
+        for pointData in allPoints {
+            let label = classifyPointForExport(
+                vertex: pointData.vertex,
+                normal: pointData.normal,
+                roomBounds: roomBounds
+            )
+
+            var point: [String: Any] = [
+                "x": pointData.vertex.x,
+                "y": pointData.vertex.y,
+                "z": pointData.vertex.z,
+                "nx": pointData.normal.x,
+                "ny": pointData.normal.y,
+                "nz": pointData.normal.z,
+                "label": label.rawValue
+            ]
+
+            if let color = pointData.color {
+                point["r"] = color.r
+                point["g"] = color.g
+                point["b"] = color.b
+            }
+
+            pointsArray.append(point)
         }
 
         let exportData: [String: Any] = [
@@ -594,22 +610,202 @@ struct SessionDetailView: View {
                 "sessionId": sessionId.uuidString,
                 "exportDate": ISO8601DateFormatter().string(from: Date()),
                 "vertexCount": scan.vertexCount,
-                "meshCount": scan.meshes.count
+                "meshCount": scan.meshes.count,
+                "floorHeight": roomBounds.floorHeight,
+                "ceilingHeight": roomBounds.ceilingHeight
             ]
         ]
 
         let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted, .sortedKeys])
 
-        // Save to temp file with .json extension
         let filename = "labeling_\(sessionId.uuidString.prefix(8)).json"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
 
         try jsonData.write(to: tempURL)
 
         print("[SessionDetail] Created labeling JSON: \(tempURL.path) (\(jsonData.count) bytes)")
+        print("[SessionDetail] Room bounds: floor=\(roomBounds.floorHeight), ceiling=\(roomBounds.ceilingHeight)")
 
         return tempURL
     }
+
+    /// Room boundary data for classification
+    private struct RoomBounds {
+        let floorHeight: Float      // Lowest Y with density (actual floor)
+        let ceilingHeight: Float    // Highest Y with density (actual ceiling)
+        let floorTolerance: Float   // Tolerance for floor classification
+        let ceilingTolerance: Float // Tolerance for ceiling classification
+        let wallDistances: [Int: Float]  // Farthest distance per angle bucket (16 buckets)
+        let roomCenter: SIMD2<Float>     // Center of room in XZ plane
+    }
+
+    /// Calculate room boundaries from point cloud
+    private func calculateRoomBounds(points: [ExportPointData]) -> RoomBounds {
+        // Collect Y values for upward-facing surfaces (potential floor)
+        var floorYSamples: [Float] = []
+        // Collect Y values for downward-facing surfaces (potential ceiling)
+        var ceilingYSamples: [Float] = []
+        // Track farthest points per angle for walls
+        var wallDistances: [Int: Float] = [:]  // 16 angle buckets (22.5° each)
+
+        // Calculate rough center from all points
+        var sumX: Float = 0, sumZ: Float = 0
+        for p in points {
+            sumX += p.vertex.x
+            sumZ += p.vertex.z
+        }
+        let roomCenter = SIMD2<Float>(sumX / Float(points.count), sumZ / Float(points.count))
+
+        for p in points {
+            let ny = p.normal.y
+            let horizontalMag = sqrt(p.normal.x * p.normal.x + p.normal.z * p.normal.z)
+
+            // Upward-facing surfaces (floor candidates)
+            if ny > 0.5 {
+                floorYSamples.append(p.vertex.y)
+            }
+            // Downward-facing surfaces (ceiling candidates)
+            else if ny < -0.5 {
+                ceilingYSamples.append(p.vertex.y)
+            }
+            // Horizontal normals (wall candidates)
+            else if horizontalMag > 0.5 {
+                // Calculate angle bucket (0-15 for 360°)
+                let angle = atan2(p.vertex.z - roomCenter.y, p.vertex.x - roomCenter.x)
+                let bucket = Int((angle + .pi) / (2 * .pi) * 16) % 16
+                let distance = sqrt(pow(p.vertex.x - roomCenter.x, 2) + pow(p.vertex.z - roomCenter.y, 2))
+
+                if wallDistances[bucket] == nil || distance > wallDistances[bucket]! {
+                    wallDistances[bucket] = distance
+                }
+            }
+        }
+
+        // Find floor height: LOWEST Y with significant density
+        let floorHeight = findBoundaryHeight(samples: floorYSamples, findLowest: true)
+        // Find ceiling height: HIGHEST Y with significant density
+        let ceilingHeight = findBoundaryHeight(samples: ceilingYSamples, findLowest: false)
+
+        return RoomBounds(
+            floorHeight: floorHeight,
+            ceilingHeight: ceilingHeight,
+            floorTolerance: 0.10,   // 10cm tolerance for floor
+            ceilingTolerance: 0.10, // 10cm tolerance for ceiling
+            wallDistances: wallDistances,
+            roomCenter: roomCenter
+        )
+    }
+
+    /// Find floor or ceiling height using density analysis
+    private func findBoundaryHeight(samples: [Float], findLowest: Bool) -> Float {
+        guard samples.count >= 10 else {
+            return samples.isEmpty ? 0 : (findLowest ? samples.min()! : samples.max()!)
+        }
+
+        let sorted = samples.sorted()
+        let minY = sorted.first!
+        let maxY = sorted.last!
+        let range = maxY - minY
+
+        // If all samples within 10cm, return median
+        guard range > 0.10 else {
+            return sorted[sorted.count / 2]
+        }
+
+        // Create 5cm bins
+        let binSize: Float = 0.05
+        let binCount = max(1, Int(range / binSize) + 1)
+        var histogram = [Int](repeating: 0, count: binCount)
+
+        for y in samples {
+            let binIndex = min(binCount - 1, Int((y - minY) / binSize))
+            histogram[binIndex] += 1
+        }
+
+        // Find significant density threshold
+        let maxDensity = histogram.max() ?? 1
+        let densityThreshold = max(3, maxDensity / 10)
+
+        // Find lowest (floor) or highest (ceiling) bin with significant density
+        var selectedBin = 0
+        if findLowest {
+            for i in 0..<binCount {
+                if histogram[i] >= densityThreshold {
+                    selectedBin = i
+                    break
+                }
+            }
+        } else {
+            for i in stride(from: binCount - 1, through: 0, by: -1) {
+                if histogram[i] >= densityThreshold {
+                    selectedBin = i
+                    break
+                }
+            }
+        }
+
+        // Average Y values in selected bin region
+        let binY = minY + Float(selectedBin) * binSize
+        var sum: Float = 0
+        var count = 0
+
+        for y in samples {
+            if abs(y - binY) < binSize * 1.5 {
+                sum += y
+                count += 1
+            }
+        }
+
+        return count > 0 ? sum / Float(count) : binY
+    }
+
+    /// Classify a single point based on its normal and position relative to room bounds
+    private func classifyPointForExport(
+        vertex: SIMD3<Float>,
+        normal: SIMD3<Float>,
+        roomBounds: RoomBounds
+    ) -> SurfaceType {
+        let ny = normal.y
+        let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
+
+        // Upward-facing surface
+        if ny > 0.5 {
+            // Check if at floor level (lowest Y + tolerance)
+            if vertex.y <= roomBounds.floorHeight + roomBounds.floorTolerance {
+                return .floor
+            }
+            return .objectTop
+        }
+
+        // Downward-facing surface
+        if ny < -0.5 {
+            // Check if at ceiling level (highest Y - tolerance)
+            if vertex.y >= roomBounds.ceilingHeight - roomBounds.ceilingTolerance {
+                return .ceiling
+            }
+            return .objectBottom
+        }
+
+        // Horizontal normal (vertical surface)
+        if horizontalMag > 0.5 {
+            // Check if this is at the farthest distance for its angle (room wall)
+            let angle = atan2(vertex.z - roomBounds.roomCenter.y, vertex.x - roomBounds.roomCenter.x)
+            let bucket = Int((angle + .pi) / (2 * .pi) * 16) % 16
+            let distance = sqrt(pow(vertex.x - roomBounds.roomCenter.x, 2) + pow(vertex.z - roomBounds.roomCenter.y, 2))
+
+            if let maxDistance = roomBounds.wallDistances[bucket] {
+                // Within 30cm of farthest = room wall
+                if distance >= maxDistance - 0.30 {
+                    return .wall
+                }
+            }
+            return .objectWall
+        }
+
+        // Mixed/angled surfaces
+        return .object
+    }
+
 }
 
 // Share sheet for labeling export
