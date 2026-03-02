@@ -985,10 +985,20 @@ class SurfaceClassifier: ObservableObject {
         // Add point to cluster for plane fitting (farthest + correct height = room surface)
         addPointToCluster(point: worldPosition, normal: averageNormal, distance: distanceFromCamera)
 
+        // Need enough samples before classifying (wait for max distances to stabilize)
+        let hasEnoughFloorSamples = floorHeightSamples.count >= 20
+        let hasEnoughCeilingSamples = ceilingHeightSamples.count >= 20
+        let hasEnoughWallSamples = maxWallDistance > 0.5  // At least 50cm
+
         // Floor detection: upward normal + farthest + at floor height (lowest dense cluster)
         if normalY > 0.7 {
+            // If we don't have enough samples yet, collect but classify as object temporarily
+            if !hasEnoughFloorSamples {
+                return .objectTop  // Will be reclassified once we have floor reference
+            }
+
             // Must be at farthest distance AND at the floor height (lowest Y with density)
-            let atFarthestDistance = maxFloorDistance == 0 || distanceFromCamera >= maxFloorDistance - distanceTolerance
+            let atFarthestDistance = distanceFromCamera >= maxFloorDistance - distanceTolerance
             let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.15)
 
             if atFarthestDistance && atFloorHeight {
@@ -999,7 +1009,11 @@ class SurfaceClassifier: ObservableObject {
 
         // Ceiling detection: downward normal + farthest + at ceiling height (highest dense cluster)
         if normalY < -0.7 {
-            let atFarthestDistance = maxCeilingDistance == 0 || distanceFromCamera >= maxCeilingDistance - distanceTolerance
+            if !hasEnoughCeilingSamples {
+                return .objectTop  // Will be reclassified once we have ceiling reference
+            }
+
+            let atFarthestDistance = distanceFromCamera >= maxCeilingDistance - distanceTolerance
             let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
 
             if atFarthestDistance && atCeilingHeight {
@@ -1008,25 +1022,41 @@ class SurfaceClassifier: ObservableObject {
             return .objectTop  // Light fixture or back reflection
         }
 
-        // Wall detection: horizontal normal + farthest + spans floor-to-ceiling
+        // Wall detection: horizontal normal + farthest
         if horizontalMag > 0.7 && abs(normalY) < 0.5 {
-            let atFarthestDistance = maxWallDistance == 0 || distanceFromCamera >= maxWallDistance - distanceTolerance
+            if !hasEnoughWallSamples {
+                return .object  // Will be reclassified once we have wall reference
+            }
+
+            let atFarthestDistance = distanceFromCamera >= maxWallDistance - distanceTolerance
 
             if atFarthestDistance {
-                return .wall  // Wall plane intersection check done at mesh level
+                return .wall
             }
             return .object  // Furniture against wall
         }
 
-        // Tilted surfaces
+        // Tilted surfaces - also check distance
         if normalY > 0.5 {
+            if !hasEnoughFloorSamples {
+                return .objectTop
+            }
+            let atFarthestDistance = distanceFromCamera >= maxFloorDistance - distanceTolerance
             let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.15)
-            return atFloorHeight ? .floor : .objectTop
+            return (atFarthestDistance && atFloorHeight) ? .floor : .objectTop
         } else if normalY < -0.5 {
+            if !hasEnoughCeilingSamples {
+                return .objectTop
+            }
+            let atFarthestDistance = distanceFromCamera >= maxCeilingDistance - distanceTolerance
             let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
-            return atCeilingHeight ? .ceiling : .objectTop
+            return (atFarthestDistance && atCeilingHeight) ? .ceiling : .objectTop
         } else if horizontalMag > 0.5 {
-            return .wall
+            if !hasEnoughWallSamples {
+                return .object
+            }
+            let atFarthestDistance = distanceFromCamera >= maxWallDistance - distanceTolerance
+            return atFarthestDistance ? .wall : .object
         }
 
         return .object
