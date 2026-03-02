@@ -575,9 +575,25 @@ struct SessionDetailView: View {
         }
 
         // Find floor height (lowest Y with upward normals)
-        let floorHeight: Float = floorYSamples.isEmpty ? -Float.infinity : floorYSamples.sorted().prefix(max(1, floorYSamples.count / 10)).reduce(0, +) / Float(max(1, floorYSamples.count / 10))
+        // Use -999 as fallback instead of infinity (JSON doesn't support infinity)
+        let floorHeight: Float
+        if floorYSamples.isEmpty {
+            floorHeight = -999
+        } else {
+            let sortedFloor = floorYSamples.sorted()
+            let count = max(1, sortedFloor.count / 10)
+            floorHeight = sortedFloor.prefix(count).reduce(0, +) / Float(count)
+        }
+
         // Find ceiling height (highest Y with downward normals)
-        let ceilingHeight: Float = ceilingYSamples.isEmpty ? Float.infinity : ceilingYSamples.sorted().suffix(max(1, ceilingYSamples.count / 10)).reduce(0, +) / Float(max(1, ceilingYSamples.count / 10))
+        let ceilingHeight: Float
+        if ceilingYSamples.isEmpty {
+            ceilingHeight = 999
+        } else {
+            let sortedCeiling = ceilingYSamples.sorted()
+            let count = max(1, sortedCeiling.count / 10)
+            ceilingHeight = sortedCeiling.suffix(count).reduce(0, +) / Float(count)
+        }
 
         let floorTolerance: Float = 0.15  // 15cm
         let ceilingTolerance: Float = 0.15
