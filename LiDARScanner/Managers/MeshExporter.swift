@@ -287,19 +287,17 @@ class MeshExporter: ObservableObject {
     /// Combine all mesh anchors into single mesh with world-space transforms applied
     /// Also filters out faces that are beyond glass/window planes
     /// And filters out objectTop and backReflection surfaces (both mesh-level and face-level)
+    /// Only includes vertices that are actually used by non-filtered faces
     private func combineMeshes(_ scan: CapturedScan) -> CapturedMeshData {
-        var allVertices: [SIMD3<Float>] = []
-        var allNormals: [SIMD3<Float>] = []
-        var allColors: [VertexColor] = []
-        var allFaces: [[UInt32]] = []
-        var vertexOffset: UInt32 = 0
-
-        let windowPlanes = scan.windowPlanes
-        var filteredFaceCount = 0
+        // First pass: collect all valid faces and track which vertices are used
+        var tempFaces: [(meshIndex: Int, localIndices: [UInt32], worldVerts: [SIMD3<Float>])] = []
         var skippedMeshCount = 0
+        var filteredFaceCount = 0
         var filteredByClassificationCount = 0
 
-        for mesh in scan.meshes {
+        let windowPlanes = scan.windowPlanes
+
+        for (meshIndex, mesh) in scan.meshes.enumerated() {
             // Skip entire meshes classified as objectTop or backReflection at mesh level
             if let surfaceType = mesh.surfaceType {
                 if surfaceType == .objectTop || surfaceType == .backReflection {
@@ -308,38 +306,22 @@ class MeshExporter: ObservableObject {
                 }
             }
 
-            // Transform vertices to world space
+            // Transform all vertices to world space for this mesh
             var meshWorldVertices: [SIMD3<Float>] = []
             for vertex in mesh.vertices {
                 let worldPos = mesh.transform * SIMD4<Float>(vertex, 1)
-                let worldVertex = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
-                meshWorldVertices.append(worldVertex)
-                allVertices.append(worldVertex)
+                meshWorldVertices.append(SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z))
             }
-
-            // Transform normals (rotation only)
-            let normalMatrix = simd_float3x3(
-                SIMD3<Float>(mesh.transform.columns.0.x, mesh.transform.columns.0.y, mesh.transform.columns.0.z),
-                SIMD3<Float>(mesh.transform.columns.1.x, mesh.transform.columns.1.y, mesh.transform.columns.1.z),
-                SIMD3<Float>(mesh.transform.columns.2.x, mesh.transform.columns.2.y, mesh.transform.columns.2.z)
-            )
-            for normal in mesh.normals {
-                allNormals.append(normalize(normalMatrix * normal))
-            }
-
-            // Copy colors
-            allColors.append(contentsOf: mesh.colors)
 
             // Get per-face classifications if available
             let faceClassifications = mesh.faceClassifications
 
-            // Offset face indices, filtering out faces beyond glass AND faces classified as objectTop/backReflection
+            // Check each face
             for (faceIndex, face) in mesh.faces.enumerated() {
                 let idx0 = Int(face[0])
                 let idx1 = Int(face[1])
                 let idx2 = Int(face[2])
 
-                // Get world-space vertices for this face
                 guard idx0 < meshWorldVertices.count,
                       idx1 < meshWorldVertices.count,
                       idx2 < meshWorldVertices.count else { continue }
@@ -349,7 +331,7 @@ class MeshExporter: ObservableObject {
                     let faceType = classifications[faceIndex]
                     if faceType == .objectTop || faceType == .backReflection {
                         filteredByClassificationCount += 1
-                        continue  // Skip this face
+                        continue
                     }
                 }
 
@@ -368,17 +350,69 @@ class MeshExporter: ObservableObject {
 
                 if shouldFilterFace {
                     filteredFaceCount += 1
-                    continue  // Skip this face
+                    continue
                 }
 
-                allFaces.append([
-                    face[0] + vertexOffset,
-                    face[1] + vertexOffset,
-                    face[2] + vertexOffset
-                ])
+                // This face is valid - store it with world vertices
+                tempFaces.append((meshIndex: meshIndex, localIndices: face, worldVerts: [v0, v1, v2]))
+            }
+        }
+
+        // Second pass: build final vertex/normal/color arrays with only used vertices
+        var allVertices: [SIMD3<Float>] = []
+        var allNormals: [SIMD3<Float>] = []
+        var allColors: [VertexColor] = []
+        var allFaces: [[UInt32]] = []
+
+        // Map from (meshIndex, localVertexIndex) to global vertex index
+        var vertexMap: [String: UInt32] = [:]
+
+        for (meshIndex, mesh) in scan.meshes.enumerated() {
+            // Skip meshes we already skipped
+            if let surfaceType = mesh.surfaceType {
+                if surfaceType == .objectTop || surfaceType == .backReflection {
+                    continue
+                }
             }
 
-            vertexOffset += UInt32(mesh.vertices.count)
+            // Precompute normal transform matrix
+            let normalMatrix = simd_float3x3(
+                SIMD3<Float>(mesh.transform.columns.0.x, mesh.transform.columns.0.y, mesh.transform.columns.0.z),
+                SIMD3<Float>(mesh.transform.columns.1.x, mesh.transform.columns.1.y, mesh.transform.columns.1.z),
+                SIMD3<Float>(mesh.transform.columns.2.x, mesh.transform.columns.2.y, mesh.transform.columns.2.z)
+            )
+
+            // Process faces for this mesh
+            for tempFace in tempFaces where tempFace.meshIndex == meshIndex {
+                var newFaceIndices: [UInt32] = []
+
+                for (i, localIdx) in tempFace.localIndices.enumerated() {
+                    let key = "\(meshIndex)_\(localIdx)"
+
+                    if let existingGlobalIdx = vertexMap[key] {
+                        newFaceIndices.append(existingGlobalIdx)
+                    } else {
+                        // Add this vertex
+                        let globalIdx = UInt32(allVertices.count)
+                        vertexMap[key] = globalIdx
+
+                        allVertices.append(tempFace.worldVerts[i])
+
+                        // Add normal
+                        let localNormal = Int(localIdx) < mesh.normals.count ? mesh.normals[Int(localIdx)] : SIMD3<Float>(0, 1, 0)
+                        allNormals.append(normalize(normalMatrix * localNormal))
+
+                        // Add color
+                        if Int(localIdx) < mesh.colors.count {
+                            allColors.append(mesh.colors[Int(localIdx)])
+                        }
+
+                        newFaceIndices.append(globalIdx)
+                    }
+                }
+
+                allFaces.append(newFaceIndices)
+            }
         }
 
         if filteredFaceCount > 0 {
@@ -390,6 +424,7 @@ class MeshExporter: ObservableObject {
         if skippedMeshCount > 0 {
             print("[MeshExporter] Skipped \(skippedMeshCount) entire meshes classified as objectTop/backReflection")
         }
+        print("[MeshExporter] Final: \(allVertices.count) vertices, \(allFaces.count) faces")
 
         return CapturedMeshData(
             vertices: allVertices,
