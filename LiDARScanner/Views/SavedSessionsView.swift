@@ -595,15 +595,15 @@ struct SessionDetailView: View {
             }
         }
 
-        // Find floor height: minimum Y among upward-facing surfaces
-        let floorHeight: Float = floorYSamples.isEmpty ? -999 : floorYSamples.min()!
+        // Find floor plane: Y level with HIGHEST DENSITY of upward-facing points
+        let floorHeight: Float = findDensestLevel(samples: floorYSamples, findLowest: true)
 
-        // Find ceiling height: maximum Y among downward-facing surfaces
-        let ceilingHeight: Float = ceilingYSamples.isEmpty ? 999 : ceilingYSamples.max()!
+        // Find ceiling plane: Y level with HIGHEST DENSITY of downward-facing points
+        let ceilingHeight: Float = findDensestLevel(samples: ceilingYSamples, findLowest: false)
 
-        let floorTolerance: Float = 0.15  // 15cm
-        let ceilingTolerance: Float = 0.15
-        let wallTolerance: Float = 0.30   // 30cm from farthest = room wall
+        let floorTolerance: Float = 0.001  // 1mm - plane tolerance
+        let ceilingTolerance: Float = 0.001
+        let wallTolerance: Float = 0.001   // 1mm for wall plane
 
         // Phase 2: Classify each point and build JSON
         var pointsArray: [[String: Any]] = []
@@ -678,6 +678,58 @@ struct SessionDetailView: View {
         print("[SessionDetail] Floor: \(floorHeight), Ceiling: \(ceilingHeight)")
 
         return tempURL
+    }
+
+    /// Find the Y level with highest density in the lowest (floor) or highest (ceiling) region
+    private func findDensestLevel(samples: [Float], findLowest: Bool) -> Float {
+        guard !samples.isEmpty else { return findLowest ? -999 : 999 }
+        guard samples.count >= 10 else { return findLowest ? samples.min()! : samples.max()! }
+
+        let sorted = samples.sorted()
+        let minY = sorted.first!
+        let maxY = sorted.last!
+        let range = maxY - minY
+
+        // If all samples within 10cm, they're the same plane
+        guard range > 0.10 else { return sorted[sorted.count / 2] }
+
+        // Create 1mm bins for precise plane detection
+        let binSize: Float = 0.001
+        let binCount = max(1, Int(range / binSize) + 1)
+        var histogram = [Int](repeating: 0, count: binCount)
+
+        for y in sorted {
+            let binIndex = min(binCount - 1, Int((y - minY) / binSize))
+            histogram[binIndex] += 1
+        }
+
+        // For floor: find the LOWEST region, then pick the bin with highest density in that region
+        // For ceiling: find the HIGHEST region, then pick the bin with highest density in that region
+        let regionSize = max(1, binCount / 5)  // Look at bottom/top 20% of range
+
+        var bestBin = 0
+        var bestCount = 0
+
+        if findLowest {
+            // Search in lowest 20% of bins for the densest one
+            for i in 0..<min(regionSize, binCount) {
+                if histogram[i] > bestCount {
+                    bestCount = histogram[i]
+                    bestBin = i
+                }
+            }
+        } else {
+            // Search in highest 20% of bins for the densest one
+            for i in max(0, binCount - regionSize)..<binCount {
+                if histogram[i] > bestCount {
+                    bestCount = histogram[i]
+                    bestBin = i
+                }
+            }
+        }
+
+        // Return the center of the best bin
+        return minY + (Float(bestBin) + 0.5) * binSize
     }
 }
 
