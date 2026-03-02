@@ -844,9 +844,9 @@ class SurfaceClassifier: ObservableObject {
             }
         }
 
-        // PRIORITY 3: Distance-based classification per scan phase
-        // Farthest points from LiDAR are the actual surfaces (floor/ceiling/walls)
-        // Closer points are objects (cabinets, furniture, etc.)
+        // PRIORITY 3: Farthest + highest density classification
+        // Floor/ceiling/walls are the farthest points with highest density
+        // Walls must intersect both floor and ceiling planes
         let normalY = averageNormal.y
         let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
 
@@ -854,86 +854,67 @@ class SurfaceClassifier: ObservableObject {
         let camPos = cameraPosition ?? cameraPositions.last ?? SIMD3<Float>(0, 0, 0)
         let distanceFromCamera = simd_length(worldPosition - camPos)
 
-        // Update max distances and height samples based on normal direction
+        // Collect samples for density analysis
         if normalY > 0.5 {
             updateFloorHeight(worldY)
-            // Track farthest floor point (looking down at floor)
             if distanceFromCamera > maxFloorDistance {
                 maxFloorDistance = distanceFromCamera
             }
         } else if normalY < -0.5 {
             updateCeilingHeight(worldY)
-            // Track farthest ceiling point (looking up at ceiling)
             if distanceFromCamera > maxCeilingDistance {
                 maxCeilingDistance = distanceFromCamera
             }
         } else if horizontalMag > 0.5 {
-            // Track farthest wall point
             if distanceFromCamera > maxWallDistance {
                 maxWallDistance = distanceFromCamera
             }
         }
 
-        // Floor detection: normal pointing UP
+        // Floor detection: upward normal + farthest + at floor height (lowest dense cluster)
         if normalY > 0.7 {
-            // During floor scanning: farthest points = floor, closer = object tops
-            if maxFloorDistance > 0 {
-                // Points at or near max distance are floor
-                // Points significantly closer are cabinet/object tops
-                if distanceFromCamera >= maxFloorDistance - distanceTolerance {
-                    return .floor
-                } else {
-                    return .objectTop
-                }
-            }
-            return .floor  // No max distance yet, assume floor
-        }
+            // Must be at farthest distance AND at the floor height (lowest Y with density)
+            let atFarthestDistance = maxFloorDistance == 0 || distanceFromCamera >= maxFloorDistance - distanceTolerance
+            let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.15)
 
-        // Ceiling detection: normal pointing DOWN
-        if normalY < -0.7 {
-            // During ceiling scanning: farthest points = ceiling, closer = object bottoms
-            if maxCeilingDistance > 0 {
-                if distanceFromCamera >= maxCeilingDistance - distanceTolerance {
-                    return .ceiling
-                } else {
-                    return .objectTop
-                }
-            }
-            return .ceiling  // No max distance yet, assume ceiling
-        }
-
-        // Wall detection: normal pointing horizontally
-        if horizontalMag > 0.7 && abs(normalY) < 0.5 {
-            // During wall scanning: farthest points = walls, closer = furniture
-            if maxWallDistance > 0 {
-                if distanceFromCamera >= maxWallDistance - distanceTolerance {
-                    return .wall
-                } else {
-                    return .object  // Furniture, cabinets against walls
-                }
-            }
-            return .wall  // No max distance yet, assume wall
-        }
-
-        // Tilted surfaces - classify based on dominant direction and distance
-        if normalY > 0.5 {
-            if maxFloorDistance > 0 && distanceFromCamera >= maxFloorDistance - distanceTolerance {
+            if atFarthestDistance && atFloorHeight {
                 return .floor
             }
-            return .objectTop
-        } else if normalY < -0.5 {
-            if maxCeilingDistance > 0 && distanceFromCamera >= maxCeilingDistance - distanceTolerance {
-                return .ceiling
-            }
-            return .objectTop
-        } else if horizontalMag > 0.5 {
-            if maxWallDistance > 0 && distanceFromCamera >= maxWallDistance - distanceTolerance {
-                return .wall
-            }
-            return .object
+            return .objectTop  // Cabinet top or back reflection
         }
 
-        // Anything else is an object
+        // Ceiling detection: downward normal + farthest + at ceiling height (highest dense cluster)
+        if normalY < -0.7 {
+            let atFarthestDistance = maxCeilingDistance == 0 || distanceFromCamera >= maxCeilingDistance - distanceTolerance
+            let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
+
+            if atFarthestDistance && atCeilingHeight {
+                return .ceiling
+            }
+            return .objectTop  // Light fixture or back reflection
+        }
+
+        // Wall detection: horizontal normal + farthest + spans floor-to-ceiling
+        if horizontalMag > 0.7 && abs(normalY) < 0.5 {
+            let atFarthestDistance = maxWallDistance == 0 || distanceFromCamera >= maxWallDistance - distanceTolerance
+
+            if atFarthestDistance {
+                return .wall  // Wall plane intersection check done at mesh level
+            }
+            return .object  // Furniture against wall
+        }
+
+        // Tilted surfaces
+        if normalY > 0.5 {
+            let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.15)
+            return atFloorHeight ? .floor : .objectTop
+        } else if normalY < -0.5 {
+            let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
+            return atCeilingHeight ? .ceiling : .objectTop
+        } else if horizontalMag > 0.5 {
+            return .wall
+        }
+
         return .object
     }
 
@@ -2768,7 +2749,7 @@ class SurfaceClassifier: ObservableObject {
     }
 
     /// Classify a vertical surface with height range (for mesh-level classification)
-    /// Uses distance-based classification: farthest horizontal points = walls
+    /// Wall = farthest + highest density + spans floor-to-ceiling (no holes)
     func classifyVerticalSurfaceWithBounds(
         position: SIMD3<Float>,
         normal: SIMD3<Float>,
@@ -2783,7 +2764,7 @@ class SurfaceClassifier: ObservableObject {
             return .object
         }
 
-        // Calculate distance from camera for distance-based classification
+        // Calculate distance from camera
         let camPos = cameraPosition ?? cameraPositions.last ?? SIMD3<Float>(0, 0, 0)
         let distanceFromCamera = simd_length(position - camPos)
 
@@ -2792,17 +2773,30 @@ class SurfaceClassifier: ObservableObject {
             maxWallDistance = distanceFromCamera
         }
 
-        // Farthest horizontal points = walls, closer = furniture/objects
-        if maxWallDistance > 0 {
-            if distanceFromCamera >= maxWallDistance - distanceTolerance {
+        // Check if at farthest distance
+        let atFarthestDistance = maxWallDistance == 0 || distanceFromCamera >= maxWallDistance - distanceTolerance
+
+        // Check if wall spans floor-to-ceiling (intersects both planes)
+        let touchesFloor = intersectsFloor(heightRange: heightRange)
+        let touchesCeiling = intersectsCeiling(heightRange: heightRange)
+        let spansFloorToCeiling = touchesFloor && touchesCeiling
+
+        // Wall = farthest + spans floor-to-ceiling
+        // If we don't have floor/ceiling heights yet, accept if at farthest distance
+        let hasRoomBounds = statistics.floorHeight != nil && statistics.ceilingHeight != nil
+
+        if atFarthestDistance {
+            if !hasRoomBounds || spansFloorToCeiling {
                 return .wall
-            } else {
-                return .object  // Furniture against walls
+            }
+            // At farthest but doesn't span - could be partial wall or tall furniture
+            // Still classify as wall if it touches at least one plane
+            if touchesFloor || touchesCeiling {
+                return .wall
             }
         }
 
-        // No max distance yet, assume wall
-        return .wall
+        return .object  // Furniture or floating surface
     }
 
     /// Check if a vertical surface intersects the floor plane
