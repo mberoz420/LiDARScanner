@@ -539,53 +539,89 @@ struct SessionDetailView: View {
 
     private func createLabelingJSON(from scan: CapturedScan) async throws -> URL {
         // Create JSON structure compatible with PointCloudLabeler.html
-        var pointsArray: [[String: Any]] = []
+        // Phase 1: Collect all points and find room bounds
+        var allPoints: [(vertex: SIMD3<Float>, normal: SIMD3<Float>, color: (r: Float, g: Float, b: Float)?)] = []
+        var floorYSamples: [Float] = []
+        var ceilingYSamples: [Float] = []
 
         for mesh in scan.meshes {
-            // Get the mesh transform to convert local vertices to world coordinates
             let transform = mesh.transform
+            let rotationMatrix = simd_float3x3(
+                SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
+                SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z),
+                SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+            )
 
             for i in 0..<mesh.vertices.count {
                 let localVertex = mesh.vertices[i]
                 let localNormal = i < mesh.normals.count ? mesh.normals[i] : SIMD3<Float>(0, 1, 0)
 
-                // Transform vertex from local to world coordinates
                 let worldPos = transform * SIMD4<Float>(localVertex.x, localVertex.y, localVertex.z, 1.0)
                 let vertex = SIMD3<Float>(worldPos.x, worldPos.y, worldPos.z)
-
-                // Transform normal (rotation only, no translation)
-                // Extract the 3x3 rotation matrix from the 4x4 transform
-                let rotationMatrix = simd_float3x3(
-                    SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
-                    SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z),
-                    SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
-                )
                 let normal = simd_normalize(rotationMatrix * localNormal)
 
-                var point: [String: Any] = [
-                    "x": vertex.x,
-                    "y": vertex.y,
-                    "z": vertex.z,
-                    "nx": normal.x,
-                    "ny": normal.y,
-                    "nz": normal.z
-                ]
+                let color: (r: Float, g: Float, b: Float)? = i < mesh.colors.count ?
+                    (mesh.colors[i].r, mesh.colors[i].g, mesh.colors[i].b) : nil
 
-                // Add color if available
-                if i < mesh.colors.count {
-                    let color = mesh.colors[i]
-                    point["r"] = color.r
-                    point["g"] = color.g
-                    point["b"] = color.b
+                allPoints.append((vertex, normal, color))
+
+                // Collect Y samples for floor/ceiling detection
+                if normal.y > 0.5 {
+                    floorYSamples.append(vertex.y)
+                } else if normal.y < -0.5 {
+                    ceilingYSamples.append(vertex.y)
                 }
-
-                // Add surface type if available
-                if let surfaceType = mesh.surfaceType {
-                    point["label"] = surfaceType.rawValue
-                }
-
-                pointsArray.append(point)
             }
+        }
+
+        // Find floor height (lowest Y with upward normals)
+        let floorHeight: Float = floorYSamples.isEmpty ? -Float.infinity : floorYSamples.sorted().prefix(max(1, floorYSamples.count / 10)).reduce(0, +) / Float(max(1, floorYSamples.count / 10))
+        // Find ceiling height (highest Y with downward normals)
+        let ceilingHeight: Float = ceilingYSamples.isEmpty ? Float.infinity : ceilingYSamples.sorted().suffix(max(1, ceilingYSamples.count / 10)).reduce(0, +) / Float(max(1, ceilingYSamples.count / 10))
+
+        let floorTolerance: Float = 0.15  // 15cm
+        let ceilingTolerance: Float = 0.15
+
+        // Phase 2: Classify each point and build JSON
+        var pointsArray: [[String: Any]] = []
+
+        for (vertex, normal, color) in allPoints {
+            var point: [String: Any] = [
+                "x": vertex.x,
+                "y": vertex.y,
+                "z": vertex.z,
+                "nx": normal.x,
+                "ny": normal.y,
+                "nz": normal.z
+            ]
+
+            if let c = color {
+                point["r"] = c.r
+                point["g"] = c.g
+                point["b"] = c.b
+            }
+
+            // Classify based on normal direction and Y position
+            let label: String
+            let ny = normal.y
+            let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
+
+            if ny > 0.5 {
+                // Upward-facing: Floor if at lowest level, otherwise Object Top
+                label = (vertex.y <= floorHeight + floorTolerance) ? "Floor" : "Object Top"
+            } else if ny < -0.5 {
+                // Downward-facing: Ceiling if at highest level, otherwise Object Top
+                label = (vertex.y >= ceilingHeight - ceilingTolerance) ? "Ceiling" : "Object Top"
+            } else if horizontalMag > 0.5 {
+                // Horizontal normal: Wall or Object
+                label = "Wall"
+            } else {
+                // Mixed/angled
+                label = "Object"
+            }
+
+            point["label"] = label
+            pointsArray.append(point)
         }
 
         let exportData: [String: Any] = [
@@ -594,19 +630,22 @@ struct SessionDetailView: View {
                 "sessionId": sessionId.uuidString,
                 "exportDate": ISO8601DateFormatter().string(from: Date()),
                 "vertexCount": scan.vertexCount,
-                "meshCount": scan.meshes.count
+                "meshCount": scan.meshes.count,
+                "floorHeight": floorHeight,
+                "ceilingHeight": ceilingHeight,
+                "classificationMethod": "per-point"
             ]
         ]
 
         let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted, .sortedKeys])
 
-        // Save to temp file with .json extension
         let filename = "labeling_\(sessionId.uuidString.prefix(8)).json"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
 
         try jsonData.write(to: tempURL)
 
         print("[SessionDetail] Created labeling JSON: \(tempURL.path) (\(jsonData.count) bytes)")
+        print("[SessionDetail] Floor: \(floorHeight), Ceiling: \(ceilingHeight)")
 
         return tempURL
     }
