@@ -142,13 +142,10 @@ workflows:
             ERRORS_JSON="[]"
           else
             STATUS="failed"
-            # Parse errors into JSON array
+            # Parse errors into JSON array using sed/awk
             if [ -f build_errors.txt ]; then
-              ERRORS_JSON=$(cat build_errors.txt | head -30 | python3 -c "
-import sys, json
-lines = [line.strip() for line in sys.stdin if line.strip()]
-print(json.dumps(lines))
-" 2>/dev/null || echo "[]")
+              ERRORS_JSON=$(cat build_errors.txt | head -30 | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{printf "]"}')
+              [ -z "$ERRORS_JSON" ] && ERRORS_JSON="[]"
             else
               ERRORS_JSON="[\"Build failed - no error details captured\"]"
             fi
