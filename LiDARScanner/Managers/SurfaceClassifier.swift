@@ -2749,7 +2749,8 @@ class SurfaceClassifier: ObservableObject {
     }
 
     /// Classify a vertical surface with height range (for mesh-level classification)
-    /// Wall = farthest + highest density + spans floor-to-ceiling (no holes)
+    /// Wall segment = farthest distance + horizontal normal
+    /// Partial walls are still walls (objects may block parts of wall)
     func classifyVerticalSurfaceWithBounds(
         position: SIMD3<Float>,
         normal: SIMD3<Float>,
@@ -2773,30 +2774,15 @@ class SurfaceClassifier: ObservableObject {
             maxWallDistance = distanceFromCamera
         }
 
-        // Check if at farthest distance
+        // Wall = at farthest distance (even if only partial segment visible)
+        // Objects in front of wall will be closer, so this works
         let atFarthestDistance = maxWallDistance == 0 || distanceFromCamera >= maxWallDistance - distanceTolerance
 
-        // Check if wall spans floor-to-ceiling (intersects both planes)
-        let touchesFloor = intersectsFloor(heightRange: heightRange)
-        let touchesCeiling = intersectsCeiling(heightRange: heightRange)
-        let spansFloorToCeiling = touchesFloor && touchesCeiling
-
-        // Wall = farthest + spans floor-to-ceiling
-        // If we don't have floor/ceiling heights yet, accept if at farthest distance
-        let hasRoomBounds = statistics.floorHeight != nil && statistics.ceilingHeight != nil
-
         if atFarthestDistance {
-            if !hasRoomBounds || spansFloorToCeiling {
-                return .wall
-            }
-            // At farthest but doesn't span - could be partial wall or tall furniture
-            // Still classify as wall if it touches at least one plane
-            if touchesFloor || touchesCeiling {
-                return .wall
-            }
+            return .wall  // Wall segment (may be partial due to blocking objects)
         }
 
-        return .object  // Furniture or floating surface
+        return .object  // Furniture or object in front of wall
     }
 
     /// Check if a vertical surface intersects the floor plane
