@@ -987,7 +987,7 @@ class MeshManager: NSObject, ObservableObject {
     /// Force classify surface at position to a specific type
     private func forceClassifySurface(at position: SIMD3<Float>, as surfaceType: SurfaceType) {
         // Find the mesh anchor closest to this position
-        guard let session = arSession else { return }
+        guard let session = arView?.session else { return }
 
         var closestAnchor: ARMeshAnchor?
         var closestDistance: Float = .greatestFiniteMagnitude

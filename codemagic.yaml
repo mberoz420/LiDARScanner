@@ -82,6 +82,8 @@ workflows:
         script: |
           echo "Building archive..."
           mkdir -p build
+
+          # Build with error logging - capture both stdout and stderr
           xcodebuild archive \
             -project "LiDARScanner.xcodeproj" \
             -scheme "$XCODE_SCHEME" \
@@ -89,7 +91,25 @@ workflows:
             -archivePath "$CM_BUILD_DIR/build/LiDARScanner.xcarchive" \
             -destination "generic/platform=iOS" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            -allowProvisioningUpdates
+            -allowProvisioningUpdates \
+            2>&1 | tee build.log
+
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          # If build failed, show errors clearly
+          if [ $BUILD_STATUS -ne 0 ]; then
+            echo ""
+            echo "=========================================="
+            echo "BUILD FAILED - Compilation Errors:"
+            echo "=========================================="
+            grep -A2 "error:" build.log || echo "No error lines found"
+            echo ""
+            echo "=========================================="
+            echo "Full error context (last 100 lines):"
+            echo "=========================================="
+            tail -100 build.log
+            exit $BUILD_STATUS
+          fi
 
           echo "Archive result:"
           ls -la "$CM_BUILD_DIR/build/" || echo "Build folder not found"
