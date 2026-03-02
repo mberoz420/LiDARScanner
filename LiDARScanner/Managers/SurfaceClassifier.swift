@@ -836,23 +836,55 @@ class SurfaceClassifier: ObservableObject {
         }
 
         // PRIORITY 3: Geometric heuristics (fallback or when both toggles off)
-        // SIMPLE APPROACH: Classify by normal direction only, like walls
-        // This avoids complex height-based logic that causes back reflection issues
+        // Classify by normal direction, but detect back reflections by height
         let normalY = averageNormal.y
         let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
 
-        // Floor: normal pointing UP (like wall uses horizontal normal)
-        if normalY > 0.7 {
-            // Strong upward normal = floor (same logic as wall: horizontalMag > 0.7)
-            debugLog("[FLOOR-CLASS] SIMPLE: normalY=\(normalY) > 0.7 -> FLOOR")
-            return .floor
+        // Collect height samples for density-based floor/ceiling detection
+        if normalY > 0.5 {
+            updateFloorHeight(worldY)
+        } else if normalY < -0.5 {
+            updateCeilingHeight(worldY)
         }
 
-        // Ceiling: normal pointing DOWN
+        // Floor detection: normal pointing UP
+        if normalY > 0.7 {
+            // Check if this is at floor height or a back reflection above floor
+            if let floorHeight = statistics.floorHeight {
+                let heightAboveFloor = worldY - floorHeight
+                // Within 5cm of floor = actual floor
+                // Above floor = back reflection
+                if heightAboveFloor < 0.05 {
+                    debugLog("[FLOOR-CLASS] Y=\(worldY), floorY=\(floorHeight), diff=\(heightAboveFloor) -> FLOOR")
+                    return .floor
+                } else {
+                    debugLog("[FLOOR-CLASS] Y=\(worldY), floorY=\(floorHeight), diff=\(heightAboveFloor) -> BACK_REFLECTION")
+                    return .backReflection
+                }
+            } else {
+                // No floor height yet - assume floor (will be reclassified later)
+                return .floor
+            }
+        }
+
+        // Ceiling detection: normal pointing DOWN
         if normalY < -0.7 {
-            // Strong downward normal = ceiling
-            debugLog("[CEILING-CLASS] SIMPLE: normalY=\(normalY) < -0.7 -> CEILING")
-            return .ceiling
+            // Check if this is at ceiling height or a back reflection below ceiling
+            if let ceilingHeight = statistics.ceilingHeight {
+                let heightBelowCeiling = ceilingHeight - worldY
+                // Within 5cm of ceiling = actual ceiling
+                // Below ceiling = back reflection
+                if heightBelowCeiling < 0.05 {
+                    debugLog("[CEILING-CLASS] Y=\(worldY), ceilingY=\(ceilingHeight), diff=\(heightBelowCeiling) -> CEILING")
+                    return .ceiling
+                } else {
+                    debugLog("[CEILING-CLASS] Y=\(worldY), ceilingY=\(ceilingHeight), diff=\(heightBelowCeiling) -> BACK_REFLECTION")
+                    return .backReflection
+                }
+            } else {
+                // No ceiling height yet - assume ceiling (will be reclassified later)
+                return .ceiling
+            }
         }
 
         // Wall: normal pointing horizontally (same as existing wall logic)
@@ -862,10 +894,18 @@ class SurfaceClassifier: ObservableObject {
 
         // Tilted surfaces - classify based on dominant direction
         if normalY > 0.5 {
-            // Mostly upward = floor
+            // Mostly upward - check if floor or back reflection
+            if let floorHeight = statistics.floorHeight {
+                let heightAboveFloor = worldY - floorHeight
+                return heightAboveFloor < 0.05 ? .floor : .backReflection
+            }
             return .floor
         } else if normalY < -0.5 {
-            // Mostly downward = ceiling
+            // Mostly downward - check if ceiling or back reflection
+            if let ceilingHeight = statistics.ceilingHeight {
+                let heightBelowCeiling = ceilingHeight - worldY
+                return heightBelowCeiling < 0.05 ? .ceiling : .backReflection
+            }
             return .ceiling
         } else if horizontalMag > 0.5 {
             // Mostly horizontal = wall
