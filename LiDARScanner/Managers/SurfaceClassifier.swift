@@ -443,6 +443,15 @@ class SurfaceClassifier: ObservableObject {
     @Published var mlModelLoaded = false
     @Published var mlClassificationEnabled = false  // Use ML when available
 
+    // MARK: - Scan Phase (for distance-based classification)
+    @Published var currentScanPhase: RoomScanPhase = .ready
+
+    // Distance tracking per phase - farthest points are the actual surfaces
+    private var maxFloorDistance: Float = 0      // Farthest downward point during floor phase
+    private var maxCeilingDistance: Float = 0    // Farthest upward point during ceiling phase
+    private var maxWallDistance: Float = 0       // Farthest horizontal point during wall phase
+    private let distanceTolerance: Float = 0.3   // 30cm tolerance for "farthest" classification
+
     // MARK: - Calibrated Reference Planes (user-confirmed by pointing)
     @Published var floorCalibrated = false
     @Published var ceilingCalibrated = false
@@ -835,70 +844,93 @@ class SurfaceClassifier: ObservableObject {
             }
         }
 
-        // PRIORITY 3: Geometric heuristics (fallback or when both toggles off)
-        // Capture ALL surfaces by normal direction, classify floor/ceiling by density at lowest/highest Y
+        // PRIORITY 3: Distance-based classification per scan phase
+        // Farthest points from LiDAR are the actual surfaces (floor/ceiling/walls)
+        // Closer points are objects (cabinets, furniture, etc.)
         let normalY = averageNormal.y
         let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
 
-        // Collect ALL height samples for density-based floor/ceiling detection
+        // Calculate distance from camera
+        let camPos = cameraPosition ?? cameraPositions.last ?? SIMD3<Float>(0, 0, 0)
+        let distanceFromCamera = simd_length(worldPosition - camPos)
+
+        // Update max distances and height samples based on normal direction
         if normalY > 0.5 {
             updateFloorHeight(worldY)
+            // Track farthest floor point (looking down at floor)
+            if distanceFromCamera > maxFloorDistance {
+                maxFloorDistance = distanceFromCamera
+            }
         } else if normalY < -0.5 {
             updateCeilingHeight(worldY)
+            // Track farthest ceiling point (looking up at ceiling)
+            if distanceFromCamera > maxCeilingDistance {
+                maxCeilingDistance = distanceFromCamera
+            }
+        } else if horizontalMag > 0.5 {
+            // Track farthest wall point
+            if distanceFromCamera > maxWallDistance {
+                maxWallDistance = distanceFromCamera
+            }
         }
 
-        // Floor detection: normal pointing UP - capture ALL, classify by density
+        // Floor detection: normal pointing UP
         if normalY > 0.7 {
-            // Floor = lowest Y level with high point density
-            // ObjectTop = elevated horizontal surfaces (cabinet tops, etc.)
-            if let floorHeight = statistics.floorHeight {
-                // Floor is at the lowest dense cluster - anything at that level is floor
-                // Use 20cm tolerance to handle slight variations in floor detection
-                if worldY <= floorHeight + 0.20 {
+            // During floor scanning: farthest points = floor, closer = object tops
+            if maxFloorDistance > 0 {
+                // Points at or near max distance are floor
+                // Points significantly closer are cabinet/object tops
+                if distanceFromCamera >= maxFloorDistance - distanceTolerance {
                     return .floor
                 } else {
-                    return .objectTop  // Cabinet top, appliance top, etc.
+                    return .objectTop
                 }
             }
-            return .floor  // No floor height yet, capture as floor
+            return .floor  // No max distance yet, assume floor
         }
 
-        // Ceiling detection: normal pointing DOWN - capture ALL, classify by density
+        // Ceiling detection: normal pointing DOWN
         if normalY < -0.7 {
-            // Ceiling = highest Y level with high point density
-            // ObjectTop = lower horizontal surfaces (cabinet bottoms, etc.)
-            if let ceilingHeight = statistics.ceilingHeight {
-                // Ceiling is at the highest dense cluster - anything at that level is ceiling
-                // Use 20cm tolerance to handle slight variations in ceiling detection
-                if worldY >= ceilingHeight - 0.20 {
+            // During ceiling scanning: farthest points = ceiling, closer = object bottoms
+            if maxCeilingDistance > 0 {
+                if distanceFromCamera >= maxCeilingDistance - distanceTolerance {
                     return .ceiling
                 } else {
-                    return .objectTop  // Cabinet bottom, light fixture, etc.
+                    return .objectTop
                 }
             }
-            return .ceiling  // No ceiling height yet, capture as ceiling
+            return .ceiling  // No max distance yet, assume ceiling
         }
 
-        // Wall: normal pointing horizontally - no height restrictions
+        // Wall detection: normal pointing horizontally
         if horizontalMag > 0.7 && abs(normalY) < 0.5 {
-            return .wall
+            // During wall scanning: farthest points = walls, closer = furniture
+            if maxWallDistance > 0 {
+                if distanceFromCamera >= maxWallDistance - distanceTolerance {
+                    return .wall
+                } else {
+                    return .object  // Furniture, cabinets against walls
+                }
+            }
+            return .wall  // No max distance yet, assume wall
         }
 
-        // Tilted surfaces - classify based on dominant direction
+        // Tilted surfaces - classify based on dominant direction and distance
         if normalY > 0.5 {
-            // Mostly upward - check if floor or object top
-            if let floorHeight = statistics.floorHeight {
-                return worldY <= floorHeight + 0.20 ? .floor : .objectTop
+            if maxFloorDistance > 0 && distanceFromCamera >= maxFloorDistance - distanceTolerance {
+                return .floor
             }
-            return .floor
+            return .objectTop
         } else if normalY < -0.5 {
-            // Mostly downward - check if ceiling or object bottom
-            if let ceilingHeight = statistics.ceilingHeight {
-                return worldY >= ceilingHeight - 0.20 ? .ceiling : .objectTop
+            if maxCeilingDistance > 0 && distanceFromCamera >= maxCeilingDistance - distanceTolerance {
+                return .ceiling
             }
-            return .ceiling
+            return .objectTop
         } else if horizontalMag > 0.5 {
-            return .wall  // Mostly horizontal = wall
+            if maxWallDistance > 0 && distanceFromCamera >= maxWallDistance - distanceTolerance {
+                return .wall
+            }
+            return .object
         }
 
         // Anything else is an object
@@ -2180,6 +2212,18 @@ class SurfaceClassifier: ObservableObject {
 
     // MARK: - Reset
 
+    /// Set the current scan phase and optionally reset distance tracking
+    func setScanPhase(_ phase: RoomScanPhase, resetDistances: Bool = true) {
+        currentScanPhase = phase
+        if resetDistances {
+            // Reset distance tracking when changing phases
+            maxFloorDistance = 0
+            maxCeilingDistance = 0
+            maxWallDistance = 0
+            debugLog("[SurfaceClassifier] Scan phase changed to \(phase.rawValue), distances reset")
+        }
+    }
+
     func reset() {
         floorHeightSamples.removeAll()
         ceilingHeightSamples.removeAll()
@@ -2191,6 +2235,12 @@ class SurfaceClassifier: ObservableObject {
         mlClassifications.removeAll()
         wallDistanceByAngle.removeAll()
         wallMeasurementOrigin = nil
+
+        // Reset distance tracking
+        maxFloorDistance = 0
+        maxCeilingDistance = 0
+        maxWallDistance = 0
+        currentScanPhase = .ready
         statistics = ScanStatistics()
 
         // Clear calibration

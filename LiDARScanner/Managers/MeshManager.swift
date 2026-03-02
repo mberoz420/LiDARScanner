@@ -378,6 +378,7 @@ class MeshManager: NSObject, ObservableObject {
         // Setup guided scanning for room mode
         if currentMode == .walls {
             currentPhase = .floor
+            surfaceClassifier.setScanPhase(.floor)  // Sync scan phase for distance-based classification
             phaseProgress = 0
             useEdgeVisualization = true
             // Always enable classification for guided room mode (needed for edge detection)
@@ -1690,6 +1691,7 @@ class MeshManager: NSObject, ObservableObject {
     func advancePhase() {
         guard let next = currentPhase.nextPhase else { return }
         currentPhase = next
+        surfaceClassifier.setScanPhase(next)  // Sync for distance-based classification
         phaseProgress = 0
 
         // Play haptic feedback
