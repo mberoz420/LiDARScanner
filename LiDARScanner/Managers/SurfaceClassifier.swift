@@ -433,6 +433,106 @@ struct ScanStatistics {
     }
 }
 
+/// Represents an infinite plane in 3D space (for room boundary)
+/// Planes are fitted to highest-density point clusters and scaled 5x to ensure no holes
+struct RoomPlane: Identifiable {
+    let id: UUID
+    let surfaceType: SurfaceType          // floor, ceiling, or wall
+    let normal: SIMD3<Float>              // Plane normal (unit vector)
+    let point: SIMD3<Float>               // A point on the plane
+    let distance: Float                   // Distance from origin (for plane equation)
+    let density: Int                      // Number of points in cluster
+    let angle: Float?                     // For walls: angle in degrees (0-360)
+
+    init(surfaceType: SurfaceType, normal: SIMD3<Float>, point: SIMD3<Float>, density: Int, angle: Float? = nil) {
+        self.id = UUID()
+        self.surfaceType = surfaceType
+        self.normal = simd_normalize(normal)
+        self.point = point
+        self.distance = -simd_dot(self.normal, point)  // Plane equation: n·x + d = 0
+        self.density = density
+        self.angle = angle
+    }
+
+    /// Check if a point is on this plane (within tolerance)
+    func containsPoint(_ p: SIMD3<Float>, tolerance: Float = 0.1) -> Bool {
+        let dist = simd_dot(normal, p) + distance
+        return abs(dist) <= tolerance
+    }
+
+    /// Get signed distance from point to plane
+    func distanceToPoint(_ p: SIMD3<Float>) -> Float {
+        return simd_dot(normal, p) + distance
+    }
+
+    /// Project a point onto this plane
+    func projectPoint(_ p: SIMD3<Float>) -> SIMD3<Float> {
+        let dist = distanceToPoint(p)
+        return p - dist * normal
+    }
+
+    /// Intersect two planes to get a line (returns direction and point on line)
+    func intersect(with other: RoomPlane) -> (direction: SIMD3<Float>, point: SIMD3<Float>)? {
+        let direction = simd_cross(normal, other.normal)
+        let dirLength = simd_length(direction)
+
+        // Planes are parallel if cross product is zero
+        guard dirLength > 0.001 else { return nil }
+
+        let normalizedDir = direction / dirLength
+
+        // Find a point on the line of intersection
+        // Solve: n1·p = -d1 and n2·p = -d2
+        let n1 = normal
+        let n2 = other.normal
+        let d1 = distance
+        let d2 = other.distance
+
+        // Use the formula for line of intersection
+        let denom = simd_dot(n1, n1) * simd_dot(n2, n2) - simd_dot(n1, n2) * simd_dot(n1, n2)
+        guard abs(denom) > 0.0001 else { return nil }
+
+        let c1 = (-d1 * simd_dot(n2, n2) + d2 * simd_dot(n1, n2)) / denom
+        let c2 = (-d2 * simd_dot(n1, n1) + d1 * simd_dot(n1, n2)) / denom
+
+        let pointOnLine = c1 * n1 + c2 * n2
+
+        return (normalizedDir, pointOnLine)
+    }
+
+    /// Intersect three planes to get a point (corner)
+    static func intersectThree(_ p1: RoomPlane, _ p2: RoomPlane, _ p3: RoomPlane) -> SIMD3<Float>? {
+        // Matrix of normals
+        let n1 = p1.normal
+        let n2 = p2.normal
+        let n3 = p3.normal
+
+        // Determinant
+        let det = simd_dot(n1, simd_cross(n2, n3))
+        guard abs(det) > 0.0001 else { return nil }  // Planes don't meet at a point
+
+        // Cramer's rule
+        let d1 = -p1.distance
+        let d2 = -p2.distance
+        let d3 = -p3.distance
+
+        let point = (d1 * simd_cross(n2, n3) + d2 * simd_cross(n3, n1) + d3 * simd_cross(n1, n2)) / det
+        return point
+    }
+}
+
+/// Room boundary formed by intersecting planes
+struct RoomBoundary {
+    let floorPlane: RoomPlane
+    let ceilingPlane: RoomPlane
+    let wallPlanes: [RoomPlane]
+    let corners: [SIMD3<Float>]  // Where 3 planes meet
+
+    var roomHeight: Float {
+        return abs(ceilingPlane.point.y - floorPlane.point.y)
+    }
+}
+
 @MainActor
 class SurfaceClassifier: ObservableObject {
     // MARK: - Published State
@@ -451,6 +551,17 @@ class SurfaceClassifier: ObservableObject {
     private var maxCeilingDistance: Float = 0    // Farthest upward point during ceiling phase
     private var maxWallDistance: Float = 0       // Farthest horizontal point during wall phase
     private let distanceTolerance: Float = 0.3   // 30cm tolerance for "farthest" classification
+
+    // MARK: - Detected Room Planes (infinite planes fitted to point clusters)
+    // These are scaled 5x to ensure no holes - planes are infinite by definition
+    @Published var detectedFloorPlane: RoomPlane?
+    @Published var detectedCeilingPlane: RoomPlane?
+    @Published var detectedWallPlanes: [RoomPlane] = []
+
+    // Point clusters for plane fitting
+    private var floorPointCluster: [SIMD3<Float>] = []
+    private var ceilingPointCluster: [SIMD3<Float>] = []
+    private var wallPointClusters: [Int: [SIMD3<Float>]] = [:]  // Keyed by angle bucket
 
     // MARK: - Calibrated Reference Planes (user-confirmed by pointing)
     @Published var floorCalibrated = false
@@ -854,7 +965,7 @@ class SurfaceClassifier: ObservableObject {
         let camPos = cameraPosition ?? cameraPositions.last ?? SIMD3<Float>(0, 0, 0)
         let distanceFromCamera = simd_length(worldPosition - camPos)
 
-        // Collect samples for density analysis
+        // Collect samples for density analysis AND plane fitting
         if normalY > 0.5 {
             updateFloorHeight(worldY)
             if distanceFromCamera > maxFloorDistance {
@@ -870,6 +981,9 @@ class SurfaceClassifier: ObservableObject {
                 maxWallDistance = distanceFromCamera
             }
         }
+
+        // Add point to cluster for plane fitting (farthest + correct height = room surface)
+        addPointToCluster(point: worldPosition, normal: averageNormal, distance: distanceFromCamera)
 
         // Floor detection: upward normal + farthest + at floor height (lowest dense cluster)
         if normalY > 0.7 {
@@ -2235,6 +2349,14 @@ class SurfaceClassifier: ObservableObject {
         calibratedCeilingNormal = nil
         floorCalibrated = false
         ceilingCalibrated = false
+
+        // Clear plane detection
+        detectedFloorPlane = nil
+        detectedCeilingPlane = nil
+        detectedWallPlanes.removeAll()
+        floorPointCluster.removeAll()
+        ceilingPointCluster.removeAll()
+        wallPointClusters.removeAll()
     }
 
     /// Clear ML-related caches to reduce memory (called under memory pressure)
@@ -2243,6 +2365,151 @@ class SurfaceClassifier: ObservableObject {
         accumulatedNormals.removeAll()
         mlClassifications.removeAll()
         debugLog("[SurfaceClassifier] Cleared ML cache to reduce memory")
+    }
+
+    // MARK: - Plane Fitting (fit infinite planes to point clusters)
+
+    /// Add a point to the appropriate cluster based on its normal direction
+    func addPointToCluster(point: SIMD3<Float>, normal: SIMD3<Float>, distance: Float) {
+        let normalY = normal.y
+        let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
+
+        // Floor points: upward normal + at farthest distance
+        if normalY > 0.7 {
+            if maxFloorDistance == 0 || distance >= maxFloorDistance - distanceTolerance {
+                // At floor height (lowest Y with density)
+                if statistics.floorHeight == nil || point.y <= (statistics.floorHeight! + 0.15) {
+                    floorPointCluster.append(point)
+                    // Limit cluster size
+                    if floorPointCluster.count > 5000 {
+                        floorPointCluster.removeFirst(1000)
+                    }
+                }
+            }
+        }
+        // Ceiling points: downward normal + at farthest distance
+        else if normalY < -0.7 {
+            if maxCeilingDistance == 0 || distance >= maxCeilingDistance - distanceTolerance {
+                if statistics.ceilingHeight == nil || point.y >= (statistics.ceilingHeight! - 0.15) {
+                    ceilingPointCluster.append(point)
+                    if ceilingPointCluster.count > 5000 {
+                        ceilingPointCluster.removeFirst(1000)
+                    }
+                }
+            }
+        }
+        // Wall points: horizontal normal + at farthest distance
+        else if horizontalMag > 0.7 && abs(normalY) < 0.5 {
+            if maxWallDistance == 0 || distance >= maxWallDistance - distanceTolerance {
+                // Bucket by angle (every 5 degrees)
+                let angle = atan2(normal.z, normal.x) * 180 / .pi
+                let bucket = Int(round(angle / 5)) * 5
+                if wallPointClusters[bucket] == nil {
+                    wallPointClusters[bucket] = []
+                }
+                wallPointClusters[bucket]?.append(point)
+                // Limit cluster size per angle
+                if let count = wallPointClusters[bucket]?.count, count > 1000 {
+                    wallPointClusters[bucket]?.removeFirst(200)
+                }
+            }
+        }
+    }
+
+    /// Fit planes to collected point clusters
+    func fitPlanesToClusters() {
+        // Fit floor plane
+        if floorPointCluster.count >= 10 {
+            let avgY = floorPointCluster.reduce(0.0) { $0 + $1.y } / Float(floorPointCluster.count)
+            let avgX = floorPointCluster.reduce(0.0) { $0 + $1.x } / Float(floorPointCluster.count)
+            let avgZ = floorPointCluster.reduce(0.0) { $0 + $1.z } / Float(floorPointCluster.count)
+
+            detectedFloorPlane = RoomPlane(
+                surfaceType: .floor,
+                normal: SIMD3<Float>(0, 1, 0),  // Floor normal points up
+                point: SIMD3<Float>(avgX, avgY, avgZ),
+                density: floorPointCluster.count
+            )
+            debugLog("[PlaneFit] Floor plane fitted at Y=\(avgY) with \(floorPointCluster.count) points")
+        }
+
+        // Fit ceiling plane
+        if ceilingPointCluster.count >= 10 {
+            let avgY = ceilingPointCluster.reduce(0.0) { $0 + $1.y } / Float(ceilingPointCluster.count)
+            let avgX = ceilingPointCluster.reduce(0.0) { $0 + $1.x } / Float(ceilingPointCluster.count)
+            let avgZ = ceilingPointCluster.reduce(0.0) { $0 + $1.z } / Float(ceilingPointCluster.count)
+
+            detectedCeilingPlane = RoomPlane(
+                surfaceType: .ceiling,
+                normal: SIMD3<Float>(0, -1, 0),  // Ceiling normal points down
+                point: SIMD3<Float>(avgX, avgY, avgZ),
+                density: ceilingPointCluster.count
+            )
+            debugLog("[PlaneFit] Ceiling plane fitted at Y=\(avgY) with \(ceilingPointCluster.count) points")
+        }
+
+        // Fit wall planes for each angle bucket with enough points
+        detectedWallPlanes.removeAll()
+        for (angleBucket, points) in wallPointClusters where points.count >= 10 {
+            let avgX = points.reduce(0.0) { $0 + $1.x } / Float(points.count)
+            let avgY = points.reduce(0.0) { $0 + $1.y } / Float(points.count)
+            let avgZ = points.reduce(0.0) { $0 + $1.z } / Float(points.count)
+
+            // Normal direction from angle bucket
+            let angleRad = Float(angleBucket) * .pi / 180
+            let normalX = cos(angleRad)
+            let normalZ = sin(angleRad)
+
+            let wallPlane = RoomPlane(
+                surfaceType: .wall,
+                normal: SIMD3<Float>(normalX, 0, normalZ),
+                point: SIMD3<Float>(avgX, avgY, avgZ),
+                density: points.count,
+                angle: Float(angleBucket)
+            )
+            detectedWallPlanes.append(wallPlane)
+        }
+        debugLog("[PlaneFit] Fitted \(detectedWallPlanes.count) wall planes")
+    }
+
+    /// Generate closed room boundary by intersecting all planes
+    func generateRoomBoundary() -> RoomBoundary? {
+        guard let floor = detectedFloorPlane,
+              let ceiling = detectedCeilingPlane,
+              detectedWallPlanes.count >= 3 else {
+            debugLog("[RoomBoundary] Not enough planes: floor=\(detectedFloorPlane != nil), ceiling=\(detectedCeilingPlane != nil), walls=\(detectedWallPlanes.count)")
+            return nil
+        }
+
+        // Find corners where floor/ceiling meet walls
+        var corners: [SIMD3<Float>] = []
+
+        // For each pair of adjacent walls, find their intersection with floor and ceiling
+        let sortedWalls = detectedWallPlanes.sorted { ($0.angle ?? 0) < ($1.angle ?? 0) }
+
+        for i in 0..<sortedWalls.count {
+            let wall1 = sortedWalls[i]
+            let wall2 = sortedWalls[(i + 1) % sortedWalls.count]
+
+            // Floor corner
+            if let floorCorner = RoomPlane.intersectThree(floor, wall1, wall2) {
+                corners.append(floorCorner)
+            }
+
+            // Ceiling corner
+            if let ceilingCorner = RoomPlane.intersectThree(ceiling, wall1, wall2) {
+                corners.append(ceilingCorner)
+            }
+        }
+
+        debugLog("[RoomBoundary] Generated boundary with \(corners.count) corners")
+
+        return RoomBoundary(
+            floorPlane: floor,
+            ceilingPlane: ceiling,
+            wallPlanes: sortedWalls,
+            corners: corners
+        )
     }
 
     // MARK: - Auto Floor Detection (finds largest continuous horizontal plane at lowest Y)
