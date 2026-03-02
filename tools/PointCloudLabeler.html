@@ -50,6 +50,8 @@
         .btn-ceiling { background: #f1c40f; color: #000; }
         .btn-wall { background: #3498db; color: #fff; }
         .btn-object { background: #e74c3c; color: #fff; }
+        .btn-objecttop { background: #e68080; color: #fff; }
+        .btn-backreflection { background: #ff00ff; color: #fff; }
         .btn-noise { background: #9b59b6; color: #fff; }
         .btn-unlabeled { background: #95a5a6; color: #fff; }
         .btn-custom { background: #1abc9c; color: #fff; }
@@ -221,6 +223,18 @@
             </div>
             <input type="file" id="file-input" accept=".json" />
 
+            <h2>Point Size</h2>
+            <div class="input-group">
+                <label>Size: <span id="size-value">0.5</span></label>
+                <input type="range" id="size-slider" min="0.1" max="1" step="0.05" value="0.5"
+                       onchange="updatePointSize(this.value)">
+                <div style="display:flex;gap:5px;margin-top:5px;">
+                    <button class="btn btn-action btn-small" onclick="decreasePointSize()">- Smaller</button>
+                    <button class="btn btn-action btn-small" onclick="increasePointSize()">+ Bigger</button>
+                </div>
+                <p class="keyboard-hint">Use [ and ] keys to adjust size</p>
+            </div>
+
             <h2>Camera Views</h2>
             <div class="view-buttons">
                 <button class="btn btn-view btn-small" onclick="setView('top')">Top</button>
@@ -248,8 +262,14 @@
             <button class="btn btn-object" onclick="labelSelected(3)">
                 <span class="color-dot" style="background:#e74c3c"></span>Object (4)
             </button>
+            <button class="btn btn-objecttop" onclick="labelSelected(5)">
+                <span class="color-dot" style="background:#e68080"></span>Object Top (5)
+            </button>
+            <button class="btn btn-backreflection" onclick="labelSelected(6)">
+                <span class="color-dot" style="background:#ff00ff"></span>Back Reflection (6)
+            </button>
             <button class="btn btn-noise" onclick="labelSelected(4)">
-                <span class="color-dot" style="background:#9b59b6"></span>Noise (5)
+                <span class="color-dot" style="background:#9b59b6"></span>Noise (7)
             </button>
             <button class="btn btn-unlabeled" onclick="labelSelected(-1)">
                 Clear Label (0)
@@ -257,7 +277,7 @@
             <button class="btn btn-delete" onclick="deleteSelected()">
                 Delete Selected Points
             </button>
-            <p class="keyboard-hint">Keys 0-5 as shortcuts, Delete/Backspace to delete</p>
+            <p class="keyboard-hint">Keys 0-7 as shortcuts, Delete/Backspace to delete</p>
 
             <h2>Custom Labels</h2>
             <div class="input-group">
@@ -295,14 +315,8 @@
             <button class="btn btn-action" onclick="clearSelection()">Clear Selection</button>
             <button class="btn btn-action" onclick="invertSelection()">Invert Selection</button>
 
-            <h2>Display</h2>
+            <h2>Color Mode</h2>
             <div class="input-group">
-                <label>Point Size: <span id="size-value">3</span></label>
-                <input type="range" id="size-slider" min="1" max="10" step="1" value="3"
-                       onchange="updatePointSize(this.value)">
-            </div>
-            <div class="input-group">
-                <label>Color Mode:</label>
                 <select id="color-mode" onchange="updateColorMode(this.value)" style="width:100%;padding:8px;background:#0f3460;color:#fff;border:1px solid #0f3460;border-radius:4px;">
                     <option value="label">By Label</option>
                     <option value="normal" selected>By Normal (Auto-detect)</option>
@@ -329,6 +343,14 @@
                     <input type="checkbox" id="show-objects" checked onchange="updateVisibility()">
                     <span class="color-dot" style="background:#e74c3c"></span> Objects
                 </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="show-objecttops" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#e68080"></span> Object Tops
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="show-backreflections" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#ff00ff"></span> Back Reflections
+                </label>
             </div>
 
             <h2>Statistics</h2>
@@ -339,6 +361,8 @@
                 <div><span><span class="color-dot" style="background:#f1c40f"></span>Ceiling:</span><span id="stat-ceiling">0</span></div>
                 <div><span><span class="color-dot" style="background:#3498db"></span>Wall:</span><span id="stat-wall">0</span></div>
                 <div><span><span class="color-dot" style="background:#e74c3c"></span>Object:</span><span id="stat-object">0</span></div>
+                <div><span><span class="color-dot" style="background:#e68080"></span>Object Top:</span><span id="stat-objecttop">0</span></div>
+                <div><span><span class="color-dot" style="background:#ff00ff"></span>Back Reflection:</span><span id="stat-backreflection">0</span></div>
                 <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
                 <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
             </div>
@@ -356,7 +380,7 @@
         let scene, camera, renderer, controls;
         let pointCloud, points = [], labels = [], normals = [], rgbColors = [];
         let selectedIndices = new Set();
-        let deletedIndices = new Set();  // Track deleted points
+        let deletedIndices = new Set();
         let selectionRadius = 0.3;
         let raycaster, mouse;
         let originalData = null;
@@ -376,7 +400,9 @@
             '1': 0xf1c40f,   // Ceiling - yellow
             '2': 0x3498db,   // Wall - blue
             '3': 0xe74c3c,   // Object - red
-            '4': 0x9b59b6    // Noise - purple
+            '4': 0x9b59b6,   // Noise - purple
+            '5': 0xe68080,   // Object Top - light red
+            '6': 0xff00ff    // Back Reflection - magenta
         };
 
         // Label names for export
@@ -386,6 +412,8 @@
             '1': 'ceiling',
             '2': 'wall',
             '3': 'object',
+            '5': 'objecttop',
+            '6': 'backreflection',
             '4': 'noise'
         };
 
@@ -442,14 +470,12 @@
                 return;
             }
 
-            // Check if already exists
             if (customLabels.find(l => l.name.toLowerCase() === name.toLowerCase())) {
                 alert('Label already exists');
                 return;
             }
 
-            // Generate a random color
-            const hue = (customLabels.length * 137.5) % 360;  // Golden angle for good distribution
+            const hue = (customLabels.length * 137.5) % 360;
             const color = hslToHex(hue, 70, 50);
 
             const label = {
@@ -459,7 +485,6 @@
             };
             customLabels.push(label);
 
-            // Add to label colors and names
             LABEL_COLORS[label.id.toString()] = parseInt(color.replace('#', '0x'));
             LABEL_NAMES[label.id.toString()] = name.toLowerCase().replace(/\s+/g, '_');
 
@@ -600,16 +625,24 @@
 
         // Visibility filters
         let showFloors = true, showCeilings = true, showWalls = true, showObjects = true;
+        let showObjectTops = true, showBackReflections = true;
 
         function updateVisibility() {
             showFloors = document.getElementById('show-floors').checked;
             showCeilings = document.getElementById('show-ceilings').checked;
             showWalls = document.getElementById('show-walls').checked;
             showObjects = document.getElementById('show-objects').checked;
+            showObjectTops = document.getElementById('show-objecttops').checked;
+            showBackReflections = document.getElementById('show-backreflections').checked;
             rebuildPointCloud();
         }
 
         function getSurfaceType(index) {
+            // Check if point has a label that indicates its type
+            const label = labels[index];
+            if (label === 5) return 'objecttop';
+            if (label === 6) return 'backreflection';
+
             const n = normals[index] || {x: 0, y: 1, z: 0};
             const ny = Math.abs(n.y);
             const horizontalMag = Math.sqrt(n.x * n.x + n.z * n.z);
@@ -632,6 +665,8 @@
                 case 'ceiling': return showCeilings;
                 case 'wall': return showWalls;
                 case 'object': return showObjects;
+                case 'objecttop': return showObjectTops;
+                case 'backreflection': return showBackReflections;
                 default: return true;
             }
         }
@@ -699,20 +734,25 @@
 
             switch (colorMode) {
                 case 'normal':
+                    // Check for labeled objectTop or backReflection first
+                    const label = labels[index];
+                    if (label === 5) return new THREE.Color(0xe68080);  // Object Top - light red
+                    if (label === 6) return new THREE.Color(0xff00ff);  // Back Reflection - magenta
+
                     const n = normals[index] || {x: 0, y: 1, z: 0};
                     const ny = Math.abs(n.y);
                     const horizontalMag = Math.sqrt(n.x * n.x + n.z * n.z);
 
                     if (ny > 0.7) {
                         if (n.y > 0) {
-                            return new THREE.Color(0x2ecc71);
+                            return new THREE.Color(0x2ecc71);  // Floor - green
                         } else {
-                            return new THREE.Color(0xf1c40f);
+                            return new THREE.Color(0xf1c40f);  // Ceiling - yellow
                         }
                     } else if (horizontalMag > 0.7) {
-                        return new THREE.Color(0x3498db);
+                        return new THREE.Color(0x3498db);  // Wall - blue
                     } else {
-                        return new THREE.Color(0xe74c3c);
+                        return new THREE.Color(0xe74c3c);  // Object - red
                     }
 
                 case 'height':
@@ -731,6 +771,25 @@
                     const labelColor = LABEL_COLORS[labels[index].toString()];
                     return new THREE.Color(labelColor !== undefined ? labelColor : LABEL_COLORS['-1']);
             }
+        }
+
+        function addAxisLabel(text, x, y, z, color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.font = 'bold 48px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 32, 32);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({ map: texture });
+            const sprite = new THREE.Sprite(material);
+            sprite.position.set(x, y, z);
+            sprite.scale.set(0.5, 0.5, 1);
+            scene.add(sprite);
         }
 
         function init() {
@@ -754,6 +813,11 @@
 
             const axes = new THREE.AxesHelper(2);
             scene.add(axes);
+
+            // Add axis labels
+            addAxisLabel('X', 2.3, 0, 0, '#ff0000');
+            addAxisLabel('Y', 0, 2.3, 0, '#00ff00');
+            addAxisLabel('Z', 0, 0, 2.3, '#0000ff');
 
             raycaster = new THREE.Raycaster();
             raycaster.params.Points.threshold = 0.1;
@@ -914,14 +978,22 @@
         function onKeyDown(event) {
             if (event.key >= '0' && event.key <= '9') {
                 const keyNum = parseInt(event.key);
-                if (keyNum === 0) {
-                    labelSelected(-1);  // Clear label
-                } else if (keyNum <= 5) {
-                    labelSelected(keyNum - 1);  // Built-in labels 0-4
+                // Key mapping: 0=clear, 1=floor, 2=ceiling, 3=wall, 4=object, 5=objecttop, 6=backreflection, 7=noise
+                const keyToLabel = {
+                    0: -1,  // Clear
+                    1: 0,   // Floor
+                    2: 1,   // Ceiling
+                    3: 2,   // Wall
+                    4: 3,   // Object
+                    5: 5,   // Object Top
+                    6: 6,   // Back Reflection
+                    7: 4    // Noise
+                };
+                if (keyToLabel[keyNum] !== undefined) {
+                    labelSelected(keyToLabel[keyNum]);
                 } else {
-                    // Custom labels (6, 7, 8, 9)
-                    const customIdx = keyNum - 6;
-                    if (customIdx < customLabels.length) {
+                    const customIdx = keyNum - 8;
+                    if (customIdx >= 0 && customIdx < customLabels.length) {
                         labelSelected(customLabels[customIdx].id);
                     }
                 }
@@ -929,6 +1001,10 @@
                 deleteSelected();
             } else if (event.key === 'Escape') {
                 clearSelection();
+            } else if (event.key === '[' || event.key === '-') {
+                decreasePointSize();
+            } else if (event.key === ']' || event.key === '=' || event.key === '+') {
+                increasePointSize();
             }
         }
 
@@ -993,7 +1069,7 @@
         }
 
         function updateStats() {
-            const counts = { '-1': 0, '0': 0, '1': 0, '2': 0, '3': 0, '4': 0 };
+            const counts = { '-1': 0, '0': 0, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 };
             let activeCount = 0;
 
             labels.forEach((l, i) => {
@@ -1011,6 +1087,8 @@
             document.getElementById('stat-ceiling').textContent = counts['1'].toLocaleString();
             document.getElementById('stat-wall').textContent = counts['2'].toLocaleString();
             document.getElementById('stat-object').textContent = counts['3'].toLocaleString();
+            document.getElementById('stat-objecttop').textContent = counts['5'].toLocaleString();
+            document.getElementById('stat-backreflection').textContent = counts['6'].toLocaleString();
             document.getElementById('stat-noise').textContent = counts['4'].toLocaleString();
             document.getElementById('stat-unlabeled').textContent = counts['-1'].toLocaleString();
         }
@@ -1021,11 +1099,23 @@
         }
 
         function updatePointSize(value) {
-            document.getElementById('size-value').textContent = value;
+            value = Math.max(0.1, Math.min(1, parseFloat(value)));
+            document.getElementById('size-slider').value = value;
+            document.getElementById('size-value').textContent = value.toFixed(2);
             if (pointCloud) {
                 const baseSize = sceneSize / 100;
-                pointCloud.material.size = baseSize * parseFloat(value);
+                pointCloud.material.size = baseSize * value;
             }
+        }
+
+        function increasePointSize() {
+            const current = parseFloat(document.getElementById('size-slider').value);
+            updatePointSize(current + 0.05);
+        }
+
+        function decreasePointSize() {
+            const current = parseFloat(document.getElementById('size-slider').value);
+            updatePointSize(current - 0.05);
         }
 
         function exportLabeled() {
@@ -1069,7 +1159,6 @@
 
             points.forEach((p, i) => {
                 if (deletedIndices.has(i)) return;
-                // Only export labeled points (not -1)
                 if (labels[i] >= 0) {
                     trainingPoints.push([
                         p.x, p.y, p.z,

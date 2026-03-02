@@ -10,6 +10,7 @@ import simd
 enum SurfaceType: String, CaseIterable, Sendable {
     case floor = "Floor"
     case ceiling = "Ceiling"
+    case cove = "Cove"                             // Rounded ceiling-wall transition
     case ceilingProtrusion = "Ceiling Protrusion"  // Beams, ducts, fixtures
     case wall = "Wall"
     case wallEdge = "Wall Edge"                     // Corners, intersections
@@ -19,12 +20,15 @@ enum SurfaceType: String, CaseIterable, Sendable {
     case window = "Window"                          // Window opening
     case windowFrame = "Window Frame"               // Window frame edges
     case object = "Object"
+    case objectTop = "Object Top"                   // Top of object (upward normal but above floor)
+    case backReflection = "Back Reflection"         // LiDAR reflection artifact - not real surface
     case unknown = "Unknown"
 
     var color: (r: Float, g: Float, b: Float, a: Float) {
         switch self {
         case .floor: return (0.2, 0.8, 0.2, 0.3)              // Green
         case .ceiling: return (0.8, 0.8, 0.2, 0.2)            // Yellow, transparent
+        case .cove: return (0.9, 0.7, 0.9, 0.5)               // Light purple/lavender
         case .ceilingProtrusion: return (1.0, 0.5, 0.0, 0.6)  // Orange, more visible
         case .wall: return (0.2, 0.4, 0.9, 0.4)               // Blue
         case .wallEdge: return (0.0, 1.0, 1.0, 0.7)           // Cyan, highlight
@@ -34,6 +38,8 @@ enum SurfaceType: String, CaseIterable, Sendable {
         case .window: return (0.5, 0.8, 1.0, 0.4)             // Light blue/glass
         case .windowFrame: return (0.7, 0.7, 0.7, 0.7)        // Gray
         case .object: return (0.9, 0.3, 0.3, 0.5)             // Red
+        case .objectTop: return (0.9, 0.5, 0.5, 0.4)          // Light red - object tops
+        case .backReflection: return (1.0, 0.0, 1.0, 0.3)     // Magenta, transparent - artifacts
         case .unknown: return (0.5, 0.5, 0.5, 0.3)            // Gray
         }
     }
@@ -41,7 +47,7 @@ enum SurfaceType: String, CaseIterable, Sendable {
     /// Whether this surface type should be highlighted for attention
     var isStructuralFeature: Bool {
         switch self {
-        case .ceilingProtrusion, .wallEdge, .floorEdge, .door, .doorFrame, .window, .windowFrame:
+        case .cove, .ceilingProtrusion, .wallEdge, .floorEdge, .door, .doorFrame, .window, .windowFrame:
             return true
         default:
             return false
@@ -90,24 +96,29 @@ struct ClassifiedSurface {
 
     /// Whether this surface should be filtered based on room layout mode
     func shouldFilter(settings: AppSettings, floorHeight: Float?) -> Bool {
+        // Always filter back reflections (LiDAR artifacts)
+        if surfaceType == .backReflection {
+            return true
+        }
+
         switch settings.roomLayoutMode {
         case .includeAll:
-            return false
+            return surfaceType == .backReflection  // Still filter artifacts
 
         case .roomOnly:
             // Only keep structural surfaces
-            return surfaceType == .object || surfaceType == .unknown
+            return surfaceType == .object || surfaceType == .objectTop || surfaceType == .unknown
 
         case .filterLarge:
             // Filter objects larger than threshold
-            if surfaceType == .object {
+            if surfaceType == .object || surfaceType == .objectTop {
                 return maxDimension > settings.minObjectSizeMeters
             }
             return false
 
         case .filterByHeight:
             // Filter objects below height threshold (furniture on floor)
-            if surfaceType == .object, let floor = floorHeight {
+            if surfaceType == .object || surfaceType == .objectTop, let floor = floorHeight {
                 let objectBottomHeight = heightRange.min - floor
                 return objectBottomHeight < settings.maxObjectHeightMeters
             }
@@ -120,6 +131,8 @@ struct ClassifiedSurface {
                 return !settings.includeFloor
             case .ceiling:
                 return !settings.includeCeiling
+            case .cove:
+                return !settings.includeCoves
             case .ceilingProtrusion:
                 return !settings.includeProtrusions
             case .wall:
@@ -130,8 +143,10 @@ struct ClassifiedSurface {
                 return !settings.includeDoors
             case .window, .windowFrame:
                 return !settings.includeWindows
-            case .object:
+            case .object, .objectTop:
                 return !settings.includeObjects
+            case .backReflection:
+                return true  // Always filter back reflections
             case .unknown:
                 return true  // Always filter unknown
             }
@@ -284,6 +299,7 @@ struct WallGapCandidate {
 struct ScanStatistics {
     var floorArea: Float = 0
     var ceilingArea: Float = 0
+    var coveArea: Float = 0        // Rounded ceiling-wall transitions
     var wallArea: Float = 0
     var objectArea: Float = 0
     var protrusionArea: Float = 0
@@ -442,6 +458,18 @@ class SurfaceClassifier: ObservableObject {
     /// Tolerance for matching calibrated planes (meters)
     private let calibrationTolerance: Float = 0.15  // 15cm tolerance
 
+    // MARK: - Public Room Bounds Access
+
+    /// Get the effective floor height (calibrated or estimated)
+    var effectiveFloorHeight: Float? {
+        calibratedFloorHeight ?? statistics.floorHeight
+    }
+
+    /// Get the effective ceiling height (calibrated or estimated)
+    var effectiveCeilingHeight: Float? {
+        calibratedCeilingHeight ?? statistics.ceilingHeight
+    }
+
     // MARK: - Core ML Model
     private var segmentationModel: MLModel?
     private var lastMLInferenceTime: Date = .distantPast
@@ -499,15 +527,15 @@ class SurfaceClassifier: ObservableObject {
     private var wallGapCandidates: [WallGapCandidate] = []
 
     // Door/window size thresholds
-    private let doorMinWidth: Float = 0.6       // 60cm minimum door width
-    private let doorMaxWidth: Float = 1.5       // 150cm maximum door width
-    private let doorMinHeight: Float = 1.8      // 180cm minimum door height
-    private let doorMaxHeight: Float = 2.5      // 250cm maximum door height
-    private let doorMaxBottomFromFloor: Float = 0.05  // Door starts near floor
+    private let doorMinWidth: Float = 0.5       // 50cm minimum door width
+    private let doorMaxWidth: Float = 1.8       // 180cm maximum door width (double doors)
+    private let doorMinHeight: Float = 1.7      // 170cm minimum door height
+    private let doorMaxHeight: Float = 2.8      // 280cm maximum door height
+    private let doorMaxBottomFromFloor: Float = 0.4   // Door starts within 40cm of floor (tolerance for floor detection errors)
 
-    private let windowMinWidth: Float = 0.3     // 30cm minimum window width
-    private let windowMinHeight: Float = 0.3    // 30cm minimum window height
-    private let windowMinBottomFromFloor: Float = 0.4  // Window at least 40cm from floor
+    private let windowMinWidth: Float = 0.25    // 25cm minimum window width
+    private let windowMinHeight: Float = 0.25   // 25cm minimum window height
+    private let windowMinBottomFromFloor: Float = 0.3  // Window at least 30cm from floor
 
     // MARK: - Wall Detection (farthest surface when pointing horizontally = wall)
 
@@ -520,6 +548,80 @@ class SurfaceClassifier: ObservableObject {
 
     /// Tolerance for wall distance matching (surfaces within this of farthest = wall)
     private let wallDistanceTolerance: Float = 0.3  // 30cm tolerance
+
+    // MARK: - Back Reflection Detection
+
+    /// Camera positions during scan (for line-of-sight validation)
+    private var cameraPositions: [SIMD3<Float>] = []
+    private let maxCameraPositions: Int = 100
+
+    /// Track camera position for back reflection detection
+    func trackCameraPosition(_ position: SIMD3<Float>) {
+        cameraPositions.append(position)
+        if cameraPositions.count > maxCameraPositions {
+            cameraPositions.removeFirst()
+        }
+    }
+
+    /// Check if a point is likely a back reflection (LiDAR artifact)
+    /// Back reflections occur when LiDAR bounces off reflective surfaces
+    /// and detects points that couldn't be seen directly
+    func isBackReflection(
+        point: SIMD3<Float>,
+        normal: SIMD3<Float>,
+        cameraPosition: SIMD3<Float>?
+    ) -> Bool {
+        guard let camPos = cameraPosition ?? cameraPositions.last else {
+            return false
+        }
+
+        // 1. Check if point is behind a known wall
+        // If we have established walls, check if this point is on the wrong side
+        if let floorY = statistics.floorHeight,
+           let ceilingY = statistics.ceilingHeight {
+
+            // Point above ceiling or below floor is suspicious
+            if point.y > ceilingY + 0.3 || point.y < floorY - 0.3 {
+                return true
+            }
+        }
+
+        // 2. Check normal direction vs view direction
+        // If we're looking at the back of a surface, it's likely a reflection
+        let viewDirection = simd_normalize(point - camPos)
+        let dotProduct = simd_dot(normal, viewDirection)
+
+        // If normal points same direction as view (back face), suspicious
+        // Real surfaces should have normals facing the camera (negative dot product)
+        if dotProduct > 0.5 {
+            return true
+        }
+
+        // 3. Check if point is unreasonably far
+        let distance = simd_length(point - camPos)
+        if distance > 10.0 {  // More than 10m away is suspicious for indoor scanning
+            return true
+        }
+
+        // 4. Check for points that appear on surfaces we couldn't see
+        // If looking down at floor but point is on top of a tall object we're not looking at
+        if let floorY = statistics.floorHeight {
+            let heightAboveFloor = point.y - floorY
+            let cameraHeightAboveFloor = camPos.y - floorY
+
+            // If point is above camera eye level but has upward normal (object top)
+            // and camera is looking down, this could be a reflection
+            if heightAboveFloor > cameraHeightAboveFloor && normal.y > 0.7 {
+                // Camera can't see tops of things above eye level while looking down
+                let cameraLookingDown = viewDirection.y < -0.3
+                if cameraLookingDown {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
 
     // MARK: - Device Orientation
 
@@ -635,24 +737,40 @@ class SurfaceClassifier: ObservableObject {
     ) -> SurfaceType {
         guard classificationEnabled else { return .unknown }
 
+        // PRIORITY 0: Check for back reflections (LiDAR artifacts)
+        // These are impossible points caused by reflections off shiny surfaces
+        if isBackReflection(point: worldPosition, normal: averageNormal, cameraPosition: cameraPosition) {
+            return .backReflection
+        }
+
         let worldY = worldPosition.y
         let useCalibration = AppSettings.shared.useCalibration
         let useML = AppSettings.shared.useMLClassification && mlModelLoaded
 
         // PRIORITY 1: Use calibrated floor/ceiling planes (most accurate)
         if useCalibration {
+            // Always collect samples from upward-facing surfaces for density analysis
+            if averageNormal.y > 0.5 {
+                updateFloorHeight(worldY)
+            }
+
             // Check floor (continuous surface, normal pointing up, at calibrated Y)
             if floorCalibrated {
                 if isPartOfFloorPlane(point: worldPosition, normal: averageNormal) {
-                    updateFloorHeight(worldY)
+                    debugLog("[FLOOR-CLASS] CALIBRATED path: Y=\(worldY), floorY=\(calibratedFloorHeight ?? -999)")
                     return .floor
                 }
+            }
+
+            // Always collect samples from downward-facing surfaces for density analysis
+            if averageNormal.y < -0.5 {
+                updateCeilingHeight(worldY)
             }
 
             // Check ceiling (continuous surface, normal pointing down, at calibrated Y)
             if ceilingCalibrated {
                 if isPartOfCeilingPlane(point: worldPosition, normal: averageNormal) {
-                    return classifyCeilingSurface(worldY: worldY)
+                    return classifyCeilingSurface(worldY: worldY, normal: averageNormal)
                 }
             }
 
@@ -661,52 +779,51 @@ class SurfaceClassifier: ObservableObject {
                 let floorY = calibratedFloorHeight!
                 let ceilingY = calibratedCeilingHeight!
 
-                // Horizontal surface NOT at floor/ceiling = object (table, shelf, etc.)
+                // Upward-facing surface: floor (within 1mm) or objectTop (above floor)
                 if averageNormal.y > 0.5 {  // Faces up
-                    let heightAboveFloor = worldY - floorY
-                    if heightAboveFloor > 0.3 {  // More than 30cm above floor
-                        return .object
+                    let heightAboveFloor = abs(worldY - floorY)
+                    if heightAboveFloor < heightBinSize {  // Within 1mm = floor
+                        return .floor
+                    } else {
+                        return .objectTop  // Above floor plane = object top
                     }
                 }
 
+                // Downward-facing surface: ceiling (within 1mm) or protrusion/object
                 if averageNormal.y < -0.5 {  // Faces down
-                    let heightBelowCeiling = ceilingY - worldY
-                    if heightBelowCeiling > 0.3 {  // More than 30cm below ceiling
-                        return classifyCeilingSurface(worldY: worldY)  // Could be protrusion
+                    let heightBelowCeiling = abs(ceilingY - worldY)
+                    if heightBelowCeiling < heightBinSize {  // Within 1mm = ceiling
+                        return .ceiling
+                    } else {
+                        return classifyCeilingSurface(worldY: worldY, normal: averageNormal)  // Protrusion or object
                     }
                 }
 
-                // Vertical surface between floor and ceiling - use wall distance rule
-                // No calibration for walls: farthest = wall, closer = object
+                // Vertical surface between floor and ceiling - classify as wall
                 if abs(averageNormal.y) < 0.5 {
-                    if worldY > floorY && worldY < ceilingY {
-                        // Apply the wall distance rule: farthest surface = wall
-                        return classifyVerticalSurface(
-                            position: worldPosition,
-                            normal: averageNormal,
-                            cameraPosition: cameraPosition
-                        )
+                    let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
+                    if horizontalMag > 0.5 {
+                        return .wall
                     }
                 }
             } else {
                 // Only one calibrated - use what we have
                 if floorCalibrated && averageNormal.y > 0.5 {
-                    // Surface faces up but doesn't match floor = object
-                    return .object
+                    // Surface faces up but doesn't match floor (outside 1mm) = object top
+                    return .objectTop
                 }
 
                 if ceilingCalibrated && averageNormal.y < -0.5 {
-                    // Surface faces down but doesn't match ceiling = check protrusion
-                    return classifyCeilingSurface(worldY: worldY)
+                    // Surface faces down but doesn't match ceiling = check protrusion or object
+                    return classifyCeilingSurface(worldY: worldY, normal: averageNormal)
                 }
 
-                // Vertical surface - apply wall distance rule
+                // Vertical surface - classify as wall based on normal
                 if abs(averageNormal.y) < 0.5 {
-                    return classifyVerticalSurface(
-                        position: worldPosition,
-                        normal: averageNormal,
-                        cameraPosition: cameraPosition
-                    )
+                    let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
+                    if horizontalMag > 0.5 {
+                        return .wall
+                    }
                 }
             }
         }
@@ -722,65 +839,115 @@ class SurfaceClassifier: ObservableObject {
         let normalY = averageNormal.y
 
         if normalY > horizontalSurfaceThreshold {
-            // Surface facing up = floor (uncalibrated mode)
+            // Surface facing up - could be floor OR top of an object
+            // ALWAYS collect sample for density analysis (floor = lowest dense cluster)
             updateFloorHeight(worldY)
-            return .floor
+
+            // Floor is a precise plane - must be within mm tolerance of LOWEST dense cluster
+            if let floorHeight = statistics.floorHeight {
+                let heightAboveFloor = abs(worldY - floorHeight)
+                if heightAboveFloor < heightBinSize {  // Within 1mm bin (highest density range) = floor
+                    debugLog("[FLOOR-CLASS] HEURISTICS: Y=\(worldY), floorY=\(floorHeight), diff=\(heightAboveFloor) -> FLOOR")
+                    return .floor
+                } else {
+                    // Above floor plane = top of an object (table, counter, cabinet)
+                    debugLog("[FLOOR-CLASS] HEURISTICS: Y=\(worldY), floorY=\(floorHeight), diff=\(heightAboveFloor) -> OBJECT_TOP")
+                    return .objectTop
+                }
+            } else {
+                // Not enough samples yet to determine floor via density
+                debugLog("[FLOOR-CLASS] NO FLOOR YET: collecting Y=\(worldY), samples=\(floorHeightSamples.count)")
+                return .unknown  // Will be reclassified once floor height is established
+            }
         } else if normalY < -horizontalSurfaceThreshold {
-            // Surface facing down - could be ceiling or protrusion
-            return classifyCeilingSurface(worldY: worldY)
+            // Surface facing down - could be ceiling, cove, or protrusion
+            // Always collect sample for density analysis (ceiling = highest dense cluster)
+            updateCeilingHeight(worldY)
+            return classifyCeilingSurface(worldY: worldY, normal: averageNormal)
         } else {
             // Vertical surface - apply wall distance rule
             // Farthest = wall, closer = object
 
-            // First check ceiling/floor transitions
+            // First check ceiling/floor transitions - use 1mm density-based tolerance
             if let ceilingHeight = statistics.ceilingHeight {
-                let ceilingTolerance: Float = ceilingHeight > 3.0 ? 0.5 : 0.3
-                let nearCeiling = abs(worldY - ceilingHeight) < ceilingTolerance
+                let nearCeiling = abs(worldY - ceilingHeight) < heightBinSize
                 if nearCeiling && normalY < -0.2 {
                     return .ceiling
                 }
             }
 
             if let floorHeight = statistics.floorHeight {
-                let nearFloor = abs(worldY - floorHeight) < 0.3
+                let nearFloor = abs(worldY - floorHeight) < heightBinSize
                 if nearFloor && normalY > 0.2 {
                     return .floor
                 }
             }
 
-            // Apply wall distance rule for vertical surfaces
-            if abs(normalY) < horizontalSurfaceThreshold {
-                return classifyVerticalSurface(
-                    position: worldPosition,
-                    normal: averageNormal,
-                    cameraPosition: cameraPosition
-                )
+            // Vertical surface - classify as wall based on normal direction
+            // Normal pointing mostly horizontal = wall
+            let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
+            if horizontalMag > 0.5 && abs(normalY) < 0.5 {
+                return .wall
             } else {
                 return .object
             }
         }
     }
 
-    /// Classify downward-facing surface as ceiling or protrusion
-    private func classifyCeilingSurface(worldY: Float) -> SurfaceType {
-        // If we have a ceiling height estimate, check for protrusions
-        if let ceilingHeight = statistics.ceilingHeight {
-            let depthBelowCeiling = ceilingHeight - worldY
+    /// Classify downward-facing surface as ceiling, cove, protrusion, or object bottom
+    private func classifyCeilingSurface(worldY: Float, normal: SIMD3<Float>? = nil) -> SurfaceType {
+        // Check for cove (rounded ceiling-wall transition)
+        // Coves have angled normals: not purely downward (ceiling) nor horizontal (wall)
+        if let n = normal {
+            // Cove detection: normal Y between -0.85 and -0.35 (roughly 30-70 degrees from horizontal)
+            // AND has significant horizontal component
+            let horizontalLength = sqrt(n.x * n.x + n.z * n.z)
+            let isCoveAngle = n.y < -0.35 && n.y > -0.85 && horizontalLength > 0.4
 
-            if depthBelowCeiling > protrusionMinDepth && depthBelowCeiling < protrusionMaxDepth {
-                // This is below the main ceiling but not too far - it's a protrusion
-                return .ceilingProtrusion
-            } else if depthBelowCeiling >= protrusionMaxDepth {
-                // Too far below - might be a dropped ceiling section or different room level
-                // Still track as potential new ceiling level
-                updateCeilingHeight(worldY)
-                return .ceiling
+            if isCoveAngle {
+                // Also check if we're near ceiling height
+                if let ceilingHeight = statistics.ceilingHeight {
+                    let distanceFromCeiling = abs(ceilingHeight - worldY)
+                    // Within 30cm of ceiling = cove
+                    if distanceFromCeiling < 0.3 {
+                        return .cove
+                    }
+                } else {
+                    // No ceiling reference yet, but angle suggests cove
+                    // Could be a cove if we're looking up
+                    return .cove
+                }
             }
         }
 
-        // Normal ceiling - update height tracking
+        // If we have a ceiling height estimate, use density-based classification
+        if let ceilingHeight = statistics.ceilingHeight {
+            let distanceFromCeiling = abs(ceilingHeight - worldY)
+
+            // Within 1mm bin (highest density range) = true ceiling
+            if distanceFromCeiling < heightBinSize {
+                return .ceiling
+            }
+
+            let depthBelowCeiling = ceilingHeight - worldY
+
+            if depthBelowCeiling > protrusionMinDepth && depthBelowCeiling < protrusionMaxDepth {
+                // This is below the main ceiling but not too far - it's a protrusion (beam, duct, etc.)
+                return .ceilingProtrusion
+            } else if depthBelowCeiling >= protrusionMaxDepth {
+                // Too far below ceiling - could be bottom of hanging object (light fixture, etc.)
+                // or a dropped ceiling section
+                return .objectTop  // Reuse objectTop for downward-facing object surfaces
+            } else if depthBelowCeiling > heightBinSize {
+                // Between 1mm and protrusionMinDepth - small protrusion or surface irregularity
+                return .ceilingProtrusion
+            }
+        }
+
+        // No ceiling reference yet - collect sample but don't classify as ceiling
+        // Ceiling will be determined by density (highest point count in 1mm bin)
         updateCeilingHeight(worldY)
-        return .ceiling
+        return .unknown  // Will be reclassified once ceiling height is established
     }
 
     /// Detect and classify a ceiling protrusion
@@ -808,16 +975,21 @@ class SurfaceClassifier: ObservableObject {
         let length = maxBound.z - minBound.z
         let area = width * length
 
-        // Classify protrusion type based on shape
+        // Classify protrusion type based on shape and depth
+        // Beams: protrude downward from ceiling, lower surface parallel to ceiling
+        // - Shallow beams: 3-10cm depth (decorative/crown molding)
+        // - Deep beams: 10-50cm depth (structural)
         let aspectRatio = max(width, length) / max(min(width, length), 0.01)
 
         let protrusionType: CeilingProtrusion.ProtrusionType
-        if aspectRatio > 5 && area < 2.0 {
-            protrusionType = .beam  // Long and narrow
-        } else if aspectRatio > 3 && area >= 0.5 {
-            protrusionType = .duct  // Rectangular, moderate size
+        if aspectRatio > 4 && area < 3.0 {
+            // Long and narrow = beam (structural or decorative)
+            // Lower surface is parallel to ceiling (we already know normal faces down)
+            protrusionType = .beam
+        } else if aspectRatio > 2.5 && area >= 0.3 && depth < 0.4 {
+            protrusionType = .duct  // Rectangular, moderate size, not too deep
         } else if area < 0.25 {
-            protrusionType = .fixture  // Small, compact
+            protrusionType = .fixture  // Small, compact (lights, sprinklers)
         } else if area > 4.0 {
             protrusionType = .dropCeiling  // Large area
         } else {
@@ -914,6 +1086,7 @@ class SurfaceClassifier: ObservableObject {
         // Update statistics
         statistics.floorArea = surfaceAreas[.floor, default: 0]
         statistics.ceilingArea = surfaceAreas[.ceiling, default: 0]
+        statistics.coveArea = surfaceAreas[.cove, default: 0]
         statistics.wallArea = surfaceAreas[.wall, default: 0]
         statistics.objectArea = surfaceAreas[.object, default: 0]
         statistics.protrusionArea = surfaceAreas[.ceilingProtrusion, default: 0]
@@ -1208,38 +1381,145 @@ class SurfaceClassifier: ObservableObject {
         )
     }
 
-    // MARK: - Height Estimation
+    // MARK: - Height Estimation (Density-Based)
+
+    /// Bin size for density histogram (1mm bins for sub-mm precision)
+    private let heightBinSize: Float = 0.001  // 1mm
 
     private func updateFloorHeight(_ y: Float) {
         floorHeightSamples.append(y)
 
-        // Keep last 100 samples
-        if floorHeightSamples.count > 100 {
+        // Keep last 1000 samples for better density estimation
+        if floorHeightSamples.count > 1000 {
             floorHeightSamples.removeFirst()
         }
 
-        // Estimate floor as the most common low height
-        if floorHeightSamples.count >= 10 {
-            let sorted = floorHeightSamples.sorted()
-            // Take 25th percentile as floor estimate
-            let index = floorHeightSamples.count / 4
-            statistics.floorHeight = sorted[index]
+        // Need enough samples for reliable density estimation
+        if floorHeightSamples.count >= 20 {
+            let oldHeight = statistics.floorHeight
+            statistics.floorHeight = findTightestCluster(samples: floorHeightSamples, findLowest: true)
+            if oldHeight != statistics.floorHeight {
+                debugLog("[FLOOR-DENSITY] Floor height updated: \(statistics.floorHeight ?? -999) from \(floorHeightSamples.count) samples, range: \(floorHeightSamples.min() ?? 0) to \(floorHeightSamples.max() ?? 0)")
+            }
         }
     }
 
     private func updateCeilingHeight(_ y: Float) {
         ceilingHeightSamples.append(y)
 
-        if ceilingHeightSamples.count > 100 {
+        if ceilingHeightSamples.count > 1000 {
             ceilingHeightSamples.removeFirst()
         }
 
-        if ceilingHeightSamples.count >= 10 {
-            let sorted = ceilingHeightSamples.sorted()
-            // Take 75th percentile as ceiling estimate
-            let index = (ceilingHeightSamples.count * 3) / 4
-            statistics.ceilingHeight = sorted[index]
+        if ceilingHeightSamples.count >= 20 {
+            statistics.ceilingHeight = findTightestCluster(samples: ceilingHeightSamples, findLowest: false)
         }
+    }
+
+    /// Find the Y height with the tightest cluster of points
+    /// For floor: find the LOWEST Y level with significant point density
+    /// For ceiling: find the HIGHEST Y level with significant point density
+    /// A real floor/ceiling plane has many points within sub-mm range
+    private func findTightestCluster(samples: [Float], findLowest: Bool) -> Float {
+        guard samples.count >= 10 else { return samples.first ?? 0 }
+
+        let sorted = samples.sorted()
+        let minY = sorted.first!
+        let maxY = sorted.last!
+        let range = maxY - minY
+
+        guard range > 0.002 else {
+            // All samples within 2mm - they're all the same plane
+            return sorted[sorted.count / 2]  // Return median
+        }
+
+        // Create 1mm bins
+        let binCount = max(1, Int(range / heightBinSize) + 1)
+        var histogram = [Int](repeating: 0, count: binCount)
+
+        // Fill histogram
+        for y in samples {
+            let binIndex = min(binCount - 1, Int((y - minY) / heightBinSize))
+            histogram[binIndex] += 1
+        }
+
+        // Find ALL local density peaks (bins with more points than neighbors)
+        var peaks: [(bin: Int, density: Int)] = []
+        let minPeakDensity = max(3, samples.count / 50)  // Minimum 3 points or 2% of samples
+
+        for i in 0..<binCount {
+            let density = histogram[i]
+            if density < minPeakDensity { continue }
+
+            // Check if this is a local maximum (higher than neighbors within 5mm)
+            let windowSize = 5  // 5mm window
+            var isLocalMax = true
+            for j in max(0, i - windowSize)..<min(binCount, i + windowSize + 1) {
+                if j != i && histogram[j] > density {
+                    isLocalMax = false
+                    break
+                }
+            }
+
+            if isLocalMax {
+                peaks.append((bin: i, density: density))
+            }
+        }
+
+        // If no peaks found, fall back to global max
+        if peaks.isEmpty {
+            var bestBin = 0
+            var bestDensity = 0
+            for i in 0..<binCount {
+                if histogram[i] > bestDensity {
+                    bestDensity = histogram[i]
+                    bestBin = i
+                }
+            }
+            peaks.append((bin: bestBin, density: bestDensity))
+        }
+
+        // Sort peaks by Y value
+        peaks.sort { $0.bin < $1.bin }
+
+        // For floor: pick the LOWEST peak (smallest Y = lowest bin)
+        // For ceiling: pick the HIGHEST peak (largest Y = highest bin)
+        let selectedPeak = findLowest ? peaks.first! : peaks.last!
+
+        // Calculate precise Y by averaging all points within 2mm of peak
+        let peakY = minY + Float(selectedPeak.bin) * heightBinSize
+        var sum: Float = 0
+        var count = 0
+
+        for y in samples {
+            if abs(y - peakY) < heightBinSize * 2 {  // Within 2mm of peak
+                sum += y
+                count += 1
+            }
+        }
+
+        let result = count > 0 ? sum / Float(count) : peakY
+        debugLog("[DENSITY] \(findLowest ? "FLOOR" : "CEILING"): peaks=\(peaks.count), selectedBin=\(selectedPeak.bin), density=\(selectedPeak.density)/\(samples.count), peakY=\(peakY), result=\(result)")
+        return result
+    }
+
+    // MARK: - Point Filtering
+
+    /// Check if a point is within room bounds (between floor and ceiling)
+    func isPointWithinRoomBounds(_ point: SIMD3<Float>) -> Bool {
+        guard let floorY = calibratedFloorHeight ?? statistics.floorHeight,
+              let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight else {
+            return true  // No bounds established, accept all points
+        }
+
+        // Point must be between floor and ceiling (with small tolerance for surface thickness)
+        let tolerance: Float = 0.05  // 5cm tolerance
+        return point.y >= floorY - tolerance && point.y <= ceilingY + tolerance
+    }
+
+    /// Filter vertices to only include points within room bounds
+    func filterVerticesWithinBounds(_ vertices: [SIMD3<Float>]) -> [SIMD3<Float>] {
+        return vertices.filter { isPointWithinRoomBounds($0) }
     }
 
     // MARK: - Optimization Hints
@@ -2070,20 +2350,17 @@ class SurfaceClassifier: ObservableObject {
     }
 
     /// Check if a point belongs to the main floor plane
-    /// Handles sloped floors - checks if point is near the lowest detected floor level
+    /// Uses density-based 1mm tolerance - only true floor plane points qualify
     func isPartOfFloorPlane(point: SIMD3<Float>, normal: SIMD3<Float>) -> Bool {
         // Normal must point mostly up (allows slopes up to ~45°)
         guard normal.y > 0.5 else { return false }
 
         // Check against calibrated/detected floor height
         if let floorY = calibratedFloorHeight ?? statistics.floorHeight {
-            // For sloped floors: allow points above floorY (sloping up)
-            // but not too far above (that would be a table)
-            let heightAboveFloor = point.y - floorY
-
-            // Floor can slope up to 0.5m above the lowest point
-            // (covers most ramps, drainage slopes, uneven floors)
-            return heightAboveFloor >= -0.1 && heightAboveFloor < 0.5
+            // Use same 1mm tolerance as density detection
+            // True floor has highest density within 1mm bin
+            let heightAboveFloor = abs(point.y - floorY)
+            return heightAboveFloor < heightBinSize  // 1mm tolerance
         }
 
         return false
@@ -2235,14 +2512,15 @@ class SurfaceClassifier: ObservableObject {
     }
 
     /// Check if a point belongs to the main ceiling plane
+    /// Uses density-based 1mm tolerance - only true ceiling plane points qualify
     func isPartOfCeilingPlane(point: SIMD3<Float>, normal: SIMD3<Float>) -> Bool {
         // Normal must point mostly down
         guard normal.y < -0.5 else { return false }
 
         if let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight {
-            let heightBelowCeiling = ceilingY - point.y
-            // Ceiling can slope down up to 0.5m below highest point
-            return heightBelowCeiling >= -0.1 && heightBelowCeiling < 0.5
+            // Use same 1mm tolerance as density detection
+            let heightFromCeiling = abs(ceilingY - point.y)
+            return heightFromCeiling < heightBinSize  // 1mm tolerance
         }
 
         return false
@@ -2380,7 +2658,8 @@ class SurfaceClassifier: ObservableObject {
 
     /// Classify a vertical surface as wall or object based on distance
     /// Returns true if it's at wall distance (farthest), false if it's an object (closer)
-    func isWallDistance(surfacePosition: SIMD3<Float>, cameraPosition: SIMD3<Float>?) -> Bool {
+    /// Returns nil if we don't have enough data to determine
+    func isWallDistance(surfacePosition: SIMD3<Float>, cameraPosition: SIMD3<Float>?) -> Bool? {
         let origin = cameraPosition ?? wallMeasurementOrigin ?? SIMD3<Float>(0, 0, 0)
 
         let dx = surfacePosition.x - origin.x
@@ -2397,14 +2676,14 @@ class SurfaceClassifier: ObservableObject {
                 if horizontalDistance >= wallDistance - wallDistanceTolerance {
                     return true
                 }
+                // Surface is closer than wall distance = object
+                return false
             }
         }
 
-        // If we have no wall distance data for this angle, assume wall if far enough
+        // If we have no wall distance data, return nil (unknown)
         if wallDistanceByAngle.isEmpty {
-            // No wall distances recorded yet - use height-based heuristic
-            // If it's between floor and ceiling, and vertical, likely a wall
-            return true
+            return nil  // Can't determine without wall data
         }
 
         // Check if there's any wall distance data at all for this direction
@@ -2412,17 +2691,16 @@ class SurfaceClassifier: ObservableObject {
         let hasDataNearby = nearbyBuckets.contains { wallDistanceByAngle[$0] != nil }
 
         if !hasDataNearby {
-            // No data for this direction - can't determine, default to wall
-            return true
+            return nil  // No data for this direction
         }
 
-        // We have data but this surface is closer than the farthest = object
+        // We have data for nearby angles but this surface is closer = object
         return false
     }
 
-    /// Classify a vertical surface as wall or object
-    /// Uses the farthest distance principle: walls are farthest, objects are closer
-    /// Also checks wall constraint: walls span from floor to ceiling
+    /// Classify a vertical surface as wall or object (single point, no height range)
+    /// Without height range info, we can only check if point is within room bounds
+    /// This is a fallback - prefer classifyVerticalSurfaceWithBounds when possible
     func classifyVerticalSurface(
         position: SIMD3<Float>,
         normal: SIMD3<Float>,
@@ -2433,87 +2711,40 @@ class SurfaceClassifier: ObservableObject {
             return .unknown
         }
 
-        // Check if this is between floor and ceiling (if calibrated)
-        if let floorY = calibratedFloorHeight ?? statistics.floorHeight,
-           let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight {
-            // If above ceiling or below floor, it's likely not a room surface
-            if position.y > ceilingY + 0.1 || position.y < floorY - 0.1 {
-                return .object
-            }
-        }
-
-        // Apply the wall distance rule
-        if isWallDistance(surfacePosition: position, cameraPosition: cameraPosition) {
-            return .wall
-        } else {
-            return .object
-        }
+        // Without height range, we can't verify floor-ceiling intersection
+        // Default to object - let the mesh-level classification decide
+        return .object
     }
 
     /// Classify a vertical surface with height range (for mesh-level classification)
     ///
-    /// Key insight: A wall PLANE spans floor-to-ceiling, but we may only SEE part of it
-    /// due to furniture blocking the view. So we use DISTANCE as the primary rule:
-    /// - Farthest vertical surface at any angle = WALL (even if partially occluded)
-    /// - Closer vertical surface = OBJECT (furniture blocking the wall)
+    /// PRIMARY RULE: Use surface normal direction
+    /// - Vertical surface (normal pointing horizontally) = Wall
+    /// - Normal direction is detected by LiDAR, so we trust it
     ///
-    /// The floor-ceiling constraint is used to VALIDATE wall planes, not to require
-    /// that we see the full wall height.
+    /// SECONDARY (optional): Height-based refinement when floor/ceiling are known
     func classifyVerticalSurfaceWithBounds(
         position: SIMD3<Float>,
         normal: SIMD3<Float>,
         heightRange: (min: Float, max: Float),
         cameraPosition: SIMD3<Float>?
     ) -> SurfaceType {
-        // Must be a vertical surface
-        guard abs(normal.y) < 0.5 else {
-            return .unknown
+        // PRIMARY: Check if this is a vertical surface by normal direction
+        // Wall has mostly horizontal normal (pointing outward from wall)
+        let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
+
+        // If normal is mostly horizontal (vertical surface), it's a wall
+        if horizontalMag > 0.7 && abs(normal.y) < 0.5 {
+            return .wall
         }
 
-        guard let floorY = calibratedFloorHeight ?? statistics.floorHeight,
-              let ceilingY = calibratedCeilingHeight ?? statistics.ceilingHeight else {
-            // Without floor/ceiling calibration, fall back to distance-only rule
-            return classifyVerticalSurface(position: position, normal: normal, cameraPosition: cameraPosition)
+        // If normal is somewhat horizontal but not strongly, still likely a wall
+        if horizontalMag > 0.5 && abs(normal.y) < 0.7 {
+            return .wall
         }
 
-        // PRIMARY RULE: Distance determines wall vs object
-        // Farthest surface = wall, closer surface = object (furniture blocking wall)
-        let isAtWallDistance = isWallDistance(surfacePosition: position, cameraPosition: cameraPosition)
-
-        if isAtWallDistance {
-            // This is the farthest surface at this angle = WALL
-            // Even if we only see part of it (furniture blocking rest), it's still wall
-            // The wall PLANE extends from floor to ceiling (geometric inference)
-
-            // Validate: surface should be within room bounds (between floor and ceiling)
-            let withinRoomBounds = heightRange.min < ceilingY && heightRange.max > floorY
-
-            if withinRoomBounds {
-                return .wall
-            } else {
-                // Surface is outside room bounds - unusual, but could be valid
-                return .wall
-            }
-        } else {
-            // This is CLOSER than the farthest surface = OBJECT
-            // It's furniture/object blocking our view of the wall behind it
-
-            // Additional check: if it spans floor-to-ceiling AND is close to wall distance,
-            // it might be a built-in (closet, built-in bookshelf) that IS the wall
-            let roomHeight = ceilingY - floorY
-            let surfaceHeight = heightRange.max - heightRange.min
-            let spansFullHeight = surfaceHeight >= roomHeight * 0.85
-
-            // Check how close to wall distance (within 30cm = might be built-in)
-            // This handles cases like built-in wardrobes that ARE the wall surface
-            if spansFullHeight {
-                // Spans floor to ceiling - could be a built-in that IS the wall
-                // In this case, treat it as wall (it's the room boundary)
-                return .wall
-            }
-
-            return .object
-        }
+        // Not a vertical surface
+        return .object
     }
 
     /// Check if a vertical surface intersects the floor plane

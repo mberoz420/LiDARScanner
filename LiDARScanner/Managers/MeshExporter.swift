@@ -286,6 +286,7 @@ class MeshExporter: ObservableObject {
 
     /// Combine all mesh anchors into single mesh with world-space transforms applied
     /// Also filters out faces that are beyond glass/window planes
+    /// And filters out objectTop and backReflection surfaces
     private func combineMeshes(_ scan: CapturedScan) -> CapturedMeshData {
         var allVertices: [SIMD3<Float>] = []
         var allNormals: [SIMD3<Float>] = []
@@ -295,8 +296,16 @@ class MeshExporter: ObservableObject {
 
         let windowPlanes = scan.windowPlanes
         var filteredFaceCount = 0
+        var skippedMeshCount = 0
 
         for mesh in scan.meshes {
+            // Skip meshes classified as objectTop or backReflection
+            if let surfaceType = mesh.surfaceType {
+                if surfaceType == .objectTop || surfaceType == .backReflection {
+                    skippedMeshCount += 1
+                    continue
+                }
+            }
             // Transform vertices to world space
             var meshWorldVertices: [SIMD3<Float>] = []
             for vertex in mesh.vertices {
