@@ -836,47 +836,50 @@ class SurfaceClassifier: ObservableObject {
         }
 
         // PRIORITY 3: Geometric heuristics (fallback or when both toggles off)
-        // Classify by normal direction + height to distinguish floor/ceiling from cabinet tops/bottoms
+        // Capture ALL surfaces by normal direction, classify floor/ceiling by density at lowest/highest Y
         let normalY = averageNormal.y
         let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
 
-        // Collect height samples for floor/ceiling detection
+        // Collect ALL height samples for density-based floor/ceiling detection
         if normalY > 0.5 {
             updateFloorHeight(worldY)
         } else if normalY < -0.5 {
             updateCeilingHeight(worldY)
         }
 
-        // Floor detection: normal pointing UP
+        // Floor detection: normal pointing UP - capture ALL, classify by density
         if normalY > 0.7 {
-            // Use percentile-based floor height (10th percentile = lowest significant cluster)
+            // Floor = lowest Y level with high point density
+            // ObjectTop = elevated horizontal surfaces (cabinet tops, etc.)
             if let floorHeight = statistics.floorHeight {
-                // Generous tolerance: within 15cm of floor OR below it
-                // This captures actual floor even if height estimate is slightly off
-                if worldY <= floorHeight + 0.15 {
+                // Floor is at the lowest dense cluster - anything at that level is floor
+                // Use 20cm tolerance to handle slight variations in floor detection
+                if worldY <= floorHeight + 0.20 {
                     return .floor
                 } else {
                     return .objectTop  // Cabinet top, appliance top, etc.
                 }
             }
-            return .floor  // No floor height yet, assume floor
+            return .floor  // No floor height yet, capture as floor
         }
 
-        // Ceiling detection: normal pointing DOWN
+        // Ceiling detection: normal pointing DOWN - capture ALL, classify by density
         if normalY < -0.7 {
-            // Use percentile-based ceiling height (90th percentile = highest significant cluster)
+            // Ceiling = highest Y level with high point density
+            // ObjectTop = lower horizontal surfaces (cabinet bottoms, etc.)
             if let ceilingHeight = statistics.ceilingHeight {
-                // Generous tolerance: within 15cm of ceiling OR above it
-                if worldY >= ceilingHeight - 0.15 {
+                // Ceiling is at the highest dense cluster - anything at that level is ceiling
+                // Use 20cm tolerance to handle slight variations in ceiling detection
+                if worldY >= ceilingHeight - 0.20 {
                     return .ceiling
                 } else {
                     return .objectTop  // Cabinet bottom, light fixture, etc.
                 }
             }
-            return .ceiling  // No ceiling height yet, assume ceiling
+            return .ceiling  // No ceiling height yet, capture as ceiling
         }
 
-        // Wall: normal pointing horizontally
+        // Wall: normal pointing horizontally - no height restrictions
         if horizontalMag > 0.7 && abs(normalY) < 0.5 {
             return .wall
         }
@@ -885,13 +888,13 @@ class SurfaceClassifier: ObservableObject {
         if normalY > 0.5 {
             // Mostly upward - check if floor or object top
             if let floorHeight = statistics.floorHeight {
-                return worldY <= floorHeight + 0.15 ? .floor : .objectTop
+                return worldY <= floorHeight + 0.20 ? .floor : .objectTop
             }
             return .floor
         } else if normalY < -0.5 {
             // Mostly downward - check if ceiling or object bottom
             if let ceilingHeight = statistics.ceilingHeight {
-                return worldY >= ceilingHeight - 0.15 ? .ceiling : .objectTop
+                return worldY >= ceilingHeight - 0.20 ? .ceiling : .objectTop
             }
             return .ceiling
         } else if horizontalMag > 0.5 {
@@ -1424,29 +1427,73 @@ class SurfaceClassifier: ObservableObject {
         }
     }
 
-    /// Find floor/ceiling height using percentile-based approach
-    /// For floor: use 10th percentile (lowest significant cluster, ignores outliers below)
-    /// For ceiling: use 90th percentile (highest significant cluster, ignores outliers above)
-    /// This is more robust than density-based peak finding
+    /// Find floor/ceiling height using density at lowest/highest Y
+    /// For floor: find the LOWEST Y level that has significant point density
+    /// For ceiling: find the HIGHEST Y level that has significant point density
+    /// This ensures we capture the actual floor/ceiling, not cabinet tops/bottoms
     private func findTightestCluster(samples: [Float], findLowest: Bool) -> Float {
         guard samples.count >= 10 else { return samples.first ?? 0 }
 
         let sorted = samples.sorted()
+        let minY = sorted.first!
+        let maxY = sorted.last!
+        let range = maxY - minY
 
-        // Use percentile-based approach:
-        // - Floor: 10th percentile captures the lowest cluster while ignoring outliers
-        // - Ceiling: 90th percentile captures the highest cluster while ignoring outliers
-        let percentileIndex: Int
-        if findLowest {
-            // 10th percentile for floor - the actual floor should be at/near the bottom
-            percentileIndex = samples.count / 10
-        } else {
-            // 90th percentile for ceiling - the actual ceiling should be at/near the top
-            percentileIndex = (samples.count * 9) / 10
+        // If all samples are within 5cm, they're effectively the same surface
+        guard range > 0.05 else {
+            return sorted[sorted.count / 2]  // Return median
         }
 
-        let result = sorted[min(percentileIndex, sorted.count - 1)]
-        debugLog("[HEIGHT] \(findLowest ? "FLOOR" : "CEILING"): samples=\(samples.count), percentile=\(findLowest ? 10 : 90)%, result=\(result)")
+        // Create 5cm bins for density analysis
+        let binSize: Float = 0.05  // 5cm bins
+        let binCount = max(1, Int(range / binSize) + 1)
+        var histogram = [Int](repeating: 0, count: binCount)
+
+        // Fill histogram
+        for y in samples {
+            let binIndex = min(binCount - 1, Int((y - minY) / binSize))
+            histogram[binIndex] += 1
+        }
+
+        // Find threshold for "significant" density (at least 10% of max density)
+        let maxDensity = histogram.max() ?? 1
+        let densityThreshold = max(3, maxDensity / 10)
+
+        // For floor: find LOWEST bin with significant density
+        // For ceiling: find HIGHEST bin with significant density
+        var selectedBin = 0
+        if findLowest {
+            // Start from lowest and find first bin with significant density
+            for i in 0..<binCount {
+                if histogram[i] >= densityThreshold {
+                    selectedBin = i
+                    break
+                }
+            }
+        } else {
+            // Start from highest and find first bin with significant density
+            for i in stride(from: binCount - 1, through: 0, by: -1) {
+                if histogram[i] >= densityThreshold {
+                    selectedBin = i
+                    break
+                }
+            }
+        }
+
+        // Calculate precise Y by averaging all points within this bin and adjacent bins
+        let binY = minY + Float(selectedBin) * binSize
+        var sum: Float = 0
+        var count = 0
+
+        for y in samples {
+            if abs(y - binY) < binSize * 1.5 {  // Within 1.5 bins
+                sum += y
+                count += 1
+            }
+        }
+
+        let result = count > 0 ? sum / Float(count) : binY
+        debugLog("[HEIGHT] \(findLowest ? "FLOOR" : "CEILING"): samples=\(samples.count), bins=\(binCount), selectedBin=\(selectedBin), density=\(histogram[selectedBin]), result=\(result)")
         return result
     }
 
