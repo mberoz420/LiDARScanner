@@ -543,6 +543,7 @@ struct SessionDetailView: View {
         var allPoints: [(vertex: SIMD3<Float>, normal: SIMD3<Float>, color: (r: Float, g: Float, b: Float)?)] = []
         var floorYSamples: [Float] = []
         var ceilingYSamples: [Float] = []
+        var sumX: Float = 0, sumZ: Float = 0
 
         for mesh in scan.meshes {
             let transform = mesh.transform
@@ -564,6 +565,8 @@ struct SessionDetailView: View {
                     (mesh.colors[i].r, mesh.colors[i].g, mesh.colors[i].b) : nil
 
                 allPoints.append((vertex, normal, color))
+                sumX += vertex.x
+                sumZ += vertex.z
 
                 // Collect Y samples for floor/ceiling detection
                 if normal.y > 0.5 {
@@ -574,16 +577,33 @@ struct SessionDetailView: View {
             }
         }
 
+        // Room center for wall distance calculation
+        let roomCenterX = sumX / Float(allPoints.count)
+        let roomCenterZ = sumZ / Float(allPoints.count)
+
+        // Find farthest distance per angle bucket (16 buckets = 22.5° each)
+        var wallDistances: [Int: Float] = [:]
+        for (vertex, normal, _) in allPoints {
+            let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
+            if horizontalMag > 0.5 {
+                let angle = atan2(vertex.z - roomCenterZ, vertex.x - roomCenterX)
+                let bucket = Int((angle + .pi) / (2 * .pi) * 16) % 16
+                let distance = sqrt(pow(vertex.x - roomCenterX, 2) + pow(vertex.z - roomCenterZ, 2))
+                if wallDistances[bucket] == nil || distance > wallDistances[bucket]! {
+                    wallDistances[bucket] = distance
+                }
+            }
+        }
+
         // Find floor height: minimum Y among upward-facing surfaces
-        // This is the actual floor level (lowest point with upward normal)
         let floorHeight: Float = floorYSamples.isEmpty ? -999 : floorYSamples.min()!
 
         // Find ceiling height: maximum Y among downward-facing surfaces
-        // This is the actual ceiling level (highest point with downward normal)
         let ceilingHeight: Float = ceilingYSamples.isEmpty ? 999 : ceilingYSamples.max()!
 
         let floorTolerance: Float = 0.15  // 15cm
         let ceilingTolerance: Float = 0.15
+        let wallTolerance: Float = 0.30   // 30cm from farthest = room wall
 
         // Phase 2: Classify each point and build JSON
         var pointsArray: [[String: Any]] = []
@@ -604,7 +624,7 @@ struct SessionDetailView: View {
                 point["b"] = c.b
             }
 
-            // Classify based on normal direction and Y position
+            // Classify based on normal direction and position
             let label: String
             let ny = normal.y
             let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
@@ -616,8 +636,15 @@ struct SessionDetailView: View {
                 // Downward-facing: Ceiling if at highest level, otherwise Object Top
                 label = (vertex.y >= ceilingHeight - ceilingTolerance) ? "Ceiling" : "Object Top"
             } else if horizontalMag > 0.5 {
-                // Horizontal normal: Wall or Object
-                label = "Wall"
+                // Horizontal normal: Wall if at farthest distance, otherwise Object
+                let angle = atan2(vertex.z - roomCenterZ, vertex.x - roomCenterX)
+                let bucket = Int((angle + .pi) / (2 * .pi) * 16) % 16
+                let distance = sqrt(pow(vertex.x - roomCenterX, 2) + pow(vertex.z - roomCenterZ, 2))
+                if let maxDist = wallDistances[bucket], distance >= maxDist - wallTolerance {
+                    label = "Wall"
+                } else {
+                    label = "Object"
+                }
             } else {
                 // Mixed/angled
                 label = "Object"
