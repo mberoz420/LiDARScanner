@@ -2200,8 +2200,12 @@ class SurfaceClassifier: ObservableObject {
             return mlResult
         }
 
-        // Fall back to geometric heuristics
-        return classifySurface(averageNormal: averageNormal, worldY: worldPosition.y)
+        // Fall back to geometric heuristics with full position (for distance-based classification)
+        return classifySurfaceWithPosition(
+            averageNormal: averageNormal,
+            worldPosition: worldPosition,
+            cameraPosition: cameraPositions.last
+        )
     }
 
     private func transformNormal(_ normal: SIMD3<Float>, by transform: simd_float4x4) -> SIMD3<Float> {
@@ -2764,34 +2768,41 @@ class SurfaceClassifier: ObservableObject {
     }
 
     /// Classify a vertical surface with height range (for mesh-level classification)
-    ///
-    /// PRIMARY RULE: Use surface normal direction
-    /// - Vertical surface (normal pointing horizontally) = Wall
-    /// - Normal direction is detected by LiDAR, so we trust it
-    ///
-    /// SECONDARY (optional): Height-based refinement when floor/ceiling are known
+    /// Uses distance-based classification: farthest horizontal points = walls
     func classifyVerticalSurfaceWithBounds(
         position: SIMD3<Float>,
         normal: SIMD3<Float>,
         heightRange: (min: Float, max: Float),
         cameraPosition: SIMD3<Float>?
     ) -> SurfaceType {
-        // PRIMARY: Check if this is a vertical surface by normal direction
-        // Wall has mostly horizontal normal (pointing outward from wall)
+        // Check if this is a vertical surface by normal direction
         let horizontalMag = sqrt(normal.x * normal.x + normal.z * normal.z)
 
-        // If normal is mostly horizontal (vertical surface), it's a wall
-        if horizontalMag > 0.7 && abs(normal.y) < 0.5 {
-            return .wall
+        // Must have mostly horizontal normal to be considered a wall
+        guard horizontalMag > 0.5 && abs(normal.y) < 0.7 else {
+            return .object
         }
 
-        // If normal is somewhat horizontal but not strongly, still likely a wall
-        if horizontalMag > 0.5 && abs(normal.y) < 0.7 {
-            return .wall
+        // Calculate distance from camera for distance-based classification
+        let camPos = cameraPosition ?? cameraPositions.last ?? SIMD3<Float>(0, 0, 0)
+        let distanceFromCamera = simd_length(position - camPos)
+
+        // Track max wall distance
+        if distanceFromCamera > maxWallDistance {
+            maxWallDistance = distanceFromCamera
         }
 
-        // Not a vertical surface
-        return .object
+        // Farthest horizontal points = walls, closer = furniture/objects
+        if maxWallDistance > 0 {
+            if distanceFromCamera >= maxWallDistance - distanceTolerance {
+                return .wall
+            } else {
+                return .object  // Furniture against walls
+            }
+        }
+
+        // No max distance yet, assume wall
+        return .wall
     }
 
     /// Check if a vertical surface intersects the floor plane
