@@ -836,62 +836,44 @@ class SurfaceClassifier: ObservableObject {
         }
 
         // PRIORITY 3: Geometric heuristics (fallback or when both toggles off)
+        // SIMPLE APPROACH: Classify by normal direction only, like walls
+        // This avoids complex height-based logic that causes back reflection issues
         let normalY = averageNormal.y
+        let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
 
-        if normalY > horizontalSurfaceThreshold {
-            // Surface facing up - could be floor OR top of an object
-            // ALWAYS collect sample for density analysis (floor = lowest dense cluster)
-            updateFloorHeight(worldY)
-
-            // Floor is a precise plane - must be within mm tolerance of LOWEST dense cluster
-            if let floorHeight = statistics.floorHeight {
-                let heightAboveFloor = abs(worldY - floorHeight)
-                if heightAboveFloor < heightBinSize {  // Within 1mm bin (highest density range) = floor
-                    debugLog("[FLOOR-CLASS] HEURISTICS: Y=\(worldY), floorY=\(floorHeight), diff=\(heightAboveFloor) -> FLOOR")
-                    return .floor
-                } else {
-                    // Above floor plane = top of an object (table, counter, cabinet)
-                    debugLog("[FLOOR-CLASS] HEURISTICS: Y=\(worldY), floorY=\(floorHeight), diff=\(heightAboveFloor) -> OBJECT_TOP")
-                    return .objectTop
-                }
-            } else {
-                // Not enough samples yet to determine floor via density
-                debugLog("[FLOOR-CLASS] NO FLOOR YET: collecting Y=\(worldY), samples=\(floorHeightSamples.count)")
-                return .unknown  // Will be reclassified once floor height is established
-            }
-        } else if normalY < -horizontalSurfaceThreshold {
-            // Surface facing down - could be ceiling, cove, or protrusion
-            // Always collect sample for density analysis (ceiling = highest dense cluster)
-            updateCeilingHeight(worldY)
-            return classifyCeilingSurface(worldY: worldY, normal: averageNormal)
-        } else {
-            // Vertical surface - apply wall distance rule
-            // Farthest = wall, closer = object
-
-            // First check ceiling/floor transitions - use 1mm density-based tolerance
-            if let ceilingHeight = statistics.ceilingHeight {
-                let nearCeiling = abs(worldY - ceilingHeight) < heightBinSize
-                if nearCeiling && normalY < -0.2 {
-                    return .ceiling
-                }
-            }
-
-            if let floorHeight = statistics.floorHeight {
-                let nearFloor = abs(worldY - floorHeight) < heightBinSize
-                if nearFloor && normalY > 0.2 {
-                    return .floor
-                }
-            }
-
-            // Vertical surface - classify as wall based on normal direction
-            // Normal pointing mostly horizontal = wall
-            let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
-            if horizontalMag > 0.5 && abs(normalY) < 0.5 {
-                return .wall
-            } else {
-                return .object
-            }
+        // Floor: normal pointing UP (like wall uses horizontal normal)
+        if normalY > 0.7 {
+            // Strong upward normal = floor (same logic as wall: horizontalMag > 0.7)
+            debugLog("[FLOOR-CLASS] SIMPLE: normalY=\(normalY) > 0.7 -> FLOOR")
+            return .floor
         }
+
+        // Ceiling: normal pointing DOWN
+        if normalY < -0.7 {
+            // Strong downward normal = ceiling
+            debugLog("[CEILING-CLASS] SIMPLE: normalY=\(normalY) < -0.7 -> CEILING")
+            return .ceiling
+        }
+
+        // Wall: normal pointing horizontally (same as existing wall logic)
+        if horizontalMag > 0.7 && abs(normalY) < 0.5 {
+            return .wall
+        }
+
+        // Tilted surfaces - classify based on dominant direction
+        if normalY > 0.5 {
+            // Mostly upward = floor
+            return .floor
+        } else if normalY < -0.5 {
+            // Mostly downward = ceiling
+            return .ceiling
+        } else if horizontalMag > 0.5 {
+            // Mostly horizontal = wall
+            return .wall
+        }
+
+        // Anything else is an object
+        return .object
     }
 
     /// Classify downward-facing surface as ceiling, cove, protrusion, or object bottom
