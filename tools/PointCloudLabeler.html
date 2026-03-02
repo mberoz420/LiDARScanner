@@ -205,6 +205,73 @@
             content: ' ▼';
             font-size: 10px;
         }
+
+        /* Build Status Styles */
+        .build-status {
+            background: #0f3460;
+            padding: 12px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-size: 12px;
+        }
+        .build-status.success {
+            border-left: 4px solid #2ecc71;
+        }
+        .build-status.failed {
+            border-left: 4px solid #e74c3c;
+        }
+        .build-status.loading {
+            border-left: 4px solid #f1c40f;
+        }
+        .build-status-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .build-status-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 11px;
+        }
+        .build-status-badge.success {
+            background: #2ecc71;
+            color: #000;
+        }
+        .build-status-badge.failed {
+            background: #e74c3c;
+            color: #fff;
+        }
+        .build-errors {
+            background: #1a1a2e;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .build-error-line {
+            color: #e74c3c;
+            padding: 2px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+        .build-error-line:last-child {
+            border-bottom: none;
+        }
+        .build-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            color: #888;
+        }
+        .build-info-row span:last-child {
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -366,6 +433,16 @@
                 <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
                 <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
             </div>
+
+            <h2>Build Status</h2>
+            <div id="build-status-container">
+                <div class="build-status loading">
+                    <div class="build-status-header">
+                        <span>Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-action" onclick="refreshBuildStatus()">Refresh Status</button>
 
             <h2>Export</h2>
             <button class="btn btn-file" onclick="exportLabeled()">Export Labeled JSON</button>
@@ -1249,8 +1326,96 @@
             }
         });
 
+        // Build Status Functions
+        const BUILD_STATUS_URL = 'https://raw.githubusercontent.com/mberoz420/LiDARScanner/master/build_status.json';
+
+        async function refreshBuildStatus() {
+            const container = document.getElementById('build-status-container');
+            container.innerHTML = `
+                <div class="build-status loading">
+                    <div class="build-status-header">
+                        <span>Loading...</span>
+                    </div>
+                </div>
+            `;
+
+            try {
+                // Add cache-busting parameter
+                const response = await fetch(BUILD_STATUS_URL + '?t=' + Date.now());
+                if (!response.ok) {
+                    throw new Error('Build status not found');
+                }
+                const data = await response.json();
+                displayBuildStatus(data);
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="build-status loading">
+                        <div class="build-status-header">
+                            <span>No build status available</span>
+                        </div>
+                        <div class="build-info-row">
+                            <span>Error:</span>
+                            <span>${err.message}</span>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function displayBuildStatus(data) {
+            const container = document.getElementById('build-status-container');
+            const isSuccess = data.status === 'success';
+            const statusClass = isSuccess ? 'success' : 'failed';
+            const timestamp = data.timestamp ? new Date(data.timestamp).toLocaleString() : 'Unknown';
+            const commitShort = data.commit ? data.commit.substring(0, 7) : 'Unknown';
+
+            let errorsHtml = '';
+            if (data.errors && data.errors.length > 0) {
+                errorsHtml = `
+                    <div class="build-errors">
+                        ${data.errors.map(err => `<div class="build-error-line">${escapeHtml(err)}</div>`).join('')}
+                    </div>
+                `;
+            }
+
+            container.innerHTML = `
+                <div class="build-status ${statusClass}">
+                    <div class="build-status-header">
+                        <span><strong>Build #${data.build_number || '?'}</strong></span>
+                        <span class="build-status-badge ${statusClass}">${data.status.toUpperCase()}</span>
+                    </div>
+                    <div class="build-info-row">
+                        <span>Version:</span>
+                        <span>${data.version || 'Unknown'}</span>
+                    </div>
+                    <div class="build-info-row">
+                        <span>Commit:</span>
+                        <span>${commitShort}</span>
+                    </div>
+                    <div class="build-info-row">
+                        <span>Message:</span>
+                        <span>${escapeHtml(data.commit_message || 'No message')}</span>
+                    </div>
+                    <div class="build-info-row">
+                        <span>Time:</span>
+                        <span>${timestamp}</span>
+                    </div>
+                    ${errorsHtml}
+                </div>
+            `;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // Initialize
         init();
+
+        // Load build status on page load
+        refreshBuildStatus();
     </script>
 </body>
 </html>
