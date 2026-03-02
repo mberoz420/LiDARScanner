@@ -286,7 +286,7 @@ class MeshExporter: ObservableObject {
 
     /// Combine all mesh anchors into single mesh with world-space transforms applied
     /// Also filters out faces that are beyond glass/window planes
-    /// And filters out objectTop and backReflection surfaces
+    /// And filters out objectTop and backReflection surfaces (both mesh-level and face-level)
     private func combineMeshes(_ scan: CapturedScan) -> CapturedMeshData {
         var allVertices: [SIMD3<Float>] = []
         var allNormals: [SIMD3<Float>] = []
@@ -297,15 +297,17 @@ class MeshExporter: ObservableObject {
         let windowPlanes = scan.windowPlanes
         var filteredFaceCount = 0
         var skippedMeshCount = 0
+        var filteredByClassificationCount = 0
 
         for mesh in scan.meshes {
-            // Skip meshes classified as objectTop or backReflection
+            // Skip entire meshes classified as objectTop or backReflection at mesh level
             if let surfaceType = mesh.surfaceType {
                 if surfaceType == .objectTop || surfaceType == .backReflection {
                     skippedMeshCount += 1
                     continue
                 }
             }
+
             // Transform vertices to world space
             var meshWorldVertices: [SIMD3<Float>] = []
             for vertex in mesh.vertices {
@@ -328,8 +330,11 @@ class MeshExporter: ObservableObject {
             // Copy colors
             allColors.append(contentsOf: mesh.colors)
 
-            // Offset face indices, filtering out faces beyond glass
-            for face in mesh.faces {
+            // Get per-face classifications if available
+            let faceClassifications = mesh.faceClassifications
+
+            // Offset face indices, filtering out faces beyond glass AND faces classified as objectTop/backReflection
+            for (faceIndex, face) in mesh.faces.enumerated() {
                 let idx0 = Int(face[0])
                 let idx1 = Int(face[1])
                 let idx2 = Int(face[2])
@@ -338,6 +343,15 @@ class MeshExporter: ObservableObject {
                 guard idx0 < meshWorldVertices.count,
                       idx1 < meshWorldVertices.count,
                       idx2 < meshWorldVertices.count else { continue }
+
+                // Check per-face classification - skip objectTop and backReflection faces
+                if let classifications = faceClassifications, faceIndex < classifications.count {
+                    let faceType = classifications[faceIndex]
+                    if faceType == .objectTop || faceType == .backReflection {
+                        filteredByClassificationCount += 1
+                        continue  // Skip this face
+                    }
+                }
 
                 let v0 = meshWorldVertices[idx0]
                 let v1 = meshWorldVertices[idx1]
@@ -369,6 +383,12 @@ class MeshExporter: ObservableObject {
 
         if filteredFaceCount > 0 {
             print("[MeshExporter] Filtered \(filteredFaceCount) faces beyond glass/windows")
+        }
+        if filteredByClassificationCount > 0 {
+            print("[MeshExporter] Filtered \(filteredByClassificationCount) faces classified as objectTop/backReflection")
+        }
+        if skippedMeshCount > 0 {
+            print("[MeshExporter] Skipped \(skippedMeshCount) entire meshes classified as objectTop/backReflection")
         }
 
         return CapturedMeshData(
