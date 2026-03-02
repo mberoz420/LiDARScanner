@@ -836,28 +836,44 @@ class SurfaceClassifier: ObservableObject {
         }
 
         // PRIORITY 3: Geometric heuristics (fallback or when both toggles off)
-        // Classify by normal direction ONLY - same approach as walls
-        // This matches user feedback: "walls work perfectly, why not use same for floor/ceiling"
+        // Classify by normal direction + height to distinguish floor/ceiling from cabinet tops/bottoms
         let normalY = averageNormal.y
         let horizontalMag = sqrt(averageNormal.x * averageNormal.x + averageNormal.z * averageNormal.z)
 
-        // Still collect height samples for statistics (useful for room bounds)
+        // Collect height samples for floor/ceiling detection
         if normalY > 0.5 {
             updateFloorHeight(worldY)
         } else if normalY < -0.5 {
             updateCeilingHeight(worldY)
         }
 
-        // Floor detection: normal pointing UP (matches wall logic pattern)
-        // Pure normal-based classification - no height checks
+        // Floor detection: normal pointing UP
         if normalY > 0.7 {
-            return .floor
+            // Use percentile-based floor height (10th percentile = lowest significant cluster)
+            if let floorHeight = statistics.floorHeight {
+                // Generous tolerance: within 15cm of floor OR below it
+                // This captures actual floor even if height estimate is slightly off
+                if worldY <= floorHeight + 0.15 {
+                    return .floor
+                } else {
+                    return .objectTop  // Cabinet top, appliance top, etc.
+                }
+            }
+            return .floor  // No floor height yet, assume floor
         }
 
-        // Ceiling detection: normal pointing DOWN (matches wall logic pattern)
-        // Pure normal-based classification - no height checks
+        // Ceiling detection: normal pointing DOWN
         if normalY < -0.7 {
-            return .ceiling
+            // Use percentile-based ceiling height (90th percentile = highest significant cluster)
+            if let ceilingHeight = statistics.ceilingHeight {
+                // Generous tolerance: within 15cm of ceiling OR above it
+                if worldY >= ceilingHeight - 0.15 {
+                    return .ceiling
+                } else {
+                    return .objectTop  // Cabinet bottom, light fixture, etc.
+                }
+            }
+            return .ceiling  // No ceiling height yet, assume ceiling
         }
 
         // Wall: normal pointing horizontally
@@ -867,9 +883,17 @@ class SurfaceClassifier: ObservableObject {
 
         // Tilted surfaces - classify based on dominant direction
         if normalY > 0.5 {
-            return .floor  // Mostly upward = floor
+            // Mostly upward - check if floor or object top
+            if let floorHeight = statistics.floorHeight {
+                return worldY <= floorHeight + 0.15 ? .floor : .objectTop
+            }
+            return .floor
         } else if normalY < -0.5 {
-            return .ceiling  // Mostly downward = ceiling
+            // Mostly downward - check if ceiling or object bottom
+            if let ceilingHeight = statistics.ceilingHeight {
+                return worldY >= ceilingHeight - 0.15 ? .ceiling : .objectTop
+            }
+            return .ceiling
         } else if horizontalMag > 0.5 {
             return .wall  // Mostly horizontal = wall
         }
@@ -1400,90 +1424,29 @@ class SurfaceClassifier: ObservableObject {
         }
     }
 
-    /// Find the Y height with the tightest cluster of points
-    /// For floor: find the LOWEST Y level with significant point density
-    /// For ceiling: find the HIGHEST Y level with significant point density
-    /// A real floor/ceiling plane has many points within sub-mm range
+    /// Find floor/ceiling height using percentile-based approach
+    /// For floor: use 10th percentile (lowest significant cluster, ignores outliers below)
+    /// For ceiling: use 90th percentile (highest significant cluster, ignores outliers above)
+    /// This is more robust than density-based peak finding
     private func findTightestCluster(samples: [Float], findLowest: Bool) -> Float {
         guard samples.count >= 10 else { return samples.first ?? 0 }
 
         let sorted = samples.sorted()
-        let minY = sorted.first!
-        let maxY = sorted.last!
-        let range = maxY - minY
 
-        guard range > 0.002 else {
-            // All samples within 2mm - they're all the same plane
-            return sorted[sorted.count / 2]  // Return median
+        // Use percentile-based approach:
+        // - Floor: 10th percentile captures the lowest cluster while ignoring outliers
+        // - Ceiling: 90th percentile captures the highest cluster while ignoring outliers
+        let percentileIndex: Int
+        if findLowest {
+            // 10th percentile for floor - the actual floor should be at/near the bottom
+            percentileIndex = samples.count / 10
+        } else {
+            // 90th percentile for ceiling - the actual ceiling should be at/near the top
+            percentileIndex = (samples.count * 9) / 10
         }
 
-        // Create 1mm bins
-        let binCount = max(1, Int(range / heightBinSize) + 1)
-        var histogram = [Int](repeating: 0, count: binCount)
-
-        // Fill histogram
-        for y in samples {
-            let binIndex = min(binCount - 1, Int((y - minY) / heightBinSize))
-            histogram[binIndex] += 1
-        }
-
-        // Find ALL local density peaks (bins with more points than neighbors)
-        var peaks: [(bin: Int, density: Int)] = []
-        let minPeakDensity = max(3, samples.count / 50)  // Minimum 3 points or 2% of samples
-
-        for i in 0..<binCount {
-            let density = histogram[i]
-            if density < minPeakDensity { continue }
-
-            // Check if this is a local maximum (higher than neighbors within 5mm)
-            let windowSize = 5  // 5mm window
-            var isLocalMax = true
-            for j in max(0, i - windowSize)..<min(binCount, i + windowSize + 1) {
-                if j != i && histogram[j] > density {
-                    isLocalMax = false
-                    break
-                }
-            }
-
-            if isLocalMax {
-                peaks.append((bin: i, density: density))
-            }
-        }
-
-        // If no peaks found, fall back to global max
-        if peaks.isEmpty {
-            var bestBin = 0
-            var bestDensity = 0
-            for i in 0..<binCount {
-                if histogram[i] > bestDensity {
-                    bestDensity = histogram[i]
-                    bestBin = i
-                }
-            }
-            peaks.append((bin: bestBin, density: bestDensity))
-        }
-
-        // Sort peaks by Y value
-        peaks.sort { $0.bin < $1.bin }
-
-        // For floor: pick the LOWEST peak (smallest Y = lowest bin)
-        // For ceiling: pick the HIGHEST peak (largest Y = highest bin)
-        let selectedPeak = findLowest ? peaks.first! : peaks.last!
-
-        // Calculate precise Y by averaging all points within 2mm of peak
-        let peakY = minY + Float(selectedPeak.bin) * heightBinSize
-        var sum: Float = 0
-        var count = 0
-
-        for y in samples {
-            if abs(y - peakY) < heightBinSize * 2 {  // Within 2mm of peak
-                sum += y
-                count += 1
-            }
-        }
-
-        let result = count > 0 ? sum / Float(count) : peakY
-        debugLog("[DENSITY] \(findLowest ? "FLOOR" : "CEILING"): peaks=\(peaks.count), selectedBin=\(selectedPeak.bin), density=\(selectedPeak.density)/\(samples.count), peakY=\(peakY), result=\(result)")
+        let result = sorted[min(percentileIndex, sorted.count - 1)]
+        debugLog("[HEIGHT] \(findLowest ? "FLOOR" : "CEILING"): samples=\(samples.count), percentile=\(findLowest ? 10 : 90)%, result=\(result)")
         return result
     }
 
