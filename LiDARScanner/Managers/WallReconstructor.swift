@@ -1,6 +1,89 @@
 import Foundation
 import simd
 
+// MARK: - Plane-Based Room Geometry
+
+/// An infinite plane in 3D space: ax + by + cz = d
+struct Plane {
+    let normal: SIMD3<Float>  // (a, b, c) - unit normal
+    let d: Float              // distance from origin
+
+    /// Create plane from point and normal
+    init(point: SIMD3<Float>, normal: SIMD3<Float>) {
+        self.normal = normalize(normal)
+        self.d = dot(self.normal, point)
+    }
+
+    /// Create horizontal plane at height y
+    static func horizontal(y: Float, facingUp: Bool) -> Plane {
+        let normal = SIMD3<Float>(0, facingUp ? 1 : -1, 0)
+        return Plane(point: SIMD3<Float>(0, y, 0), normal: normal)
+    }
+
+    /// Create vertical plane through two points
+    static func vertical(from p1: SIMD2<Float>, to p2: SIMD2<Float>, facingInward: Bool) -> Plane {
+        let dir = normalize(p2 - p1)
+        // Normal perpendicular to wall direction (in XZ plane)
+        var normal2D = SIMD2<Float>(dir.y, -dir.x)
+        if !facingInward { normal2D = -normal2D }
+        let normal = SIMD3<Float>(normal2D.x, 0, normal2D.y)
+        let point = SIMD3<Float>(p1.x, 0, p1.y)
+        return Plane(point: point, normal: normal)
+    }
+
+    /// Signed distance from point to plane (positive = same side as normal)
+    func signedDistance(to point: SIMD3<Float>) -> Float {
+        return dot(normal, point) - d
+    }
+
+    /// Check if point is on the "inside" (negative side) of plane
+    func isInside(_ point: SIMD3<Float>) -> Bool {
+        return signedDistance(to: point) <= 0.001
+    }
+}
+
+/// A room defined by the intersection of infinite planes
+struct PlaneBasedRoom {
+    let floorPlane: Plane       // y = floorY, normal up
+    let ceilingPlane: Plane     // y = ceilingY, normal down
+    let wallPlanes: [Plane]     // Vertical planes, normals facing inward
+    let corners: [SIMD2<Float>] // XZ positions of wall corners (ordered)
+
+    let floorY: Float
+    let ceilingY: Float
+
+    /// Compute the corner points where walls intersect
+    /// Each corner is the intersection of two adjacent wall planes
+    func computeCorners() -> [SIMD2<Float>] {
+        return corners  // Already computed from wall segments
+    }
+
+    /// Generate the floor polygon (intersection of floor plane with wall planes)
+    func floorPolygon() -> [SIMD3<Float>] {
+        return corners.map { SIMD3<Float>($0.x, floorY, $0.y) }
+    }
+
+    /// Generate the ceiling polygon (intersection of ceiling plane with wall planes)
+    func ceilingPolygon() -> [SIMD3<Float>] {
+        return corners.map { SIMD3<Float>($0.x, ceilingY, $0.y) }
+    }
+
+    /// Generate wall rectangle for wall segment i
+    func wallRectangle(index: Int) -> [SIMD3<Float>] {
+        let i = index
+        let j = (index + 1) % corners.count
+        let p1 = corners[i]
+        let p2 = corners[j]
+
+        return [
+            SIMD3<Float>(p1.x, floorY, p1.y),    // Bottom-left
+            SIMD3<Float>(p2.x, floorY, p2.y),    // Bottom-right
+            SIMD3<Float>(p2.x, ceilingY, p2.y),  // Top-right
+            SIMD3<Float>(p1.x, ceilingY, p1.y)   // Top-left
+        ]
+    }
+}
+
 // MARK: - Data Structures
 
 struct ReconstructedWall: Identifiable {
@@ -58,6 +141,127 @@ class WallReconstructor {
     var defaultCeilingHeight: Float = 3.5 // Default if not detected (increased for tall rooms)
     var wallThickness: Float = 0.05       // 5cm wall thickness for double-sided export
     var doubleSidedWalls: Bool = true     // Generate both sides of walls
+
+    // MARK: - Plane-Based Room Reconstruction
+
+    /// Create a room defined by infinite planes
+    /// The room boundary is the INTERSECTION of these planes - no holes possible
+    func createPlaneBasedRoom(from statistics: ScanStatistics) -> PlaneBasedRoom? {
+        let floorY = statistics.floorHeight ?? 0
+        var ceilingY = statistics.ceilingHeight ?? (floorY + defaultCeilingHeight)
+
+        if ceilingY - floorY < 1.5 {
+            ceilingY = floorY + defaultCeilingHeight
+        }
+
+        // Get corners
+        var corners = extractCornersWithUserConfirmed(
+            userConfirmed: statistics.userConfirmedCorners,
+            detectedEdges: statistics.detectedEdges
+        )
+
+        guard corners.count >= 3 else { return nil }
+        corners = orderClockwise(corners)
+
+        // Create planes
+        let floorPlane = Plane.horizontal(y: floorY, facingUp: true)
+        let ceilingPlane = Plane.horizontal(y: ceilingY, facingUp: false)
+
+        var wallPlanes: [Plane] = []
+        for i in 0..<corners.count {
+            let p1 = corners[i]
+            let p2 = corners[(i + 1) % corners.count]
+            wallPlanes.append(Plane.vertical(from: p1, to: p2, facingInward: true))
+        }
+
+        return PlaneBasedRoom(
+            floorPlane: floorPlane,
+            ceilingPlane: ceilingPlane,
+            wallPlanes: wallPlanes,
+            corners: corners,
+            floorY: floorY,
+            ceilingY: ceilingY
+        )
+    }
+
+    /// Generate mesh from plane intersections - mathematically NO HOLES
+    func generateMeshFromPlanes(room: PlaneBasedRoom, doors: [DetectedDoor] = [], windows: [DetectedWindow] = []) -> CapturedMeshData {
+        var allVertices: [SIMD3<Float>] = []
+        var allNormals: [SIMD3<Float>] = []
+        var allFaces: [[UInt32]] = []
+
+        let corners = room.corners
+        let floorY = room.floorY
+        let ceilingY = room.ceilingY
+
+        // 1. FLOOR - polygon from plane intersections (no holes)
+        let floorMesh = generatePolygonMesh(corners: corners, y: floorY, normalY: 1.0)
+        allVertices.append(contentsOf: floorMesh.vertices)
+        allNormals.append(contentsOf: floorMesh.normals)
+        allFaces.append(contentsOf: floorMesh.faces)
+
+        // 2. CEILING - polygon from plane intersections (no holes)
+        let ceilingOffset = UInt32(allVertices.count)
+        let ceilingMesh = generatePolygonMesh(corners: corners, y: ceilingY, normalY: -1.0)
+        allVertices.append(contentsOf: ceilingMesh.vertices)
+        allNormals.append(contentsOf: ceilingMesh.normals)
+        allFaces.append(contentsOf: ceilingMesh.faces.map { $0.map { $0 + ceilingOffset } })
+
+        // 3. WALLS - rectangles from plane intersections (no holes, doors/windows cut out)
+        for i in 0..<corners.count {
+            let p1 = corners[i]
+            let p2 = corners[(i + 1) % corners.count]
+
+            let wallLength = simd_length(p2 - p1)
+            guard wallLength >= minWallLength else { continue }
+
+            let direction = simd_normalize(p2 - p1)
+            let normal = SIMD3<Float>(direction.y, 0, -direction.x)
+
+            // Find openings on this wall
+            let openings = findOpeningsOnWall(
+                start: p1,
+                end: p2,
+                doors: doors,
+                windows: windows,
+                floorY: floorY
+            )
+
+            let wall = ReconstructedWall(
+                id: UUID(),
+                start: p1,
+                end: p2,
+                floorY: floorY,
+                ceilingY: ceilingY,
+                normal: normal,
+                openings: openings
+            )
+
+            let wallMesh: (vertices: [SIMD3<Float>], normals: [SIMD3<Float>], faces: [[UInt32]])
+            if openings.isEmpty {
+                wallMesh = generateSolidWallMesh(wall)
+            } else {
+                wallMesh = generateWallWithOpenings(wall)
+            }
+
+            let wallOffset = UInt32(allVertices.count)
+            allVertices.append(contentsOf: wallMesh.vertices)
+            allNormals.append(contentsOf: wallMesh.normals)
+            allFaces.append(contentsOf: wallMesh.faces.map { $0.map { $0 + wallOffset } })
+        }
+
+        print("[WallReconstructor] Generated room from planes: \(corners.count) walls, \(allVertices.count) vertices, \(allFaces.count) faces")
+
+        return CapturedMeshData(
+            vertices: allVertices,
+            normals: allNormals,
+            colors: [],
+            faces: allFaces,
+            transform: matrix_identity_float4x4,
+            identifier: UUID(),
+            surfaceType: .wall
+        )
+    }
 
     // MARK: - Public Methods
 
@@ -640,5 +844,284 @@ class WallReconstructor {
         }
 
         return (vertices, normals, faces)
+    }
+
+    // MARK: - Complete Room Generation (No Holes)
+
+    /// Generate a complete closed room with solid floor, ceiling, and walls
+    /// This creates a watertight 3D box with no holes
+    func generateCompleteRoom(from statistics: ScanStatistics) -> CapturedMeshData {
+        // Get room dimensions
+        let floorY = statistics.floorHeight ?? 0
+        var ceilingY = statistics.ceilingHeight ?? (floorY + defaultCeilingHeight)
+
+        if ceilingY - floorY < 2.0 {
+            ceilingY = floorY + defaultCeilingHeight
+        }
+
+        // Get corners from detected edges or user-confirmed corners
+        var corners = extractCornersWithUserConfirmed(
+            userConfirmed: statistics.userConfirmedCorners,
+            detectedEdges: statistics.detectedEdges
+        )
+
+        // Need at least 3 corners for a room
+        guard corners.count >= 3 else {
+            return CapturedMeshData(
+                vertices: [],
+                normals: [],
+                colors: [],
+                faces: [],
+                transform: matrix_identity_float4x4,
+                identifier: UUID()
+            )
+        }
+
+        // Order corners clockwise
+        corners = orderClockwise(corners)
+
+        var allVertices: [SIMD3<Float>] = []
+        var allNormals: [SIMD3<Float>] = []
+        var allFaces: [[UInt32]] = []
+
+        // 1. Generate SOLID FLOOR (no holes)
+        let floorMesh = generatePolygonMesh(corners: corners, y: floorY, normalY: 1.0)
+        allVertices.append(contentsOf: floorMesh.vertices)
+        allNormals.append(contentsOf: floorMesh.normals)
+        allFaces.append(contentsOf: floorMesh.faces)
+
+        // 2. Generate SOLID CEILING (no holes)
+        let ceilingMesh = generatePolygonMesh(corners: corners, y: ceilingY, normalY: -1.0)
+        let ceilingOffset = UInt32(allVertices.count)
+        allVertices.append(contentsOf: ceilingMesh.vertices)
+        allNormals.append(contentsOf: ceilingMesh.normals)
+        allFaces.append(contentsOf: ceilingMesh.faces.map { face in
+            face.map { $0 + ceilingOffset }
+        })
+
+        // 3. Generate SOLID WALLS (no holes, floor to ceiling)
+        // Generate walls between each pair of corners
+        let walls = generateWalls(
+            corners: corners,
+            floorY: floorY,
+            ceilingY: ceilingY,
+            doors: statistics.detectedDoors,
+            windows: statistics.detectedWindows
+        )
+
+        for wall in walls {
+            let wallMesh: (vertices: [SIMD3<Float>], normals: [SIMD3<Float>], faces: [[UInt32]])
+
+            if wall.openings.isEmpty {
+                wallMesh = generateSolidWallMesh(wall)
+            } else {
+                wallMesh = generateWallWithOpenings(wall)
+            }
+
+            let wallOffset = UInt32(allVertices.count)
+            allVertices.append(contentsOf: wallMesh.vertices)
+            allNormals.append(contentsOf: wallMesh.normals)
+            allFaces.append(contentsOf: wallMesh.faces.map { face in
+                face.map { $0 + wallOffset }
+            })
+        }
+
+        print("[WallReconstructor] Generated complete room: \(corners.count) corners, \(walls.count) walls, \(allVertices.count) vertices")
+
+        return CapturedMeshData(
+            vertices: allVertices,
+            normals: allNormals,
+            colors: [],
+            faces: allFaces,
+            transform: matrix_identity_float4x4,
+            identifier: UUID(),
+            surfaceType: .wall
+        )
+    }
+
+    /// Generate a solid wall rectangle (no openings)
+    private func generateSolidWallMesh(_ wall: ReconstructedWall) -> (vertices: [SIMD3<Float>], normals: [SIMD3<Float>], faces: [[UInt32]]) {
+        // Simple rectangle from floor to ceiling
+        let v0 = SIMD3<Float>(wall.start.x, wall.floorY, wall.start.y)   // Bottom-left
+        let v1 = SIMD3<Float>(wall.end.x, wall.floorY, wall.end.y)       // Bottom-right
+        let v2 = SIMD3<Float>(wall.end.x, wall.ceilingY, wall.end.y)     // Top-right
+        let v3 = SIMD3<Float>(wall.start.x, wall.ceilingY, wall.start.y) // Top-left
+
+        let backNormal = -wall.normal
+
+        if doubleSidedWalls {
+            let vertices = [
+                v0, v1, v2, v3,  // Front face
+                v0, v1, v2, v3   // Back face
+            ]
+            let normals = [
+                wall.normal, wall.normal, wall.normal, wall.normal,
+                backNormal, backNormal, backNormal, backNormal
+            ]
+            let faces: [[UInt32]] = [
+                [0, 1, 2], [0, 2, 3],  // Front
+                [4, 6, 5], [4, 7, 6]   // Back (reversed winding)
+            ]
+            return (vertices, normals, faces)
+        } else {
+            let vertices = [v0, v1, v2, v3]
+            let normals = [wall.normal, wall.normal, wall.normal, wall.normal]
+            let faces: [[UInt32]] = [[0, 1, 2], [0, 2, 3]]
+            return (vertices, normals, faces)
+        }
+    }
+
+    // MARK: - Boundary Extraction and Hole Filling
+
+    /// Extract boundary polygon from floor/ceiling mesh vertices
+    /// Uses convex hull to find the outer perimeter
+    func extractBoundaryFromMesh(vertices: [SIMD3<Float>], surfaceY: Float, tolerance: Float = 0.1) -> [SIMD2<Float>] {
+        // Filter vertices near the surface height
+        let surfaceVertices = vertices.filter { abs($0.y - surfaceY) < tolerance }
+
+        guard surfaceVertices.count >= 3 else { return [] }
+
+        // Project to 2D (XZ plane)
+        let points2D = surfaceVertices.map { SIMD2<Float>($0.x, $0.z) }
+
+        // Compute convex hull
+        return computeConvexHull(points2D)
+    }
+
+    /// Compute convex hull of 2D points (Graham scan algorithm)
+    private func computeConvexHull(_ points: [SIMD2<Float>]) -> [SIMD2<Float>] {
+        guard points.count >= 3 else { return points }
+
+        // Remove duplicates
+        var uniquePoints: [SIMD2<Float>] = []
+        for p in points {
+            let isDuplicate = uniquePoints.contains { simd_length($0 - p) < 0.05 }
+            if !isDuplicate {
+                uniquePoints.append(p)
+            }
+        }
+
+        guard uniquePoints.count >= 3 else { return uniquePoints }
+
+        // Find lowest point (and leftmost if tied)
+        var lowestIndex = 0
+        for i in 1..<uniquePoints.count {
+            if uniquePoints[i].y < uniquePoints[lowestIndex].y ||
+               (uniquePoints[i].y == uniquePoints[lowestIndex].y && uniquePoints[i].x < uniquePoints[lowestIndex].x) {
+                lowestIndex = i
+            }
+        }
+        uniquePoints.swapAt(0, lowestIndex)
+        let pivot = uniquePoints[0]
+
+        // Sort by polar angle
+        let sorted = uniquePoints.dropFirst().sorted { p1, p2 in
+            let angle1 = atan2(p1.y - pivot.y, p1.x - pivot.x)
+            let angle2 = atan2(p2.y - pivot.y, p2.x - pivot.x)
+            if abs(angle1 - angle2) < 0.0001 {
+                // Same angle - closer point first
+                return simd_length(p1 - pivot) < simd_length(p2 - pivot)
+            }
+            return angle1 < angle2
+        }
+
+        // Build hull
+        var hull: [SIMD2<Float>] = [pivot]
+
+        for point in sorted {
+            while hull.count >= 2 {
+                let top = hull[hull.count - 1]
+                let second = hull[hull.count - 2]
+                // Cross product to check turn direction
+                let cross = (top.x - second.x) * (point.y - second.y) - (top.y - second.y) * (point.x - second.x)
+                if cross <= 0 {
+                    hull.removeLast()
+                } else {
+                    break
+                }
+            }
+            hull.append(point)
+        }
+
+        return hull
+    }
+
+    /// Infer walls from floor/ceiling boundary edges
+    /// Creates walls at the perimeter where no walls exist
+    func inferWallsFromBoundary(
+        floorBoundary: [SIMD2<Float>],
+        ceilingBoundary: [SIMD2<Float>],
+        existingWalls: [ReconstructedWall],
+        floorY: Float,
+        ceilingY: Float
+    ) -> [ReconstructedWall] {
+        // Merge floor and ceiling boundaries (use the larger one)
+        let boundary = floorBoundary.count >= ceilingBoundary.count ? floorBoundary : ceilingBoundary
+
+        guard boundary.count >= 3 else { return existingWalls }
+
+        // Order clockwise
+        let orderedBoundary = orderClockwise(boundary)
+
+        var allWalls = existingWalls
+
+        // For each edge in the boundary, check if wall exists
+        for i in 0..<orderedBoundary.count {
+            let start = orderedBoundary[i]
+            let end = orderedBoundary[(i + 1) % orderedBoundary.count]
+
+            // Check if wall already exists for this edge
+            let wallExists = existingWalls.contains { wall in
+                let distToStart = min(simd_length(wall.start - start), simd_length(wall.end - start))
+                let distToEnd = min(simd_length(wall.start - end), simd_length(wall.end - end))
+                return distToStart < cornerSnapDistance && distToEnd < cornerSnapDistance
+            }
+
+            if !wallExists {
+                let wallLength = simd_length(end - start)
+                guard wallLength >= minWallLength else { continue }
+
+                let direction = simd_normalize(end - start)
+                let normal = SIMD3<Float>(direction.y, 0, -direction.x)
+
+                let inferredWall = ReconstructedWall(
+                    id: UUID(),
+                    start: start,
+                    end: end,
+                    floorY: floorY,
+                    ceilingY: ceilingY,
+                    normal: normal,
+                    openings: []
+                )
+                allWalls.append(inferredWall)
+                print("[WallReconstructor] Inferred wall from boundary: (\(start.x), \(start.y)) to (\(end.x), \(end.y))")
+            }
+        }
+
+        return allWalls
+    }
+
+    /// Create solid floor/ceiling from wall perimeter
+    /// Ensures no holes within wall boundaries
+    func createSolidFloorCeilingFromWalls(walls: [ReconstructedWall], floorY: Float, ceilingY: Float) -> CapturedMeshData {
+        // Extract corners from walls
+        var corners: [SIMD2<Float>] = []
+        for wall in walls {
+            // Add both endpoints, dedup later
+            let isDuplicateStart = corners.contains { simd_length($0 - wall.start) < cornerSnapDistance }
+            if !isDuplicateStart {
+                corners.append(wall.start)
+            }
+            let isDuplicateEnd = corners.contains { simd_length($0 - wall.end) < cornerSnapDistance }
+            if !isDuplicateEnd {
+                corners.append(wall.end)
+            }
+        }
+
+        // Order clockwise
+        corners = orderClockwise(corners)
+
+        // Generate solid floor and ceiling
+        return generateFloorCeiling(corners: corners, floorY: floorY, ceilingY: ceilingY)
     }
 }

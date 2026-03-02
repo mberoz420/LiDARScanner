@@ -615,23 +615,25 @@ struct ExportView: View {
             }
 
         case .cleanWalls:
-            if let walls = reconstructedWalls, let stats = scan.statistics {
-                // Generate wall mesh
-                let wallMesh = wallReconstructor.generateMesh(walls: walls)
+            if let stats = scan.statistics {
+                // PLANE-BASED ROOM RECONSTRUCTION
+                // Room = intersection of infinite planes (floor, ceiling, walls)
+                // Mathematically IMPOSSIBLE to have holes
+                if let room = wallReconstructor.createPlaneBasedRoom(from: stats) {
+                    let roomMesh = wallReconstructor.generateMeshFromPlanes(
+                        room: room,
+                        doors: stats.detectedDoors,
+                        windows: stats.detectedWindows
+                    )
 
-                // Generate floor and ceiling
-                let corners = wallReconstructor.extractCorners(from: stats.detectedEdges)
-                let floorCeilingMesh = wallReconstructor.generateFloorCeiling(
-                    corners: corners,
-                    floorY: stats.floorHeight ?? 0,
-                    ceilingY: stats.ceilingHeight ?? 2.5
-                )
-
-                var cleanScan = CapturedScan(startTime: scan.startTime)
-                cleanScan.meshes = [wallMesh, floorCeilingMesh]
-                cleanScan.endTime = scan.endTime
-                cleanScan.statistics = scan.statistics
-                return cleanScan
+                    if !roomMesh.vertices.isEmpty {
+                        var cleanScan = CapturedScan(startTime: scan.startTime)
+                        cleanScan.meshes = [roomMesh]
+                        cleanScan.endTime = scan.endTime
+                        cleanScan.statistics = scan.statistics
+                        return cleanScan
+                    }
+                }
             }
 
         case .fullMesh:

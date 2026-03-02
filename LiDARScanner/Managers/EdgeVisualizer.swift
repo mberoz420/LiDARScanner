@@ -13,6 +13,8 @@ class EdgeVisualizer {
 
     private weak var arView: ARView?
     private var cornerEntities: [String: ModelEntity] = [:]  // Key: "x_z" position
+    private var doorEntities: [UUID: ModelEntity] = [:]       // Door frame visualizations
+    private var windowEntities: [UUID: ModelEntity] = [:]     // Window frame visualizations
     private var edgeAnchor: AnchorEntity?
 
     // Room dimensions (set by MeshManager)
@@ -21,10 +23,13 @@ class EdgeVisualizer {
 
     // Line appearance - thin glowing line
     private let lineThickness: Float = 0.008  // 8mm thin line
+    private let frameThickness: Float = 0.02  // 2cm for door/window frames
 
-    // Bright white/cyan glow
+    // Colors
     private let lineColor = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
     private let glowColor = UIColor(red: 0.5, green: 1.0, blue: 1.0, alpha: 0.6)
+    private let doorColor = UIColor(red: 0.6, green: 0.3, blue: 0.1, alpha: 0.8)      // Brown
+    private let windowColor = UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 0.6)    // Light blue
 
     // MARK: - Setup
 
@@ -88,6 +93,163 @@ class EdgeVisualizer {
         }
     }
 
+    // MARK: - Door Visualization
+
+    /// Add or update a door frame visualization
+    func addDoor(_ door: DetectedDoor) {
+        guard let anchor = edgeAnchor else { return }
+
+        // Remove existing if updating
+        if let existing = doorEntities[door.id] {
+            existing.removeFromParent()
+        }
+
+        // Create door frame as a rectangular outline
+        let frameEntity = createDoorFrame(door: door)
+        anchor.addChild(frameEntity)
+        doorEntities[door.id] = frameEntity
+
+        debugLog("[EdgeVisualizer] Added door at (\(door.position.x), \(door.position.z)), total: \(doorEntities.count)")
+    }
+
+    /// Create a door frame entity (rectangular outline)
+    private func createDoorFrame(door: DetectedDoor) -> ModelEntity {
+        // Door frame is a rectangle: two vertical sides + top
+        let parentEntity = ModelEntity()
+
+        var material = UnlitMaterial()
+        material.color = .init(tint: door.isConfirmed ? doorColor : doorColor.withAlphaComponent(0.4))
+
+        // Calculate door orientation from wall normal
+        let angle = atan2(door.wallNormal.x, door.wallNormal.z)
+
+        // Left vertical post
+        let leftPost = MeshResource.generateBox(width: frameThickness, height: door.height, depth: frameThickness)
+        let leftEntity = ModelEntity(mesh: leftPost, materials: [material])
+        leftEntity.position = SIMD3<Float>(-door.width / 2, door.height / 2, 0)
+        parentEntity.addChild(leftEntity)
+
+        // Right vertical post
+        let rightEntity = ModelEntity(mesh: leftPost, materials: [material])
+        rightEntity.position = SIMD3<Float>(door.width / 2, door.height / 2, 0)
+        parentEntity.addChild(rightEntity)
+
+        // Top horizontal beam
+        let topBeam = MeshResource.generateBox(width: door.width + frameThickness, height: frameThickness, depth: frameThickness)
+        let topEntity = ModelEntity(mesh: topBeam, materials: [material])
+        topEntity.position = SIMD3<Float>(0, door.height, 0)
+        parentEntity.addChild(topEntity)
+
+        // Position and rotate the frame
+        parentEntity.position = SIMD3<Float>(door.position.x, floorY, door.position.z)
+        parentEntity.orientation = simd_quatf(angle: angle, axis: SIMD3<Float>(0, 1, 0))
+
+        return parentEntity
+    }
+
+    /// Update doors from detected doors list
+    func updateDoors(_ doors: [DetectedDoor]) {
+        // Remove doors that no longer exist
+        let currentIDs = Set(doors.map { $0.id })
+        for (id, entity) in doorEntities where !currentIDs.contains(id) {
+            entity.removeFromParent()
+            doorEntities.removeValue(forKey: id)
+        }
+
+        // Add/update doors
+        for door in doors {
+            addDoor(door)
+        }
+    }
+
+    // MARK: - Window Visualization
+
+    /// Add or update a window frame visualization
+    func addWindow(_ window: DetectedWindow) {
+        guard let anchor = edgeAnchor else { return }
+
+        // Remove existing if updating
+        if let existing = windowEntities[window.id] {
+            existing.removeFromParent()
+        }
+
+        // Create window frame as a rectangular outline with glass effect
+        let frameEntity = createWindowFrame(window: window)
+        anchor.addChild(frameEntity)
+        windowEntities[window.id] = frameEntity
+
+        debugLog("[EdgeVisualizer] Added window at (\(window.position.x), \(window.position.z)), total: \(windowEntities.count)")
+    }
+
+    /// Create a window frame entity (rectangular outline with glass)
+    private func createWindowFrame(window: DetectedWindow) -> ModelEntity {
+        let parentEntity = ModelEntity()
+
+        var frameMaterial = UnlitMaterial()
+        frameMaterial.color = .init(tint: UIColor.gray)
+
+        var glassMaterial = UnlitMaterial()
+        glassMaterial.color = .init(tint: window.isConfirmed ? windowColor : windowColor.withAlphaComponent(0.3))
+
+        // Calculate window orientation from wall normal
+        let angle = atan2(window.wallNormal.x, window.wallNormal.z)
+
+        // Four frame posts
+        let verticalPost = MeshResource.generateBox(width: frameThickness, height: window.height, depth: frameThickness)
+        let horizontalPost = MeshResource.generateBox(width: window.width + frameThickness, height: frameThickness, depth: frameThickness)
+
+        // Left post
+        let leftEntity = ModelEntity(mesh: verticalPost, materials: [frameMaterial])
+        leftEntity.position = SIMD3<Float>(-window.width / 2, window.height / 2, 0)
+        parentEntity.addChild(leftEntity)
+
+        // Right post
+        let rightEntity = ModelEntity(mesh: verticalPost, materials: [frameMaterial])
+        rightEntity.position = SIMD3<Float>(window.width / 2, window.height / 2, 0)
+        parentEntity.addChild(rightEntity)
+
+        // Top post
+        let topEntity = ModelEntity(mesh: horizontalPost, materials: [frameMaterial])
+        topEntity.position = SIMD3<Float>(0, window.height, 0)
+        parentEntity.addChild(topEntity)
+
+        // Bottom post (sill)
+        let bottomEntity = ModelEntity(mesh: horizontalPost, materials: [frameMaterial])
+        bottomEntity.position = SIMD3<Float>(0, 0, 0)
+        parentEntity.addChild(bottomEntity)
+
+        // Glass pane (semi-transparent)
+        if window.hasGlass {
+            let glassMesh = MeshResource.generateBox(width: window.width - frameThickness, height: window.height - frameThickness, depth: 0.005)
+            let glassEntity = ModelEntity(mesh: glassMesh, materials: [glassMaterial])
+            glassEntity.position = SIMD3<Float>(0, window.height / 2, 0)
+            parentEntity.addChild(glassEntity)
+        }
+
+        // Position and rotate the frame
+        parentEntity.position = SIMD3<Float>(window.position.x, floorY + window.heightFromFloor, window.position.z)
+        parentEntity.orientation = simd_quatf(angle: angle, axis: SIMD3<Float>(0, 1, 0))
+
+        return parentEntity
+    }
+
+    /// Update windows from detected windows list
+    func updateWindows(_ windows: [DetectedWindow]) {
+        // Remove windows that no longer exist
+        let currentIDs = Set(windows.map { $0.id })
+        for (id, entity) in windowEntities where !currentIDs.contains(id) {
+            entity.removeFromParent()
+            windowEntities.removeValue(forKey: id)
+        }
+
+        // Add/update windows
+        for window in windows {
+            addWindow(window)
+        }
+    }
+
+    // MARK: - Room Dimensions
+
     /// Set room dimensions
     func setRoomDimensions(floor: Float, ceiling: Float) {
         let oldFloor = floorY
@@ -125,17 +287,37 @@ class EdgeVisualizer {
         }
     }
 
-    /// Clear all corner visualizations
+    /// Clear all visualizations
     func clearEdges() {
         for (_, entity) in cornerEntities {
             entity.removeFromParent()
         }
         cornerEntities.removeAll()
+
+        for (_, entity) in doorEntities {
+            entity.removeFromParent()
+        }
+        doorEntities.removeAll()
+
+        for (_, entity) in windowEntities {
+            entity.removeFromParent()
+        }
+        windowEntities.removeAll()
     }
 
     /// Get count of corner lines
     var edgeCount: Int {
         cornerEntities.count
+    }
+
+    /// Get count of doors
+    var doorCount: Int {
+        doorEntities.count
+    }
+
+    /// Get count of windows
+    var windowCount: Int {
+        windowEntities.count
     }
 
     /// Check if any edge is in the center of the screen (reticle area)

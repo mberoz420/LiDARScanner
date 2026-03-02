@@ -90,7 +90,7 @@ class AppSettings: ObservableObject {
     @AppStorage("surfaceClassificationEnabled") var surfaceClassificationEnabled: Bool = true
     @AppStorage("floorCeilingAngle") var floorCeilingAngle: Double = 32.0  // Degrees from horizontal
     @AppStorage("wallAngle") var wallAngle: Double = 72.0  // Degrees from horizontal
-    @AppStorage("protrusionMinDepth") var protrusionMinDepth: Double = 8.0  // cm
+    @AppStorage("protrusionMinDepth") var protrusionMinDepth: Double = 3.0  // cm - beams can be 4-5cm shallow
     @AppStorage("protrusionMaxDepth") var protrusionMaxDepth: Double = 60.0  // cm
 
     // Room layout settings (object filtering)
@@ -102,6 +102,7 @@ class AppSettings: ObservableObject {
     // Custom filter toggles (used when roomLayoutMode == .custom)
     @AppStorage("includeFloor") var includeFloor: Bool = true
     @AppStorage("includeCeiling") var includeCeiling: Bool = true
+    @AppStorage("includeCoves") var includeCoves: Bool = true  // Rounded ceiling-wall transitions
     @AppStorage("includeWalls") var includeWalls: Bool = true
     @AppStorage("includeProtrusions") var includeProtrusions: Bool = true
     @AppStorage("includeDoors") var includeDoors: Bool = true
@@ -124,6 +125,9 @@ class AppSettings: ObservableObject {
     // When ML only: model predicts without calibration constraints
     // When calibration only: height-locked planes, no ML
     // When both on: ML + calibration for best accuracy
+
+    // Calibration pause gesture (for floor/ceiling height lock)
+    @AppStorage("calibrationPauseEnabled") var calibrationPauseEnabled: Bool = true  // Pause on floor/ceiling to calibrate height
 
     // Feedback settings
     @AppStorage("speechFeedbackEnabled") var speechFeedbackEnabled: Bool = true

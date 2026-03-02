@@ -208,6 +208,11 @@ struct SettingsView: View {
                                     .foregroundColor(.yellow)
                             }
 
+                            Toggle(isOn: $settings.includeCoves) {
+                                Label("Coves (rounded transitions)", systemImage: "circle.bottomhalf.filled")
+                                    .foregroundColor(.purple)
+                            }
+
                             Toggle(isOn: $settings.includeWalls) {
                                 Label("Walls", systemImage: "square.fill")
                                     .foregroundColor(.blue)
@@ -245,6 +250,42 @@ struct SettingsView: View {
                     Text("Filter out furniture and objects to capture clean room structure.")
                 }
 
+                // Input Methods
+                Section {
+                    Toggle(isOn: $settings.voiceCommandsEnabled) {
+                        VStack(alignment: .leading) {
+                            Text("Voice Commands")
+                            Text("Say 'door', 'window', or 'corner' to mark")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Toggle(isOn: $settings.pauseGestureEnabled) {
+                        VStack(alignment: .leading) {
+                            Text("Pause Gesture")
+                            Text("Hold still for 3s to confirm corners")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Toggle(isOn: $settings.speechFeedbackEnabled) {
+                        VStack(alignment: .leading) {
+                            Text("Speech Feedback")
+                            Text("Audio confirmation of detected features")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Toggle("Haptic Feedback", isOn: $settings.hapticFeedbackEnabled)
+                } header: {
+                    Text("Input & Feedback")
+                } footer: {
+                    Text("Voice commands require microphone permission. Say 'door' or 'window' while pointing at openings.")
+                }
+
                 // Surface Classification
                 Section {
                     Toggle("Enable Surface Classification", isOn: $settings.surfaceClassificationEnabled)
@@ -262,9 +303,20 @@ struct SettingsView: View {
                             Toggle(isOn: $settings.useCalibration) {
                                 VStack(alignment: .leading) {
                                     Text("Use Floor/Ceiling Calibration")
-                                    Text("Point at floor/ceiling for 3s to calibrate")
+                                    Text("Use calibrated heights for classification")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                }
+                            }
+
+                            if settings.useCalibration {
+                                Toggle(isOn: $settings.calibrationPauseEnabled) {
+                                    VStack(alignment: .leading) {
+                                        Text("Calibration Pause Gesture")
+                                        Text("Point at floor/ceiling for 3s to calibrate")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                             }
 

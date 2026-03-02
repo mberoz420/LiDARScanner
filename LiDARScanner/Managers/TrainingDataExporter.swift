@@ -51,11 +51,11 @@ class TrainingDataExporter: ObservableObject {
             switch surfaceType {
             case .floor, .floorEdge:
                 return .floor
-            case .ceiling, .ceilingProtrusion:
+            case .ceiling, .ceilingProtrusion, .cove:
                 return .ceiling
             case .wall, .wallEdge:
                 return .wall
-            case .door, .doorFrame, .window, .windowFrame, .object, .unknown:
+            case .door, .doorFrame, .window, .windowFrame, .object, .objectTop, .backReflection, .unknown:
                 return .object
             }
         }

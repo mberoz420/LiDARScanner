@@ -1545,11 +1545,12 @@ class SurfaceClassifier: ObservableObject {
     /// Suggested update interval multiplier for surface type
     func updateIntervalMultiplier(for surfaceType: SurfaceType) -> Double {
         switch surfaceType {
-        case .ceiling, .ceilingProtrusion: return 3.0  // Update ceiling 3x less frequently
+        case .ceiling, .ceilingProtrusion, .cove: return 3.0  // Update ceiling 3x less frequently
         case .floor, .floorEdge: return 1.5            // Floor slightly less
         case .wall, .wallEdge: return 1.0              // Walls normal rate
         case .door, .doorFrame, .window, .windowFrame: return 0.8  // Openings slightly more
-        case .object: return 0.5                       // Objects more frequently
+        case .object, .objectTop: return 0.5           // Objects more frequently
+        case .backReflection: return 5.0               // Back reflections rarely need update
         case .unknown: return 1.0
         }
     }

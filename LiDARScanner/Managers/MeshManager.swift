@@ -66,6 +66,17 @@ class MeshManager: NSObject, ObservableObject {
     @Published var calibrationSurfaceName: String = ""  // "Floor", "Ceiling", "Door", "Window"
     private var lastCalibrationFeedbackTime: Date = .distantPast
 
+    // Current scan focus - tracks what the user is currently scanning
+    // Prevents jumping to ceiling calibration right after floor calibration
+    enum ScanFocus: String {
+        case floor = "Floor"
+        case ceiling = "Ceiling"
+        case walls = "Walls"
+        case none = "None"
+    }
+    @Published var currentScanFocus: ScanFocus = .none
+    private let scanFocusTransitionThreshold: Float = 0.26  // cos(75°) ≈ 0.26 - need 75°+ change to switch
+
     /// Number of auto-detected opening candidates (awaiting confirmation)
     var openingCandidatesCount: Int {
         surfaceClassifier.statistics.openingCandidates.count
@@ -88,15 +99,25 @@ class MeshManager: NSObject, ObservableObject {
     private let audioEngine = AVAudioEngine()
     @Published var isListening = false
     @Published var lastVoiceCommand: String?
+    @Published var isInCorrectionMode = false       // Waiting for user to say correct classification
+    private var lastClassifiedPosition: SIMD3<Float>?  // Position of last auto-classified surface
+    private var lastClassifiedMeshID: UUID?            // Mesh ID of last auto-classified surface
 
-    // Voice command types for object classification
+    // Voice command types for marking features
+    // Note: Walls are auto-detected (vertical surfaces spanning floor-to-ceiling)
+    //       No voice command needed for walls
     enum VoiceCommand: String, CaseIterable {
-        // Structure
+        // Control commands
+        case stop = "stop"         // Correction mode - undo last and reclassify
+
+        // Structure (manual confirmation needed)
         case edge = "edge"
         case corner = "corner"
-        case wall = "wall"
         case door = "door"
         case window = "window"
+        case wall = "wall"         // Force classify as wall
+        case floor = "floor"       // Force classify as floor
+        case ceiling = "ceiling"   // Force classify as ceiling
         case glass = "glass"       // Transparent surface - filter through
 
         // Furniture & Objects
@@ -110,13 +131,17 @@ class MeshManager: NSObject, ObservableObject {
         case bed = "bed"
         case shelf = "shelf"
         case closet = "closet"
+        case object = "object"     // Generic object
 
         var confirmationMessage: String {
             switch self {
+            case .stop: return "Correction mode"
             case .edge, .corner: return "Corner"
-            case .wall: return "Wall"
             case .door: return "Door"
             case .window: return "Window"
+            case .wall: return "Wall"
+            case .floor: return "Floor"
+            case .ceiling: return "Ceiling"
             case .glass: return "Glass"
             case .furniture: return "Furniture"
             case .appliance: return "Appliance"
@@ -128,7 +153,13 @@ class MeshManager: NSObject, ObservableObject {
             case .bed: return "Bed"
             case .shelf: return "Shelf"
             case .closet: return "Closet"
+            case .object: return "Object"
             }
+        }
+
+        /// Whether this is a classification command (not control)
+        var isClassification: Bool {
+            return self != .stop
         }
 
         /// Expected edge count for box-shaped objects
@@ -148,13 +179,16 @@ class MeshManager: NSObject, ObservableObject {
         /// Category for export grouping
         var exportGroup: String {
             switch self {
+            case .stop: return "Control"
             case .edge, .corner, .wall: return "Walls"
+            case .floor: return "Floors"
+            case .ceiling: return "Ceilings"
             case .door: return "Doors"
             case .window, .glass: return "Windows"
             case .appliance: return "Appliances"
             case .cabinet, .closet, .shelf: return "Cabinets"
             case .counter: return "Counters"
-            case .furniture, .table, .chair, .sofa, .bed: return "Furniture"
+            case .furniture, .table, .chair, .sofa, .bed, .object: return "Furniture"
             }
         }
     }
@@ -830,17 +864,36 @@ class MeshManager: NSObject, ObservableObject {
 
         lastVoiceCommand = command.rawValue
 
-        // Get position where user is pointing
-        guard let position = getReticleTargetPosition(frame: frame) else { return }
-
         // Haptic feedback
         if AppSettings.shared.hapticFeedbackEnabled {
             hapticGenerator.impactOccurred()
         }
 
+        // Handle STOP command - enter correction mode
+        if command == .stop {
+            isInCorrectionMode = true
+            speakConfirmation("What is it?")
+            debugLog("[MeshManager] Correction mode activated - waiting for correct classification")
+            return
+        }
+
+        // Get position where user is pointing
+        guard let position = getReticleTargetPosition(frame: frame) else { return }
+
+        // If in correction mode, apply the correction to last classified surface
+        if isInCorrectionMode {
+            isInCorrectionMode = false
+            applyCorrection(command: command, at: position, frame: frame)
+            return
+        }
+
+        // Normal command handling
         switch command {
-        case .edge, .corner, .wall:
-            // Register as corner
+        case .stop:
+            break  // Already handled above
+
+        case .edge, .corner:
+            // Register as corner (walls are auto-detected)
             confirmCorner(at: position, source: "voice:\(command.rawValue)")
 
         case .door:
@@ -853,13 +906,33 @@ class MeshManager: NSObject, ObservableObject {
             // Register as window (includes glass plane for filtering)
             registerWindow(at: position, frame: frame)
             registerClassifiedObject(command, at: position, frame: frame)
-            speakConfirmation("Window marked - filtering through glass")
+            speakConfirmation("Window marked")
+
+        case .wall:
+            // Force classify current surface as wall
+            forceClassifySurface(at: position, as: .wall)
+            speakConfirmation("Wall marked")
+
+        case .floor:
+            // Force classify current surface as floor
+            forceClassifySurface(at: position, as: .floor)
+            speakConfirmation("Floor marked")
+
+        case .ceiling:
+            // Force classify current surface as ceiling
+            forceClassifySurface(at: position, as: .ceiling)
+            speakConfirmation("Ceiling marked")
+
+        case .object:
+            // Force classify as generic object
+            forceClassifySurface(at: position, as: .object)
+            speakConfirmation("Object marked")
 
         case .glass:
             // Register as glass surface only (no window frame, just filter plane)
             registerGlassPlane(at: position, frame: frame)
             registerClassifiedObject(command, at: position, frame: frame)
-            speakConfirmation("Glass marked - filtering beyond")
+            speakConfirmation("Glass marked")
 
         case .furniture, .appliance, .cabinet, .counter, .table, .chair, .sofa, .bed, .shelf, .closet:
             // Register as classified object
@@ -873,6 +946,72 @@ class MeshManager: NSObject, ObservableObject {
                     : "(\(command.expectedEdges) edges)"
                 debugLog("[MeshManager] Voice: \(command.rawValue) at \(position) \(edgeHint)")
             }
+        }
+    }
+
+    /// Apply a voice correction to force reclassify a surface
+    private func applyCorrection(command: VoiceCommand, at position: SIMD3<Float>, frame: ARFrame) {
+        switch command {
+        case .door:
+            registerDoor(at: position, frame: frame)
+            speakConfirmation("Corrected to door")
+
+        case .window:
+            registerWindow(at: position, frame: frame)
+            speakConfirmation("Corrected to window")
+
+        case .wall:
+            forceClassifySurface(at: position, as: .wall)
+            speakConfirmation("Corrected to wall")
+
+        case .floor:
+            forceClassifySurface(at: position, as: .floor)
+            speakConfirmation("Corrected to floor")
+
+        case .ceiling:
+            forceClassifySurface(at: position, as: .ceiling)
+            speakConfirmation("Corrected to ceiling")
+
+        case .object:
+            forceClassifySurface(at: position, as: .object)
+            speakConfirmation("Corrected to object")
+
+        default:
+            registerClassifiedObject(command, at: position, frame: frame)
+            speakConfirmation("Corrected to \(command.confirmationMessage)")
+        }
+
+        debugLog("[MeshManager] Applied correction: \(command.rawValue) at \(position)")
+    }
+
+    /// Force classify surface at position to a specific type
+    private func forceClassifySurface(at position: SIMD3<Float>, as surfaceType: SurfaceType) {
+        // Find the mesh anchor closest to this position
+        guard let session = arSession else { return }
+
+        var closestAnchor: ARMeshAnchor?
+        var closestDistance: Float = .greatestFiniteMagnitude
+
+        for anchor in session.currentFrame?.anchors ?? [] {
+            guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
+
+            let anchorPos = SIMD3<Float>(
+                meshAnchor.transform.columns.3.x,
+                meshAnchor.transform.columns.3.y,
+                meshAnchor.transform.columns.3.z
+            )
+            let dist = simd_distance(position, anchorPos)
+
+            if dist < closestDistance {
+                closestDistance = dist
+                closestAnchor = meshAnchor
+            }
+        }
+
+        if let anchor = closestAnchor {
+            // Override the surface type for this mesh
+            surfaceTypes[anchor.identifier] = surfaceType
+            debugLog("[MeshManager] Force classified mesh \(anchor.identifier) as \(surfaceType.rawValue)")
         }
     }
 
@@ -1224,8 +1363,11 @@ class MeshManager: NSObject, ObservableObject {
             )
         }
 
-        // Detect doors/windows in wall meshes
-        if classifiedSurface.surfaceType == .wall && AppSettings.shared.detectDoorsWindows {
+        // Detect doors/windows in vertical surfaces (walls and potential walls)
+        // Check ANY vertical surface - not just classified walls
+        // Because wall sections with door openings might not span floor-to-ceiling
+        let isVerticalSurface = abs(classifiedSurface.averageNormal.y) < 0.3
+        if isVerticalSurface && AppSettings.shared.detectDoorsWindows {
             // Method 1: Gap detection in mesh
             surfaceClassifier.detectOpenings(
                 in: meshData,
@@ -1261,6 +1403,18 @@ class MeshManager: NSObject, ObservableObject {
             if !edges.isEmpty {
                 edgeVisualizer.updateEdges(edges)
                 debugLog("[MeshManager] Passing \(edges.count) edges to visualizer")
+            }
+
+            // Update door/window visualizations
+            let doors = surfaceClassifier.statistics.detectedDoors
+            let windows = surfaceClassifier.statistics.detectedWindows
+            if !doors.isEmpty {
+                edgeVisualizer.updateDoors(doors)
+                debugLog("[MeshManager] Visualizing \(doors.count) doors")
+            }
+            if !windows.isEmpty {
+                edgeVisualizer.updateWindows(windows)
+                debugLog("[MeshManager] Visualizing \(windows.count) windows")
             }
         }
 
@@ -1382,6 +1536,10 @@ class MeshManager: NSObject, ObservableObject {
             // Update edge visualization - only vertical corners become lines
             edgeVisualizer.updateEdges(stats.detectedEdges)
 
+            // Update door/window visualizations
+            edgeVisualizer.updateDoors(stats.detectedDoors)
+            edgeVisualizer.updateWindows(stats.detectedWindows)
+
             // Don't auto-advance walls - user must tap "Skip" or "Next" when ready
             // This gives them time to scan all walls thoroughly
             // Only auto-advance if they've confirmed 4+ corners manually
@@ -1392,7 +1550,9 @@ class MeshManager: NSObject, ObservableObject {
         case .complete:
             phaseProgress = 1.0
             let wallCount = roomBuilder.wallSegments.count
-            let openingCount = roomBuilder.detectedOpenings.count
+            let doorCount = stats.detectedDoors.count
+            let windowCount = stats.detectedWindows.count
+            let openingCount = doorCount + windowCount
 
             if roomBuilder.roomHeight > 0 {
                 // Calculate room bounds from wall segments
@@ -1403,11 +1563,21 @@ class MeshManager: NSObject, ObservableObject {
                    let minZ = allZ.min(), let maxZ = allZ.max() {
                     let width = maxX - minX
                     let depth = maxZ - minZ
-                    scanStatus = String(format: "Room: %.1fm x %.1fm x %.1fm | %d walls | %d openings",
-                                        width, depth, roomBuilder.roomHeight, wallCount, openingCount)
+                    if openingCount > 0 {
+                        scanStatus = String(format: "Room: %.1fm x %.1fm x %.1fm | %d walls | %d doors, %d windows",
+                                            width, depth, roomBuilder.roomHeight, wallCount, doorCount, windowCount)
+                    } else {
+                        scanStatus = String(format: "Room: %.1fm x %.1fm x %.1fm | %d walls",
+                                            width, depth, roomBuilder.roomHeight, wallCount)
+                    }
                 } else {
-                    scanStatus = String(format: "Height: %.1fm | %d walls | %d openings",
-                                        roomBuilder.roomHeight, wallCount, openingCount)
+                    if openingCount > 0 {
+                        scanStatus = String(format: "Height: %.1fm | %d walls | %d doors, %d windows",
+                                            roomBuilder.roomHeight, wallCount, doorCount, windowCount)
+                    } else {
+                        scanStatus = String(format: "Height: %.1fm | %d walls",
+                                            roomBuilder.roomHeight, wallCount)
+                    }
                 }
             } else {
                 scanStatus = "Room captured!"
@@ -1578,19 +1748,26 @@ class MeshManager: NSObject, ObservableObject {
 
     private func extractMeshData(from anchor: ARMeshAnchor) -> CapturedMeshData {
         let geometry = anchor.geometry
+        let transform = anchor.transform
 
         // Use batch extraction to avoid buffer deallocation crashes
         // This copies all data at once while the buffer is still valid
-        let vertices = geometry.extractAllVertices()
-        let normals = geometry.extractAllNormals()
-        let faces = geometry.extractAllFaceIndices()
+        let rawVertices = geometry.extractAllVertices()
+        let rawNormals = geometry.extractAllNormals()
+        let rawFaces = geometry.extractAllFaceIndices()
+
+        // Use raw vertices/normals/faces without filtering
+        // Filtering based on estimated room bounds was too aggressive and removed valid data
+        let vertices = rawVertices
+        let normals = rawNormals
+        let faces = rawFaces
 
         // Sample colors from camera frame (skip for Walls mode - geometry only)
         var colors: [VertexColor] = []
         if currentMode != .walls, let frame = currentFrame {
             colors = TextureProjector.sampleColors(
                 for: vertices,
-                meshTransform: anchor.transform,
+                meshTransform: transform,
                 frame: frame
             )
         }
@@ -1605,7 +1782,7 @@ class MeshManager: NSObject, ObservableObject {
                 vertices: vertices,
                 normals: normals,
                 faces: faces,
-                transform: anchor.transform
+                transform: transform
             )
         }
 
@@ -1614,11 +1791,81 @@ class MeshManager: NSObject, ObservableObject {
             normals: normals,
             colors: colors,
             faces: faces,
-            transform: anchor.transform,
+            transform: transform,
             identifier: anchor.identifier,
             surfaceType: surfaceType,
             faceClassifications: faceClassifications
         )
+    }
+
+    /// Filter mesh to only include faces within room bounds (between floor and ceiling)
+    private func filterMeshWithinRoomBounds(
+        vertices: [SIMD3<Float>],
+        normals: [SIMD3<Float>],
+        faces: [[UInt32]],
+        transform: simd_float4x4
+    ) -> (vertices: [SIMD3<Float>], normals: [SIMD3<Float>], faces: [[UInt32]]) {
+        // Get room bounds
+        guard let floorY = surfaceClassifier.effectiveFloorHeight,
+              let ceilingY = surfaceClassifier.effectiveCeilingHeight else {
+            // No room bounds yet, return unfiltered
+            return (vertices, normals, faces)
+        }
+
+        let tolerance: Float = 0.1  // 10cm tolerance
+
+        // Transform helper
+        func transformPoint(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            let v4 = SIMD4<Float>(v.x, v.y, v.z, 1.0)
+            let transformed = transform * v4
+            return SIMD3<Float>(transformed.x, transformed.y, transformed.z)
+        }
+
+        // Check if a vertex is within room bounds
+        func isWithinBounds(_ v: SIMD3<Float>) -> Bool {
+            let worldV = transformPoint(v)
+            return worldV.y >= floorY - tolerance && worldV.y <= ceilingY + tolerance
+        }
+
+        // Filter faces - keep only faces where ALL vertices are within bounds
+        var validFaces: [[UInt32]] = []
+        var usedIndices = Set<UInt32>()
+
+        for face in faces {
+            guard face.count >= 3 else { continue }
+            let allWithinBounds = face.allSatisfy { idx in
+                Int(idx) < vertices.count && isWithinBounds(vertices[Int(idx)])
+            }
+            if allWithinBounds {
+                validFaces.append(face)
+                face.forEach { usedIndices.insert($0) }
+            }
+        }
+
+        // If no filtering needed, return original
+        if validFaces.count == faces.count {
+            return (vertices, normals, faces)
+        }
+
+        // Rebuild vertex/normal arrays with only used vertices
+        var indexMap: [UInt32: UInt32] = [:]
+        var newVertices: [SIMD3<Float>] = []
+        var newNormals: [SIMD3<Float>] = []
+
+        for oldIdx in usedIndices.sorted() {
+            indexMap[oldIdx] = UInt32(newVertices.count)
+            newVertices.append(vertices[Int(oldIdx)])
+            if Int(oldIdx) < normals.count {
+                newNormals.append(normals[Int(oldIdx)])
+            }
+        }
+
+        // Remap face indices
+        let newFaces = validFaces.map { face in
+            face.compactMap { indexMap[$0] }
+        }.filter { $0.count >= 3 }
+
+        return (newVertices, newNormals, newFaces)
     }
 
     private func extractFaceData(from anchor: ARFaceAnchor) -> CapturedMeshData {
@@ -1956,6 +2203,14 @@ extension MeshManager: ARSessionDelegate {
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
 
+            // Track camera position for back reflection detection
+            let cameraPosition = SIMD3<Float>(
+                frame.camera.transform.columns.3.x,
+                frame.camera.transform.columns.3.y,
+                frame.camera.transform.columns.3.z
+            )
+            surfaceClassifier.trackCameraPosition(cameraPosition)
+
             // Test mode processing - only ARKit planes for now
             if isScanning && currentMode == .test {
                 testModeDetector.processFrame(frame)
@@ -2001,6 +2256,7 @@ extension MeshManager: ARSessionDelegate {
                         // User can look at floor/ceiling at any angle - we detect via surface normal
                         var detectedFloorSurface = false
                         var detectedCeilingSurface = false
+                        var detectedWallSurface = false
                         var surfaceHeight: Float = 0
                         var surfaceNormal = SIMD3<Float>(0, 1, 0)
 
@@ -2009,11 +2265,37 @@ extension MeshManager: ARSessionDelegate {
                             // Get the surface normal at the raycast hit point
                             if let hitNormal = getSurfaceNormalAtReticle(frame: frame) {
                                 surfaceNormal = hitNormal
-                                // Floor: normal pointing up (within ~85-95 degrees of vertical)
-                                // normal.y > 0.7 means < 45 degrees from up
+                                // Floor: normal pointing up (y > 0.7 means < 45° from up)
                                 detectedFloorSurface = hitNormal.y > 0.7
-                                // Ceiling: normal pointing down
+                                // Ceiling: normal pointing down (y < -0.7)
                                 detectedCeilingSurface = hitNormal.y < -0.7
+                                // Wall: normal mostly horizontal (|y| < 0.26 means > 75° from vertical)
+                                detectedWallSurface = abs(hitNormal.y) < scanFocusTransitionThreshold
+                            }
+                        }
+
+                        // Update scan focus based on current surface orientation
+                        // Only switch focus when orientation changes significantly
+                        let previousFocus = currentScanFocus
+                        if detectedWallSurface {
+                            // Looking at walls - can switch to wall focus from any state
+                            currentScanFocus = .walls
+                        } else if detectedFloorSurface && currentScanFocus != .ceiling {
+                            // Looking at floor - switch to floor focus (unless we were doing ceiling)
+                            currentScanFocus = .floor
+                        } else if detectedCeilingSurface && currentScanFocus != .floor {
+                            // Looking at ceiling - switch to ceiling focus (unless we were doing floor)
+                            currentScanFocus = .ceiling
+                        }
+                        // If still looking at floor after floor calibration, stay in floor focus
+                        // Only switch to ceiling when actually looking at walls first (75°+ change)
+
+                        // Announce focus change (only when transitioning through walls)
+                        if previousFocus != currentScanFocus && currentScanFocus == .walls {
+                            if previousFocus == .floor {
+                                speakConfirmation("Scanning walls")
+                            } else if previousFocus == .ceiling {
+                                speakConfirmation("Scanning walls")
                             }
                         }
 
@@ -2031,14 +2313,26 @@ extension MeshManager: ARSessionDelegate {
                             detectedOpeningType = openingCheck.type
                         }
 
-                        if (detectedFloorSurface || detectedCeilingSurface || detectedDoorWindow) && currentMode == .walls {
+                        // Only start floor/ceiling calibration if:
+                        // 1. Calibration pause is enabled
+                        // 2. Looking at floor/ceiling
+                        // 3. Not in the opposite focus (e.g., don't start ceiling cal while in floor focus)
+                        let canCalibrateFloor = AppSettings.shared.calibrationPauseEnabled &&
+                                                detectedFloorSurface &&
+                                                currentScanFocus != .ceiling
+                        let canCalibrateCeiling = AppSettings.shared.calibrationPauseEnabled &&
+                                                  detectedCeilingSurface &&
+                                                  currentScanFocus != .floor
+                        let canCalibrateOpening = detectedDoorWindow
+
+                        if (canCalibrateFloor || canCalibrateCeiling || canCalibrateOpening) && currentMode == .walls {
                             // Start or continue calibration
                             if calibrationStartTime == nil {
                                 calibrationStartTime = Date()
-                                if detectedFloorSurface {
+                                if canCalibrateFloor {
                                     calibrationSurface = .floor
                                     calibrationSurfaceName = "Floor"
-                                } else if detectedCeilingSurface {
+                                } else if canCalibrateCeiling {
                                     calibrationSurface = .ceiling
                                     calibrationSurfaceName = "Ceiling"
                                 } else if let openingType = detectedOpeningType {
