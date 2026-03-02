@@ -8,61 +8,21 @@ import simd
 
 /// Surface type classification based on normal direction
 enum SurfaceType: String, CaseIterable, Sendable {
-    // Room Structure (boundaries)
     case floor = "Floor"
     case ceiling = "Ceiling"
-    case wall = "Wall"
     case cove = "Cove"                             // Rounded ceiling-wall transition
     case ceilingProtrusion = "Ceiling Protrusion"  // Beams, ducts, fixtures
+    case wall = "Wall"
     case wallEdge = "Wall Edge"                     // Corners, intersections
     case floorEdge = "Floor Edge"                   // Where floor meets wall
-
-    // Openings
     case door = "Door"                              // Door opening or frame
     case doorFrame = "Door Frame"                   // Door frame edges
     case window = "Window"                          // Window opening
     case windowFrame = "Window Frame"               // Window frame edges
-
-    // Objects (furniture, items - NOT room structure)
-    case object = "Object"                          // Generic object
-    case objectTop = "Object Top"                   // Top of object (upward normal, not floor)
-    case objectBottom = "Object Bottom"             // Bottom of object (downward normal, not ceiling)
-    case objectWall = "Object Wall"                 // Side of object (horizontal normal, not room wall)
-
-    // Other
+    case object = "Object"
+    case objectTop = "Object Top"                   // Top of object (upward normal but above floor)
     case backReflection = "Back Reflection"         // LiDAR reflection artifact - not real surface
     case unknown = "Unknown"
-
-    /// Parent group for UI toggling
-    enum ParentGroup: String, CaseIterable {
-        case roomStructure = "Room Structure"
-        case openings = "Openings"
-        case objects = "Objects"
-        case other = "Other"
-    }
-
-    var parentGroup: ParentGroup {
-        switch self {
-        case .floor, .ceiling, .wall, .cove, .ceilingProtrusion, .wallEdge, .floorEdge:
-            return .roomStructure
-        case .door, .doorFrame, .window, .windowFrame:
-            return .openings
-        case .object, .objectTop, .objectBottom, .objectWall:
-            return .objects
-        case .backReflection, .unknown:
-            return .other
-        }
-    }
-
-    /// Whether this is part of room structure (floor, ceiling, walls)
-    var isRoomStructure: Bool {
-        return parentGroup == .roomStructure
-    }
-
-    /// Whether this is an object (furniture, items)
-    var isObject: Bool {
-        return parentGroup == .objects
-    }
 
     var color: (r: Float, g: Float, b: Float, a: Float) {
         switch self {
@@ -79,8 +39,6 @@ enum SurfaceType: String, CaseIterable, Sendable {
         case .windowFrame: return (0.7, 0.7, 0.7, 0.7)        // Gray
         case .object: return (0.9, 0.3, 0.3, 0.5)             // Red
         case .objectTop: return (0.9, 0.5, 0.5, 0.4)          // Light red - object tops
-        case .objectBottom: return (0.7, 0.3, 0.3, 0.4)       // Dark red - object bottoms
-        case .objectWall: return (0.9, 0.4, 0.4, 0.45)        // Medium red - object sides
         case .backReflection: return (1.0, 0.0, 1.0, 0.3)     // Magenta, transparent - artifacts
         case .unknown: return (0.5, 0.5, 0.5, 0.3)            // Gray
         }
@@ -149,18 +107,18 @@ struct ClassifiedSurface {
 
         case .roomOnly:
             // Only keep structural surfaces
-            return surfaceType.isObject || surfaceType == .unknown
+            return surfaceType == .object || surfaceType == .objectTop || surfaceType == .unknown
 
         case .filterLarge:
             // Filter objects larger than threshold
-            if surfaceType.isObject {
+            if surfaceType == .object || surfaceType == .objectTop {
                 return maxDimension > settings.minObjectSizeMeters
             }
             return false
 
         case .filterByHeight:
             // Filter objects below height threshold (furniture on floor)
-            if surfaceType.isObject, let floor = floorHeight {
+            if surfaceType == .object || surfaceType == .objectTop, let floor = floorHeight {
                 let objectBottomHeight = heightRange.min - floor
                 return objectBottomHeight < settings.maxObjectHeightMeters
             }
@@ -185,7 +143,7 @@ struct ClassifiedSurface {
                 return !settings.includeDoors
             case .window, .windowFrame:
                 return !settings.includeWindows
-            case .object, .objectTop, .objectBottom, .objectWall:
+            case .object, .objectTop:
                 return !settings.includeObjects
             case .backReflection:
                 return true  // Always filter back reflections
@@ -1728,7 +1686,7 @@ class SurfaceClassifier: ObservableObject {
             return false // Walls have features
         case .door, .doorFrame, .window, .windowFrame:
             return false // Openings need detail
-        case .object, .objectTop, .objectBottom, .objectWall:
+        case .object, .objectTop:
             return false // Objects need detail
         case .backReflection:
             return true // Back reflections don't need detail
@@ -1744,7 +1702,7 @@ class SurfaceClassifier: ObservableObject {
         case .floor, .floorEdge: return 1.5            // Floor slightly less
         case .wall, .wallEdge: return 1.0              // Walls normal rate
         case .door, .doorFrame, .window, .windowFrame: return 0.8  // Openings slightly more
-        case .object, .objectTop, .objectBottom, .objectWall: return 0.5  // Objects more frequently
+        case .object, .objectTop: return 0.5           // Objects more frequently
         case .backReflection: return 5.0               // Back reflections rarely need update
         case .unknown: return 1.0
         }

@@ -55,7 +55,7 @@ class TrainingDataExporter: ObservableObject {
                 return .ceiling
             case .wall, .wallEdge:
                 return .wall
-            case .door, .doorFrame, .window, .windowFrame, .object, .objectTop, .objectBottom, .objectWall, .backReflection, .unknown:
+            case .door, .doorFrame, .window, .windowFrame, .object, .objectTop, .backReflection, .unknown:
                 return .object
             }
         }
