@@ -1055,8 +1055,9 @@ class SurfaceClassifier: ObservableObject {
             // Increment density for this direction
             wallDensityByAngle[dirBucket, default: 0] += 1
 
-            // Per-direction farthest distance (also check adjacent ±5° buckets)
-            let maxDistForDir = [-5, 0, 5].compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
+            // Per-direction farthest distance — search ±25° so curved walls find their own reference
+            let maxDistForDir = stride(from: -25, through: 25, by: 5)
+                .compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
                 ?? maxWallDistance
 
             let atFarthestDistance = horizontalDist >= maxDistForDir - wallDistanceTolerance
@@ -1078,7 +1079,8 @@ class SurfaceClassifier: ObservableObject {
             let horizontalDist = sqrt(hdx * hdx + hdz * hdz)
             let dirAngle = atan2(hdz, hdx) * 180 / Float.pi
             let dirBucket = Int(round(dirAngle / 5)) * 5
-            let maxDistForDir = [-5, 0, 5].compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
+            let maxDistForDir = stride(from: -25, through: 25, by: 5)
+                .compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
                 ?? maxWallDistance
             return horizontalDist >= maxDistForDir - wallDistanceTolerance
         }
