@@ -1,0 +1,153 @@
+"""
+LiDAR Scan Watcher
+==================
+Watches G:\\My Drive\\LidarScans for new JSON files from the iOS app.
+When a new scan arrives, opens PointCloudLabeler.html in your browser
+with the scan pre-loaded and auto-classified.
+
+Usage:
+    python watch_scans.py
+
+Requirements:
+    pip install watchdog
+"""
+
+import http.server
+import socketserver
+import webbrowser
+import threading
+import time
+import os
+import sys
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+SCAN_FOLDER  = r"G:\My Drive\LidarScans"
+TOOLS_FOLDER = os.path.dirname(os.path.abspath(__file__))
+PORT         = 8765
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class ScanFileHandler(FileSystemEventHandler):
+    """Opens the labeler whenever a new .json scan file is written."""
+
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        if not event.src_path.lower().endswith('.json'):
+            return
+
+        filename = os.path.basename(event.src_path)
+        print(f"\n[Watcher] New scan detected: {filename}")
+
+        # Wait briefly to ensure the file is fully written by Google Drive sync
+        time.sleep(2)
+
+        url = f"http://localhost:{PORT}/?scan={filename}"
+        print(f"[Watcher] Opening: {url}")
+        webbrowser.open(url)
+
+
+class LabelerHTTPHandler(http.server.SimpleHTTPRequestHandler):
+    """
+    Serves PointCloudLabeler.html at / and scan JSON files at /scans/<filename>.
+    """
+
+    def do_GET(self):
+        # Serve scan files from Google Drive folder
+        if self.path.startswith('/scans/'):
+            filename = self.path[len('/scans/'):]
+            # Strip any query string
+            filename = filename.split('?')[0]
+            filepath = os.path.join(SCAN_FOLDER, filename)
+
+            if not os.path.isfile(filepath):
+                self.send_error(404, f"Scan file not found: {filename}")
+                return
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            with open(filepath, 'rb') as f:
+                data = f.read()
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        # Serve the tools folder (HTML, JS, etc.)
+        # Rewrite / → /PointCloudLabeler.html
+        if self.path == '/' or self.path.startswith('/?'):
+            query = ''
+            if '?' in self.path:
+                query = self.path[self.path.index('?'):]
+            self.path = '/PointCloudLabeler.html' + query
+
+        # Strip query string for file serving
+        clean_path = self.path.split('?')[0]
+        local_file = os.path.join(TOOLS_FOLDER, clean_path.lstrip('/'))
+
+        if os.path.isfile(local_file):
+            ext = os.path.splitext(local_file)[1].lower()
+            mime = {'.html': 'text/html', '.js': 'application/javascript',
+                    '.css': 'text/css', '.json': 'application/json'}.get(ext, 'text/plain')
+            with open(local_file, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.send_error(404, f"Not found: {clean_path}")
+
+    def log_message(self, format, *args):
+        # Suppress routine GET logs — only show scan loads
+        if '/scans/' in (args[0] if args else ''):
+            print(f"[Server] Serving scan: {args[0]}")
+
+
+def start_server():
+    with socketserver.TCPServer(('', PORT), LabelerHTTPHandler) as httpd:
+        httpd.allow_reuse_address = True
+        print(f"[Server] Serving labeler at http://localhost:{PORT}")
+        httpd.serve_forever()
+
+
+def main():
+    # Check scan folder exists
+    if not os.path.isdir(SCAN_FOLDER):
+        print(f"[Error] Scan folder not found: {SCAN_FOLDER}")
+        print("        Make sure Google Drive is running and the folder exists.")
+        sys.exit(1)
+
+    # Start HTTP server in background thread
+    server_thread = threading.Thread(target=start_server, daemon=True)
+    server_thread.start()
+
+    # Start file watcher
+    observer = Observer()
+    observer.schedule(ScanFileHandler(), SCAN_FOLDER, recursive=False)
+    observer.start()
+
+    print(f"[Watcher] Watching: {SCAN_FOLDER}")
+    print(f"[Watcher] Open labeler manually: http://localhost:{PORT}")
+    print(f"[Watcher] New scans will open automatically. Press Ctrl+C to stop.\n")
+
+    # Open the labeler now so it's ready
+    webbrowser.open(f"http://localhost:{PORT}")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[Watcher] Stopped.")
+        observer.stop()
+
+    observer.join()
+
+
+if __name__ == '__main__':
+    main()

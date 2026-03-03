@@ -1590,6 +1590,30 @@
 
         // Load build status on page load
         refreshBuildStatus();
+
+        // Auto-load scan file when served via localhost watcher
+        // URL param: ?scan=filename.json  (served from /scans/ by watch_scans.py)
+        (async function autoLoadFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            const scanFile = params.get('scan');
+            if (!scanFile) return;
+
+            document.getElementById('selection-info').textContent = `Auto-loading: ${scanFile}…`;
+
+            try {
+                const res = await fetch(`/scans/${scanFile}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                loadJSON(data);
+                document.getElementById('selection-info').textContent =
+                    `Loaded: ${scanFile} — ${points.length.toLocaleString()} points`;
+                // Auto-classify unlabeled points
+                smartAutoClassify(false);
+            } catch (e) {
+                document.getElementById('selection-info').textContent =
+                    `Failed to auto-load ${scanFile}: ${e.message}`;
+            }
+        })();
     </script>
 </body>
 </html>
