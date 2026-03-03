@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var selectedMode: ScanMode?
     @State private var resumeSessionId: UUID?
     @State private var resumeRepairMode = false
+    @State private var showPhotogrammetry = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -132,6 +133,14 @@ struct ContentView: View {
                         color: ScanMode.test.color,
                         action: { selectedMode = .test }
                     )
+
+                    // Photogrammetry
+                    MainMenuSquare(
+                        title: "Photogrammetry",
+                        icon: "camera.aperture",
+                        color: .cyan,
+                        action: { showPhotogrammetry = true }
+                    )
                 }
                 .padding(.horizontal)
                 }
@@ -176,6 +185,9 @@ struct ContentView: View {
                     selectedMode = ScanMode(rawValue: session.scanMode) ?? .fast
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showPhotogrammetry) {
+            PhotogrammetryView()
         }
         .sheet(isPresented: $updateChecker.showUpdateProgress) {
             UpdateProgressView(updateChecker: updateChecker)
