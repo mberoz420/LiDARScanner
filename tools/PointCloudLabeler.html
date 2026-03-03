@@ -1435,50 +1435,49 @@
 
             const tolerance = parseFloat(document.getElementById('classify-tolerance')?.value ?? '0.3');
             const BUCKET_DEG = 5;
-            const DIST_BIN   = 0.10;   // 10 cm distance bins for wall histograms
-            const Y_BIN      = 0.05;   // 5 cm  height  bins for floor/ceiling
+            const DIST_BIN   = 0.10;   // 10 cm bins
+            const Y_BIN      = 0.05;   // 5 cm  bins
 
-            // Room centroid = approximation of camera origin
-            let cx = 0, cy = 0, cz = 0;
-            points.forEach(p => { cx += p.x; cy += p.y; cz += p.z; });
-            cx /= points.length; cy /= points.length; cz /= points.length;
-
-            // ── Pass 1: collect all distances per direction ──────────────────
-            const wallDistsByAngle = {};   // bucket° → [dist, …]
-            const floorYAll        = [];   // Y values of upward-facing points
-            const ceilingYAll      = [];   // Y values of downward-facing points
+            // ── Pass 1: collect projections per normal direction ─────────────
+            // Key insight: instead of measuring distance from a biased centroid,
+            // project each point onto its OWN wall-normal axis.
+            // Wall plane = farthest dense cluster along that axis.
+            // This is centroid-independent and handles all wall orientations correctly.
+            const wallProjsByNormal = {};  // normal-bucket° → [signed projection, …]
+            const floorYAll         = [];
+            const ceilingYAll       = [];
 
             points.forEach((p, i) => {
                 if (deletedIndices.has(i)) return;
-                const n = normals[i] || { x: 0, y: 1, z: 0 };
+                const n    = normals[i] || { x: 0, y: 1, z: 0 };
                 const ny   = n.y;
                 const hMag = Math.sqrt(n.x * n.x + n.z * n.z);
 
                 if (ny > 0.7) {
-                    floorYAll.push(p.y);          // upward normal → potential floor
+                    floorYAll.push(p.y);
                 } else if (ny < -0.7) {
-                    ceilingYAll.push(p.y);        // downward normal → potential ceiling
-                } else if (hMag > 0.7 && Math.abs(ny) < 0.5) {
-                    // Vertical normal → potential wall
-                    const dx = p.x - cx, dz = p.z - cz;
-                    const hDist  = Math.sqrt(dx * dx + dz * dz);
-                    const angle  = Math.atan2(dz, dx) * 180 / Math.PI;
-                    const bucket = Math.round(angle / BUCKET_DEG) * BUCKET_DEG;
-                    if (!wallDistsByAngle[bucket]) wallDistsByAngle[bucket] = [];
-                    wallDistsByAngle[bucket].push(hDist);
+                    ceilingYAll.push(p.y);
+                } else if (hMag > 0.5 && Math.abs(ny) < 0.7) {
+                    // Project point along its (normalised) horizontal normal
+                    const nx_n = n.x / hMag;
+                    const nz_n = n.z / hMag;
+                    const proj = p.x * nx_n + p.z * nz_n;
+
+                    const normAngle = Math.atan2(n.z, n.x) * 180 / Math.PI;
+                    const bucket    = Math.round(normAngle / BUCKET_DEG) * BUCKET_DEG;
+                    if (!wallProjsByNormal[bucket]) wallProjsByNormal[bucket] = [];
+                    wallProjsByNormal[bucket].push(proj);
                 }
             });
 
-            // ── Compute farthest dense-cluster distance per wall direction ───
-            const wallPlaneDist = {};  // bucket° → plane horizontal distance
-            Object.entries(wallDistsByAngle).forEach(([bucket, dists]) => {
-                wallPlaneDist[parseInt(bucket)] = farthestDensePeak(dists, DIST_BIN, false);
+            // ── Compute farthest dense-cluster projection per normal sector ──
+            const wallPlaneProj = {};
+            Object.entries(wallProjsByNormal).forEach(([bucket, projs]) => {
+                wallPlaneProj[parseInt(bucket)] = farthestDensePeak(projs, DIST_BIN, false);
             });
 
-            // ── Floor and ceiling plane Y values ────────────────────────────
-            // Floor: farthest downward = lowest Y, highest density there
+            // ── Floor / ceiling plane Y values ───────────────────────────────
             const floorY   = farthestDensePeak(floorYAll,   Y_BIN, true);
-            // Ceiling: farthest upward = highest Y, highest density there
             const ceilingY = farthestDensePeak(ceilingYAll, Y_BIN, false);
 
             // ── Pass 2: assign labels ────────────────────────────────────────
@@ -1489,30 +1488,34 @@
                 const hasLabel = existing !== -1 && existing !== undefined && existing !== null;
                 if (hasLabel && !overwriteExisting) return;
 
-                const n = normals[i] || { x: 0, y: 1, z: 0 };
+                const n    = normals[i] || { x: 0, y: 1, z: 0 };
                 const ny   = n.y;
                 const hMag = Math.sqrt(n.x * n.x + n.z * n.z);
 
                 if (ny > 0.7) {
-                    // Upward-facing: floor if at farthest-downward dense Y, else object top
-                    labels[i] = (floorY !== null && Math.abs(p.y - floorY) < tolerance * 0.5) ? 0 : 5;
+                    // Floor: height-based (whole floor, not just farthest strip)
+                    labels[i] = (floorY !== null && p.y <= floorY + tolerance * 0.5) ? 0 : 5;
                 } else if (ny < -0.7) {
-                    // Downward-facing: ceiling if at farthest-upward dense Y, else protrusion/object
-                    labels[i] = (ceilingY !== null && Math.abs(p.y - ceilingY) < tolerance * 0.5) ? 1 : 5;
-                } else if (hMag > 0.7 && Math.abs(ny) < 0.5) {
-                    // Vertical: wall if at farthest dense distance for this direction
-                    const dx = p.x - cx, dz = p.z - cz;
-                    const hDist  = Math.sqrt(dx * dx + dz * dz);
-                    const angle  = Math.atan2(dz, dx) * 180 / Math.PI;
-                    const bucket = Math.round(angle / BUCKET_DEG) * BUCKET_DEG;
-                    // Check current bucket and ±5° neighbours
-                    const planeDist = [-5, 0, 5]
-                        .map(off => wallPlaneDist[bucket + off])
+                    // Ceiling: height-based
+                    labels[i] = (ceilingY !== null && p.y >= ceilingY - tolerance * 0.5) ? 1 : 5;
+                } else if (hMag > 0.5 && Math.abs(ny) < 0.7) {
+                    // Wall: project onto normal axis, compare to farthest plane
+                    const nx_n = n.x / hMag;
+                    const nz_n = n.z / hMag;
+                    const proj = p.x * nx_n + p.z * nz_n;
+
+                    const normAngle = Math.atan2(n.z, n.x) * 180 / Math.PI;
+                    const bucket    = Math.round(normAngle / BUCKET_DEG) * BUCKET_DEG;
+
+                    // Search ±15° neighbours for curved/uneven walls
+                    const planeDist = [-15, -10, -5, 0, 5, 10, 15]
+                        .map(off => wallPlaneProj[bucket + off])
                         .filter(d => d !== undefined)
-                        .reduce((a, b) => Math.max(a, b), 0);
-                    labels[i] = (planeDist > 0 && hDist >= planeDist - tolerance) ? 2 : 3;
+                        .reduce((a, b) => Math.max(a, b), -Infinity);
+
+                    labels[i] = (isFinite(planeDist) && proj >= planeDist - tolerance) ? 2 : 3;
                 } else {
-                    labels[i] = 3;  // ambiguous normal → object
+                    labels[i] = 3;
                 }
                 classified++;
             });
