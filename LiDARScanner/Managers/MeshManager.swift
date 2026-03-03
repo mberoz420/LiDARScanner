@@ -462,12 +462,14 @@ class MeshManager: NSObject, ObservableObject {
     func toggleCamera() {
         guard let arView = arView, currentMode == .organic else { return }
 
-        // In hybrid mode both cameras are already running simultaneously — no toggle needed.
-        if hybridFaceTracking { return }
-
-        if usingFrontCamera {
+        if hybridFaceTracking && !usingFrontCamera {
+            // HYBRID (rear+TrueDepth) → front-only face tracking
+            startFaceTracking(arView: arView)
+        } else if usingFrontCamera {
+            // Front-only → back to hybrid (rear LiDAR + TrueDepth)
             startLiDARTracking(arView: arView)
         } else if faceTrackingAvailable {
+            // Non-hybrid device: rear → front
             startFaceTracking(arView: arView)
         }
     }
