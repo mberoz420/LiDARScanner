@@ -70,27 +70,21 @@ class TrainingDataExporter: ObservableObject {
 
     // MARK: - Export Methods
 
-    /// Export a captured scan with automatic labels from surface classification
+    /// Export a captured scan — points are exported unlabeled (-1) for classification
+    /// in PointCloudLabeler using the farthest-plane + highest-density algorithm.
     func exportScanWithAutoLabels(_ scan: CapturedScan, classifier: SurfaceClassifier) async -> URL? {
         isExporting = true
         exportProgress = 0
 
         var labeledPoints: [LabeledPoint] = []
-        var labelCounts: [String: Int] = [:]
 
         let totalMeshes = scan.meshes.count
 
         for (index, mesh) in scan.meshes.enumerated() {
-            // Update progress
             exportProgress = Float(index) / Float(totalMeshes)
 
-            // Classify this mesh
-            let avgNormal = computeAverageNormal(mesh.normals)
-            let avgY = mesh.vertices.map { $0.y }.reduce(0, +) / Float(max(mesh.vertices.count, 1))
-            let surfaceType = classifier.classifySurface(averageNormal: avgNormal, worldY: avgY)
-            let label = PointLabel.from(surfaceType: surfaceType)
-
-            // Transform vertices and normals to world space
+            // Transform vertices and normals to world space — label left as -1 (unlabeled)
+            // Classification is handled by PointCloudLabeler's smart classifier
             for i in 0..<min(mesh.vertices.count, mesh.normals.count) {
                 let worldPos = transformPoint(mesh.vertices[i], by: mesh.transform)
                 let worldNormal = transformNormal(mesh.normals[i], by: mesh.transform)
@@ -102,10 +96,9 @@ class TrainingDataExporter: ObservableObject {
                     nx: worldNormal.x,
                     ny: worldNormal.y,
                     nz: worldNormal.z,
-                    label: label.rawValue
+                    label: -1
                 )
                 labeledPoints.append(point)
-                labelCounts[label.name, default: 0] += 1
             }
         }
 
@@ -117,7 +110,7 @@ class TrainingDataExporter: ObservableObject {
             points: labeledPoints,
             roomHeight: classifier.statistics.estimatedRoomHeight,
             floorArea: classifier.statistics.floorArea,
-            labelCounts: labelCounts
+            labelCounts: ["unlabeled": labeledPoints.count]
         )
 
         // Save to file
@@ -191,25 +184,20 @@ class TrainingDataExporter: ObservableObject {
         return url
     }
 
-    /// Export to NumPy-compatible format (.npz style as JSON)
+    /// Export to NumPy-compatible format (.npz style as JSON) — unlabeled for PointCloudLabeler
     func exportAsNumpyFormat(_ scan: CapturedScan, classifier: SurfaceClassifier) async -> URL? {
         isExporting = true
 
         var points: [[Float]] = []  // N x 6 (x,y,z,nx,ny,nz)
-        var labels: [Int] = []      // N
+        var labels: [Int] = []      // N — all -1 (unlabeled), classify in PointCloudLabeler
 
         for mesh in scan.meshes {
-            let avgNormal = computeAverageNormal(mesh.normals)
-            let avgY = mesh.vertices.map { $0.y }.reduce(0, +) / Float(max(mesh.vertices.count, 1))
-            let surfaceType = classifier.classifySurface(averageNormal: avgNormal, worldY: avgY)
-            let label = PointLabel.from(surfaceType: surfaceType)
-
             for i in 0..<min(mesh.vertices.count, mesh.normals.count) {
                 let worldPos = transformPoint(mesh.vertices[i], by: mesh.transform)
                 let worldNormal = transformNormal(mesh.normals[i], by: mesh.transform)
 
                 points.append([worldPos.x, worldPos.y, worldPos.z, worldNormal.x, worldNormal.y, worldNormal.z])
-                labels.append(label.rawValue)
+                labels.append(-1)
             }
         }
 
