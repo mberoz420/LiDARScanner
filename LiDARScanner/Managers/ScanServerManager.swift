@@ -8,7 +8,7 @@ class ScanServerManager: ObservableObject {
     static let shared = ScanServerManager()
 
     // ── Configuration — must match UPLOAD_API_KEY in server/includes/config.php ──
-    private let serverURL = "https://scan-wizard.robo-wizard.com/upload.php"
+    private let serverURL = "https://scanwizard.robo-wizard.com/upload.php"
     private let apiKey    = "CHANGE_THIS_TO_YOUR_SECRET_KEY"  // ← same as config.php
 
     @Published var isUploading = false

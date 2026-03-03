@@ -19,7 +19,7 @@ import time
 import sys
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-SERVER_URL    = "https://scan-wizard.robo-wizard.com"
+SERVER_URL    = "https://scanwizard.robo-wizard.com"
 MANIFEST_URL  = f"{SERVER_URL}/scans/manifest.json"
 POLL_INTERVAL = 5   # seconds between manifest checks
 # ──────────────────────────────────────────────────────────────────────────────
