@@ -126,14 +126,6 @@ struct ContentView: View {
                         action: { selectedMode = .organic }
                     )
 
-                    // Test
-                    MainMenuSquare(
-                        title: "Test",
-                        icon: ScanMode.test.icon,
-                        color: ScanMode.test.color,
-                        action: { selectedMode = .test }
-                    )
-
                     // Photogrammetry
                     MainMenuSquare(
                         title: "Photogrammetry",
