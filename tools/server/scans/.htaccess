@@ -1,0 +1,7 @@
+# Allow reading JSON scan files (needed by PointCloudLabeler.html)
+# but block directory listing
+Options -Indexes
+
+# Allow JSON reads without password (the HTML fetches these via JS)
+Satisfy Any
+Allow from all

@@ -20,8 +20,8 @@ struct ScannerView: View {
         var message: String {
             switch self {
             case .idle: return ""
-            case .saving: return "Saving to Google Drive…"
-            case .success: return "Saved to Google Drive"
+            case .saving: return "Uploading to ScanWizard…"
+            case .success: return "Saved to ScanWizard"
             case .failed(let err): return "Auto-save failed: \(err)"
             }
         }
@@ -252,7 +252,7 @@ struct ScannerView: View {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
             if AppSettings.shared.autoSaveAfterScan {
-                Task { await autoSaveToGoogleDrive() }
+                Task { await autoSaveToServer() }
             }
         } else {
             capturedScan = nil
@@ -260,17 +260,9 @@ struct ScannerView: View {
         }
     }
 
-    private func autoSaveToGoogleDrive() async {
+    private func autoSaveToServer() async {
         guard let scan = capturedScan else {
             autoSaveStatus = .failed("No scan data")
-            dismissStatusAfterDelay()
-            return
-        }
-
-        let drive = GoogleDriveManager.shared
-
-        guard drive.isConfigured else {
-            autoSaveStatus = .failed("Set up Google Drive in Settings")
             dismissStatusAfterDelay()
             return
         }
@@ -284,9 +276,12 @@ struct ScannerView: View {
             return
         }
 
-        let success = await drive.uploadFile(at: fileURL, mimeType: "application/json")
+        let server = ScanServerManager.shared
+        let filename = await server.uploadFile(at: fileURL)
 
-        autoSaveStatus = success ? .success : .failed(drive.lastError ?? "Upload failed")
+        autoSaveStatus = filename != nil
+            ? .success
+            : .failed(server.lastError ?? "Upload failed")
         dismissStatusAfterDelay()
     }
 

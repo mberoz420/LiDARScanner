@@ -1,0 +1,281 @@
+/* ScanWizard — CSS
+   Mirrors Robo-Wizard's exact color system, card style, and layout.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+    --primary:      #3b82f6;
+    --primary-dark: #1d4ed8;
+    --secondary:    #64748b;
+    --success:      #22c55e;
+    --warning:      #f59e0b;
+    --danger:       #ef4444;
+    --dark:         #0f172a;
+    --slate:        #1e293b;
+    --light:        #f1f5f9;
+    --border:       #e2e8f0;
+    --amber:        #fbbf24;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: var(--light);
+    color: var(--dark);
+    line-height: 1.6;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Hero Header ────────────────────────────────────────────────────────────
+   Matches Robo-Wizard's .hero-section exactly */
+.hero-section {
+    background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 50%, #1e40af 100%);
+    padding: 0.6rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+}
+
+.hero-logo svg { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); }
+
+.hero-center {
+    flex: 1;
+    text-align: center;
+}
+.hero-tagline {
+    font-size: 1.1rem;
+    color: white;
+    font-weight: 600;
+}
+.hero-tagline .highlight {
+    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 800;
+}
+
+/* ── User Menu ─────────────────────────────────────────────────────────────── */
+.hero-right { flex-shrink: 0; }
+
+.user-menu { position: relative; }
+
+.user-btn {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+.user-btn:hover { background: rgba(255,255,255,0.25); }
+
+.user-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--amber);
+    color: var(--dark);
+    font-weight: 800; font-size: 0.85rem;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+
+.user-dropdown {
+    display: none;
+    position: absolute; right: 0; top: calc(100% + 8px);
+    background: white; border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    min-width: 200px; overflow: hidden;
+    border: 1px solid var(--border);
+    z-index: 200;
+}
+.user-dropdown.open { display: block; }
+
+.dropdown-email {
+    padding: 12px 16px;
+    font-size: 0.8rem; color: var(--secondary);
+    border-bottom: 1px solid var(--border);
+    background: var(--light);
+}
+
+.dropdown-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px;
+    text-decoration: none; font-size: 0.9rem;
+    color: var(--dark); transition: background 0.15s;
+}
+.dropdown-item:hover { background: var(--light); }
+.dropdown-item.danger { color: var(--danger); }
+.dropdown-item.danger:hover { background: #fef2f2; }
+
+/* ── Container ─────────────────────────────────────────────────────────────── */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+    flex: 1;
+}
+
+/* ── Stats Bar (matches Robo-Wizard .stats-bar) ─────────────────────────────── */
+.stats-bar {
+    display: flex;
+    justify-content: center;
+    gap: 3rem;
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.stat { text-align: center; }
+.stat-value {
+    display: block;
+    font-size: 2rem; font-weight: 700;
+    color: var(--primary);
+}
+.stat-label { color: var(--secondary); font-size: 0.9rem; }
+
+/* ── Section Header ─────────────────────────────────────────────────────────── */
+.section-header {
+    display: flex; align-items: baseline; gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+.section-header h2 { font-size: 1.25rem; color: var(--dark); }
+.section-sub { color: var(--secondary); font-size: 0.85rem; }
+
+/* ── Scan Grid (mirrors .product-grid) ─────────────────────────────────────── */
+.scan-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+}
+
+/* ── Scan Card (mirrors .product-card) ─────────────────────────────────────── */
+.scan-card {
+    background: white;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    transition: transform 0.2s, box-shadow 0.2s;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.scan-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+}
+
+.scan-card-header {
+    display: flex; align-items: flex-start; gap: 0.75rem;
+}
+.scan-icon {
+    width: 44px; height: 44px;
+    background: linear-gradient(135deg, #eff6ff, #dbeafe);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--primary);
+    flex-shrink: 0;
+}
+.scan-meta { flex: 1; }
+.scan-date { display: block; font-weight: 600; font-size: 0.95rem; color: var(--dark); }
+.scan-time { display: block; font-size: 0.8rem; color: var(--secondary); }
+
+.scan-age {
+    font-size: 0.75rem;
+    background: var(--light);
+    color: var(--secondary);
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+
+.scan-filename {
+    font-size: 0.78rem;
+    color: var(--secondary);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: var(--light);
+    padding: 4px 8px;
+    border-radius: 6px;
+    word-break: break-all;
+}
+
+.scan-points {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 0.85rem; color: var(--secondary);
+}
+
+.scan-actions {
+    display: flex; gap: 0.5rem; margin-top: auto;
+}
+
+.btn-view {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 0.6rem 1rem;
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+    color: white;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 0.9rem; font-weight: 600;
+    transition: all 0.2s;
+}
+.btn-view:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59,130,246,0.4);
+}
+
+.btn-delete {
+    width: 38px; height: 38px;
+    display: flex; align-items: center; justify-content: center;
+    background: #fef2f2;
+    color: var(--danger);
+    border: none; border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+.btn-delete:hover { background: #fee2e2; }
+.btn-delete:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Empty State ────────────────────────────────────────────────────────────── */
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.empty-icon { font-size: 3rem; margin-bottom: 1rem; }
+.empty-state h3 { font-size: 1.25rem; color: var(--dark); margin-bottom: 0.5rem; }
+.empty-state p  { color: var(--secondary); }
+
+/* ── Footer ─────────────────────────────────────────────────────────────────── */
+footer {
+    text-align: center;
+    padding: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--secondary);
+    font-size: 0.85rem;
+}
+footer a { color: var(--primary); text-decoration: none; }
+footer a:hover { text-decoration: underline; }
+
+/* ── Responsive ─────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .hero-section { padding: 0.6rem 1rem; }
+    .hero-tagline { font-size: 0.9rem; }
+    .user-name    { display: none; }
+    .container    { padding: 1rem; }
+    .stats-bar    { gap: 1.5rem; }
+    .stat-value   { font-size: 1.5rem; }
+    .scan-grid    { grid-template-columns: 1fr; }
+}
