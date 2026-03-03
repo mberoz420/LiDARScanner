@@ -258,6 +258,7 @@ struct ScannerView: View {
         }
     }
 
+    @MainActor
     private func autoSaveToServer() async {
         guard let scan = capturedScan else {
             autoSaveStatus = .failed("No scan data")

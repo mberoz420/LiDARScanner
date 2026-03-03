@@ -9,7 +9,7 @@ class ScanServerManager: ObservableObject {
 
     // ── Configuration — must match UPLOAD_API_KEY in server/includes/config.php ──
     private let serverURL = "https://scanwizard.robo-wizard.com/upload.php"
-    private let apiKey    = "CHANGE_THIS_TO_YOUR_SECRET_KEY"  // ← same as config.php
+    private let apiKey    = "ScanWizard2025Secret"  // ← must match UPLOAD_API_KEY in config.php
 
     @Published var isUploading = false
     @Published var lastError: String?
