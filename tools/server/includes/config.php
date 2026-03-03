@@ -1,27 +1,25 @@
 <?php
 /**
  * ScanWizard — Configuration
- * Update DB_* and UPLOAD_API_KEY before deploying to Hostinger.
  */
 
-// ── Database (create a MySQL DB in Hostinger hPanel first) ─────────────────
+// ── Database ─────────────────────────────────────────────────────────────────
 define('DB_HOST',    'localhost');
-define('DB_NAME',    'scanwizard');      // your Hostinger DB name
-define('DB_USER',    'CHANGE_ME');       // your Hostinger DB username
-define('DB_PASS',    'CHANGE_ME');       // your Hostinger DB password
+define('DB_NAME',    'u429345666_mberoz');
+define('DB_USER',    'u429345666_mberoz');
+define('DB_PASS',    'mberoZ42039@@@');
 define('DB_CHARSET', 'utf8mb4');
 
-// ── Application ─────────────────────────────────────────────────────────────
-define('APP_NAME',       'ScanWizard');
-define('APP_URL',        'https://scan-wizard.robo-wizard.com');
-define('APP_VERSION',    '1.0.0');
+// ── Application ──────────────────────────────────────────────────────────────
+define('APP_NAME',    'ScanWizard');
+define('APP_URL',     'https://scanwizard.robo-wizard.com');
+define('APP_VERSION', '1.0.0');
 
-// ── iOS App Upload Key ───────────────────────────────────────────────────────
-// Must match ScanServerManager.API_KEY in the iOS app
-define('UPLOAD_API_KEY', 'CHANGE_THIS_TO_YOUR_SECRET_KEY');
+// ── iOS App Upload Key (must match ScanServerManager.swift) ──────────────────
+define('UPLOAD_API_KEY', 'ScanWizard2025Secret');
 
 // ── Limits ───────────────────────────────────────────────────────────────────
-define('MAX_UPLOAD_MB', 128);
+define('MAX_UPLOAD_MB',        128);
 define('MAX_SCANS_IN_MANIFEST', 200);
 
 // ── Paths ────────────────────────────────────────────────────────────────────
@@ -29,8 +27,8 @@ define('ROOT_PATH',     dirname(__DIR__));
 define('INCLUDES_PATH', __DIR__);
 define('SCANS_PATH',    ROOT_PATH . '/scans');
 
-// ── Error reporting (set to 0 in production) ─────────────────────────────────
-error_reporting(E_ALL);
-ini_set('display_errors', 0);   // never show errors to users
+// ── Error reporting ──────────────────────────────────────────────────────────
+error_reporting(0);
+ini_set('display_errors', 0);
 
 date_default_timezone_set('UTC');
