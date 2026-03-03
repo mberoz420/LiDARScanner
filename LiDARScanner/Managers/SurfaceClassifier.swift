@@ -550,7 +550,7 @@ class SurfaceClassifier: ObservableObject {
     private var maxFloorDistance: Float = 0      // Farthest downward point during floor phase
     private var maxCeilingDistance: Float = 0    // Farthest upward point during ceiling phase
     private var maxWallDistance: Float = 0       // Farthest horizontal point during wall phase
-    private let distanceTolerance: Float = 0.3   // 30cm tolerance for "farthest" classification
+    private let distanceTolerance: Float = 0.5   // 50cm tolerance for "farthest" classification
 
     // MARK: - Detected Room Planes (infinite planes fitted to point clusters)
     // These are scaled 5x to ensure no holes - planes are infinite by definition
@@ -670,7 +670,7 @@ class SurfaceClassifier: ObservableObject {
     private var wallMeasurementOrigin: SIMD3<Float>?
 
     /// Tolerance for wall distance matching (surfaces within this of farthest = wall)
-    private let wallDistanceTolerance: Float = 0.3  // 30cm tolerance
+    private let wallDistanceTolerance: Float = 0.5  // 50cm tolerance
 
     // MARK: - Back Reflection Detection
 
@@ -1002,9 +1002,9 @@ class SurfaceClassifier: ObservableObject {
         addPointToCluster(point: worldPosition, normal: averageNormal, distance: distanceFromCamera)
 
         // Need enough samples before classifying (wait for max distances to stabilize)
-        let hasEnoughFloorSamples = floorHeightSamples.count >= 20
-        let hasEnoughCeilingSamples = ceilingHeightSamples.count >= 20
-        let hasEnoughWallSamples = maxWallDistance > 0.5  // At least 50cm
+        let hasEnoughFloorSamples = floorHeightSamples.count >= 8
+        let hasEnoughCeilingSamples = ceilingHeightSamples.count >= 8
+        let hasEnoughWallSamples = maxWallDistance > 0.3  // At least 30cm
 
         // Floor detection: upward normal + farthest + at floor height (lowest dense cluster)
         if normalY > 0.7 {
@@ -1067,21 +1067,42 @@ class SurfaceClassifier: ObservableObject {
             return .object  // Furniture against wall
         }
 
-        // Tilted surfaces - also check distance
+        // Helper: check if this point is at wall distance in its horizontal direction
+        // Used to rescue bumpy wall normals that missed the strict wall check above
+        func isAtWallDistance() -> Bool {
+            guard horizontalMag > 0.4 else { return false }
+            guard !wallDistanceByAngle.isEmpty || hasEnoughWallSamples else { return false }
+            let origin = wallMeasurementOrigin ?? camPos
+            let hdx = worldPosition.x - origin.x
+            let hdz = worldPosition.z - origin.z
+            let horizontalDist = sqrt(hdx * hdx + hdz * hdz)
+            let dirAngle = atan2(hdz, hdx) * 180 / Float.pi
+            let dirBucket = Int(round(dirAngle / 5)) * 5
+            let maxDistForDir = [-5, 0, 5].compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
+                ?? maxWallDistance
+            return horizontalDist >= maxDistForDir - wallDistanceTolerance
+        }
+
+        // Tilted surfaces — old/bumpy walls have normals up to 45° from horizontal.
+        // Before giving up on a point, check if it's at wall distance.
         if normalY > 0.5 {
             if !hasEnoughFloorSamples {
-                return .objectTop
+                return isAtWallDistance() ? .wall : .objectTop
             }
             let atFarthestDistance = distanceFromCamera >= maxFloorDistance - distanceTolerance
-            let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.15)
-            return (atFarthestDistance && atFloorHeight) ? .floor : .objectTop
+            let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.2)
+            if atFarthestDistance && atFloorHeight { return .floor }
+            // Not a floor point — bumpy wall with upward tilt?
+            return isAtWallDistance() ? .wall : .objectTop
         } else if normalY < -0.5 {
             if !hasEnoughCeilingSamples {
-                return .objectTop
+                return isAtWallDistance() ? .wall : .objectTop
             }
             let atFarthestDistance = distanceFromCamera >= maxCeilingDistance - distanceTolerance
-            let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
-            return (atFarthestDistance && atCeilingHeight) ? .ceiling : .objectTop
+            let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.2)
+            if atFarthestDistance && atCeilingHeight { return .ceiling }
+            // Not a ceiling point — bumpy wall with downward tilt?
+            return isAtWallDistance() ? .wall : .objectTop
         } else if horizontalMag > 0.5 {
             if wallDistanceByAngle.isEmpty && !hasEnoughWallSamples {
                 return .object
