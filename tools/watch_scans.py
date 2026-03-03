@@ -105,13 +105,17 @@ class LabelerHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         # Suppress routine GET logs — only show scan loads
-        if '/scans/' in (args[0] if args else ''):
-            print(f"[Server] Serving scan: {args[0]}")
+        first = str(args[0]) if args else ''
+        if '/scans/' in first:
+            print(f"[Server] Serving scan: {first}")
+
+
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True  # Must be class-level on Windows
 
 
 def start_server():
-    with socketserver.TCPServer(('', PORT), LabelerHTTPHandler) as httpd:
-        httpd.allow_reuse_address = True
+    with ReusableTCPServer(('', PORT), LabelerHTTPHandler) as httpd:
         print(f"[Server] Serving labeler at http://localhost:{PORT}")
         httpd.serve_forever()
 
