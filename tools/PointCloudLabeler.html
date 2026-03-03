@@ -110,10 +110,77 @@
             position: absolute;
             top: 20px;
             left: 20px;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.85);
             padding: 10px 15px;
             border-radius: 8px;
-            font-size: 14px;
+            font-size: 12px;
+            max-width: 320px;
+            line-height: 1.6;
+        }
+        #selection-info .diag-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 2px 0;
+        }
+        #selection-info .diag-row:last-child { border-bottom: none; }
+        #selection-info .diag-key { color: #888; }
+        #selection-info .diag-val { color: #fff; font-family: monospace; }
+        #selection-info .diag-warn { color: #e74c3c; font-family: monospace; }
+        #selection-info .diag-ok   { color: #2ecc71; font-family: monospace; }
+        #diag-copy {
+            margin-top: 6px;
+            padding: 4px 10px;
+            background: #0f3460;
+            border: 1px solid #3498db;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 11px;
+            cursor: pointer;
+            width: 100%;
+        }
+        #diag-copy:hover { background: #3498db; }
+
+        /* Orthographic view badge */
+        #ortho-badge {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(52,152,219,0.85);
+            color: #fff;
+            padding: 4px 14px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            display: none;
+            pointer-events: none;
+        }
+
+        /* Scale bar */
+        #scale-bar {
+            position: absolute;
+            bottom: 60px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 3px;
+            pointer-events: none;
+        }
+        #scale-bar-label {
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+        }
+        #scale-bar-line {
+            height: 8px;
+            border: 2px solid #fff;
+            border-top: none;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.9);
+            min-width: 40px;
         }
 
         #height-info {
@@ -278,8 +345,13 @@
     <div id="container">
         <div id="viewer">
             <div id="selection-info">Select points with mouse. Hold Shift for multi-select.</div>
+            <div id="ortho-badge">ORTHOGRAPHIC</div>
             <div id="height-info">Y Range: <span id="y-range">--</span></div>
             <div id="info">Drag to rotate | Scroll to zoom | Right-drag to pan</div>
+            <div id="scale-bar">
+                <div id="scale-bar-label">--</div>
+                <div id="scale-bar-line" style="width:80px"></div>
+            </div>
         </div>
         <div id="sidebar">
             <h1>Point Cloud Labeler</h1>
@@ -469,7 +541,7 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script>
         // Global state
-        let scene, camera, renderer, controls;
+        let scene, camera, perspCamera, orthoCamera, renderer, controls;
         let pointCloud, points = [], labels = [], normals = [], rgbColors = [];
         let selectedIndices = new Set();
         let deletedIndices = new Set();
@@ -480,6 +552,7 @@
         let minY = 0, maxY = 1;
         let sceneCenter = {x: 0, y: 0, z: 0};
         let sceneSize = 10;
+        let currentViewMode = 'perspective';  // 'perspective' | 'ortho'
 
         // Custom labels (start from index 10 to avoid conflicts)
         let customLabels = [];
@@ -511,10 +584,34 @@
 
         const SELECTION_COLOR = 0xffffff;
 
-        // Camera view presets
+        // Camera view presets — perspective uses PerspectiveCamera,
+        // all orthogonal views use OrthographicCamera for true 2D projection.
         function setView(view) {
-            const dist = sceneSize * 2;
+            const dist = sceneSize * 2.5;
             const c = sceneCenter;
+            const isPerspective = (view === 'perspective');
+
+            // Switch camera type
+            if (isPerspective && currentViewMode !== 'perspective') {
+                currentViewMode = 'perspective';
+                camera = perspCamera;
+                if (controls) controls.dispose();
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                document.getElementById('ortho-badge').style.display = 'none';
+                document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan';
+            } else if (!isPerspective && currentViewMode === 'perspective') {
+                currentViewMode = 'ortho';
+                camera = orthoCamera;
+                if (controls) controls.dispose();
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+                document.getElementById('ortho-badge').style.display = 'block';
+                document.getElementById('info').textContent = 'Drag to pan | Scroll to zoom | (true orthographic)';
+                // Resize ortho frustum to fit scene
+                updateOrthoFrustum();
+            }
 
             switch(view) {
                 case 'top':
@@ -543,7 +640,7 @@
                     break;
                 case 'perspective':
                 default:
-                    camera.position.set(c.x + dist * 0.5, c.y + dist * 0.5, c.z + dist);
+                    camera.position.set(c.x + dist * 0.4, c.y + dist * 0.4, c.z + dist * 0.8);
                     camera.up.set(0, 1, 0);
                     break;
             }
@@ -551,6 +648,19 @@
             controls.target.set(c.x, c.y, c.z);
             camera.lookAt(c.x, c.y, c.z);
             controls.update();
+        }
+
+        function updateOrthoFrustum() {
+            if (!orthoCamera || !renderer) return;
+            const aspect = renderer.domElement.width / renderer.domElement.height;
+            const halfH = sceneSize * 1.2;
+            const halfW = halfH * aspect;
+            orthoCamera.left   = -halfW;
+            orthoCamera.right  =  halfW;
+            orthoCamera.top    =  halfH;
+            orthoCamera.bottom = -halfH;
+            orthoCamera.zoom   = 1;
+            orthoCamera.updateProjectionMatrix();
         }
 
         // Custom labels management
@@ -901,8 +1011,14 @@
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x1a1a2e);
 
-            camera = new THREE.PerspectiveCamera(60, viewer.clientWidth / viewer.clientHeight, 0.01, 10000);
-            camera.position.set(5, 5, 5);
+            perspCamera = new THREE.PerspectiveCamera(60, viewer.clientWidth / viewer.clientHeight, 0.01, 10000);
+            perspCamera.position.set(5, 5, 5);
+
+            const aspect = viewer.clientWidth / viewer.clientHeight;
+            orthoCamera = new THREE.OrthographicCamera(-10*aspect, 10*aspect, 10, -10, 0.01, 10000);
+            orthoCamera.position.set(0, 20, 0);
+
+            camera = perspCamera;  // start in perspective
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(viewer.clientWidth, viewer.clientHeight);
@@ -937,13 +1053,53 @@
             requestAnimationFrame(animate);
             controls.update();
             renderer.render(scene, camera);
+            updateScaleBar();
+        }
+
+        function updateScaleBar() {
+            const barEl = document.getElementById('scale-bar-line');
+            const lblEl = document.getElementById('scale-bar-label');
+            if (!barEl || !camera) return;
+
+            // Compute world-units per pixel at scene centre depth
+            let metersPerPixel;
+            const W = renderer.domElement.width;
+            const H = renderer.domElement.height;
+
+            if (currentViewMode === 'ortho') {
+                // Ortho: visible world width = (right - left) / zoom
+                const visW = (orthoCamera.right - orthoCamera.left) / orthoCamera.zoom;
+                metersPerPixel = visW / W;
+            } else {
+                // Perspective: approx from FOV + distance to scene center
+                const dist = camera.position.distanceTo(
+                    new THREE.Vector3(sceneCenter.x, sceneCenter.y, sceneCenter.z));
+                const fovRad = (perspCamera.fov * Math.PI) / 180;
+                const visH = 2 * Math.tan(fovRad / 2) * dist;
+                metersPerPixel = visH / H;
+            }
+
+            // Target bar width ~100px, round label to nice number
+            const targetPx = 100;
+            const rawMeters = targetPx * metersPerPixel;
+            const rawCm = rawMeters * 100;
+
+            // Round to nearest: 1, 2, 5, 10, 20, 50, 100, 200, 500 cm
+            const niceSteps = [1,2,5,10,20,50,100,200,500,1000,2000,5000];
+            const niceCm = niceSteps.find(s => s >= rawCm) || niceSteps[niceSteps.length-1];
+            const barPx = Math.round(niceCm / (metersPerPixel * 100));
+
+            barEl.style.width = barPx + 'px';
+            lblEl.textContent = niceCm >= 100 ? `${niceCm/100} m` : `${niceCm} cm`;
         }
 
         function onWindowResize() {
             const viewer = document.getElementById('viewer');
-            camera.aspect = viewer.clientWidth / viewer.clientHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(viewer.clientWidth, viewer.clientHeight);
+            const w = viewer.clientWidth, h = viewer.clientHeight;
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            if (currentViewMode === 'ortho') updateOrthoFrustum();
+            renderer.setSize(w, h);
         }
 
         function loadJSON(data) {
@@ -1073,8 +1229,94 @@
                 });
 
                 rebuildPointCloud();
-                document.getElementById('selection-info').textContent =
-                    `Selected ${selectedIndices.size.toLocaleString()} points`;
+                showSelectionDiagnostics();
+            }
+        }
+
+        function showSelectionDiagnostics() {
+            const el = document.getElementById('selection-info');
+            const count = selectedIndices.size;
+            if (count === 0) { el.textContent = 'No points selected.'; return; }
+
+            // Aggregate stats over selected points
+            let sx=0, sy=0, sz=0, snx=0, sny=0, snz=0;
+            const labelCount = {};
+            selectedIndices.forEach(i => {
+                const p = points[i], n = normals[i] || {x:0,y:0,z:0};
+                sx+=p.x; sy+=p.y; sz+=p.z;
+                snx+=n.x; sny+=n.y; snz+=n.z;
+                const l = labels[i] ?? -1;
+                labelCount[l] = (labelCount[l]||0)+1;
+            });
+            const n = count;
+            const ax=(sx/n).toFixed(3), ay=(sy/n).toFixed(3), az=(sz/n).toFixed(3);
+            const nx_=(snx/n).toFixed(3), ny_=(sny/n).toFixed(3), nz_=(snz/n).toFixed(3);
+            const normalY = sny/n;
+            const horizMag = Math.sqrt((snx/n)**2 + (snz/n)**2);
+
+            // Dominant label
+            const domLabel = Object.entries(labelCount).sort((a,b)=>b[1]-a[1])[0][0];
+            const domName = LABEL_NAMES[domLabel] || `custom(${domLabel})`;
+
+            // Classifier reasoning
+            let reason = '';
+            const absNY = Math.abs(normalY);
+            if (absNY > 0.7) {
+                reason = normalY > 0
+                    ? `normalY=${normalY.toFixed(3)} &gt; 0.7 → floor candidate → check height`
+                    : `normalY=${normalY.toFixed(3)} &lt; -0.7 → ceiling candidate → check height`;
+            } else if (absNY < 0.5 && horizMag > 0.7) {
+                reason = `horizMag=${horizMag.toFixed(3)}, abs(normalY)=${absNY.toFixed(3)} &lt; 0.5 → wall candidate → check farthest dist`;
+            } else if (absNY < 0.5 && horizMag > 0.5) {
+                reason = `horizMag=${horizMag.toFixed(3)}, abs(normalY)=${absNY.toFixed(3)} &lt; 0.5 → weak wall candidate`;
+            } else if (absNY >= 0.5 && absNY <= 0.7) {
+                reason = `abs(normalY)=${absNY.toFixed(3)} ∈ [0.5,0.7] → tilted surface → isAtWallDistance() fallback`;
+            } else {
+                reason = `horizMag=${horizMag.toFixed(3)}, abs(normalY)=${absNY.toFixed(3)} → classified as object`;
+            }
+
+            // Format cm helper
+            const cm = v => `${(parseFloat(v)*100).toFixed(1)} cm`;
+
+            // Build diagnostic text for clipboard copy
+            const diagText =
+                `Count: ${count}\n` +
+                `Avg pos: x=${ax} y=${ay} z=${az} (m)\n` +
+                `         x=${cm(ax)} y=${cm(ay)} z=${cm(az)}\n` +
+                `Avg normal: nx=${nx_} ny=${ny_} nz=${nz_}\n` +
+                `normalY: ${normalY.toFixed(4)}   abs(normalY): ${absNY.toFixed(4)}\n` +
+                `horizMag: ${horizMag.toFixed(4)}\n` +
+                `Label: ${domName}\n` +
+                `Reason: ${reason.replace(/&gt;/g,'>').replace(/&lt;/g,'<')}`;
+
+            const nyClass = absNY > 0.5 ? 'diag-warn' : 'diag-ok';
+            const hmClass = horizMag > 0.7 ? 'diag-ok' : (horizMag > 0.5 ? 'diag-warn' : 'diag-warn');
+
+            el.innerHTML =
+                `<div class="diag-row"><span class="diag-key">Selected</span><span class="diag-val">${count.toLocaleString()} pts</span></div>` +
+                `<div class="diag-row"><span class="diag-key">Avg X/Y/Z (m)</span><span class="diag-val">${ax}, ${ay}, ${az}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">Avg X/Y/Z (cm)</span><span class="diag-val">${cm(ax)}, ${cm(ay)}, ${cm(az)}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">Avg normal</span><span class="diag-val">${nx_}, ${ny_}, ${nz_}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">normalY</span><span class="${nyClass}">${normalY.toFixed(4)}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">abs(normalY)</span><span class="${nyClass}">${absNY.toFixed(4)}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">horizMag</span><span class="${hmClass}">${horizMag.toFixed(4)}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">Label</span><span class="diag-val">${domName}</span></div>` +
+                `<div class="diag-row"><span class="diag-key">Why</span><span class="diag-warn" style="font-size:10px;word-break:break-word">${reason}</span></div>` +
+                `<button id="diag-copy" onclick="copyDiagnostics()">📋 Copy diagnostics</button>`;
+
+            el._diagText = diagText;
+        }
+
+        function copyDiagnostics() {
+            const el = document.getElementById('selection-info');
+            if (el._diagText) {
+                navigator.clipboard.writeText(el._diagText).then(() => {
+                    document.getElementById('diag-copy').textContent = '✓ Copied!';
+                    setTimeout(() => {
+                        const btn = document.getElementById('diag-copy');
+                        if (btn) btn.textContent = '📋 Copy diagnostics';
+                    }, 2000);
+                });
             }
         }
 
