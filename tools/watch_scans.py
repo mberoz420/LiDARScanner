@@ -24,30 +24,49 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-SCAN_FOLDER  = r"G:\My Drive\LidarScans"
+SCAN_FOLDER  = r"G:\My Drive\LidarScans\json"
 TOOLS_FOLDER = os.path.dirname(os.path.abspath(__file__))
 PORT         = 8765
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 class ScanFileHandler(FileSystemEventHandler):
-    """Opens the labeler whenever a new .json scan file is written."""
+    """Opens the labeler whenever a new .json scan file is written.
 
-    def on_created(self, event):
-        if event.is_directory:
+    Google Drive syncs files by writing a temp file then renaming it,
+    so we watch both on_created and on_moved (rename = final file ready).
+    """
+
+    _opened = set()  # Avoid opening the same file twice
+
+    def _open_scan(self, path):
+        if path.lower().endswith('.gdoc'):
+            return  # Skip Google Docs stubs
+        if not path.lower().endswith('.json'):
             return
-        if not event.src_path.lower().endswith('.json'):
+        if path in self._opened:
             return
 
-        filename = os.path.basename(event.src_path)
-        print(f"\n[Watcher] New scan detected: {filename}")
+        filename = os.path.basename(path)
+        self._opened.add(path)
 
-        # Wait briefly to ensure the file is fully written by Google Drive sync
+        print(f"\n[Watcher] New scan: {filename}")
+
+        # Wait for Google Drive to finish writing
         time.sleep(2)
 
         url = f"http://localhost:{PORT}/?scan={filename}"
         print(f"[Watcher] Opening: {url}")
         webbrowser.open(url)
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self._open_scan(event.src_path)
+
+    def on_moved(self, event):
+        # Google Drive renames temp → final file
+        if not event.is_directory:
+            self._open_scan(event.dest_path)
 
 
 class LabelerHTTPHandler(http.server.SimpleHTTPRequestHandler):

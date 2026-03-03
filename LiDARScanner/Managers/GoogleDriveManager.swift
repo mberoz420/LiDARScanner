@@ -286,8 +286,19 @@ class GoogleDriveManager: NSObject, ObservableObject {
         }
     }
 
+    // Scans are stored in LidarScans/json in Google Drive
+    private let scanSubfolderName = "json"
+
     private func findOrCreateFolder() async throws -> String {
-        let query = "name='\(folderName)' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        let parentId = try await findOrCreateNamedFolder(name: folderName, parentId: nil)
+        return try await findOrCreateNamedFolder(name: scanSubfolderName, parentId: parentId)
+    }
+
+    private func findOrCreateNamedFolder(name: String, parentId: String?) async throws -> String {
+        var query = "name='\(name)' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        if let pid = parentId {
+            query += " and '\(pid)' in parents"
+        }
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
 
         var searchRequest = URLRequest(url: URL(string: "\(driveFilesURL)?q=\(encodedQuery)")!)
@@ -296,7 +307,7 @@ class GoogleDriveManager: NSObject, ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: searchRequest)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw NSError(domain: "GoogleDrive", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to search for folder"])
+            throw NSError(domain: "GoogleDrive", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to search for folder '\(name)'"])
         }
 
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -306,31 +317,34 @@ class GoogleDriveManager: NSObject, ObservableObject {
             return folderId
         }
 
-        // Create new folder
-        return try await createFolder()
+        // Create folder (inside parentId if provided)
+        return try await createNamedFolder(name: name, parentId: parentId)
     }
 
-    private func createFolder() async throws -> String {
+    private func createNamedFolder(name: String, parentId: String?) async throws -> String {
         var request = URLRequest(url: URL(string: driveFilesURL)!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let folderMetadata: [String: Any] = [
-            "name": folderName,
+        var folderMetadata: [String: Any] = [
+            "name": name,
             "mimeType": "application/vnd.google-apps.folder"
         ]
+        if let pid = parentId {
+            folderMetadata["parents"] = [pid]
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: folderMetadata)
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw NSError(domain: "GoogleDrive", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to create folder"])
+            throw NSError(domain: "GoogleDrive", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to create folder '\(name)'"])
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let folderId = json["id"] as? String else {
-            throw NSError(domain: "GoogleDrive", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid folder response"])
+            throw NSError(domain: "GoogleDrive", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid folder response for '\(name)'"])
         }
 
         return folderId
