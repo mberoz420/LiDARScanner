@@ -223,6 +223,38 @@ struct MainMenuSquare: View {
     }
 }
 
+// MARK: - Auto-Save Status
+
+enum AutoSaveStatus {
+    case idle
+    case saving
+    case success
+    case failed(String)
+
+    var message: String {
+        switch self {
+        case .idle:            return ""
+        case .saving:          return "Uploading to ScanWizard…"
+        case .success:         return "Saved to ScanWizard ✓"
+        case .failed(let err): return "Upload failed: \(err)"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .saving:  return .blue
+        case .success: return .green
+        case .failed:  return .red
+        default:       return .clear
+        }
+    }
+
+    var isVisible: Bool {
+        if case .idle = self { return false }
+        return true
+    }
+}
+
 // MARK: - Scan Mode View (Full Screen)
 
 struct ScanModeView: View {
@@ -242,6 +274,7 @@ struct ScanModeView: View {
     @State private var isLoadingSession = false
     @State private var repairModeEnabled = false
     @State private var loadError: String?
+    @State private var autoSaveStatus: AutoSaveStatus = .idle
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -278,6 +311,34 @@ struct ScanModeView: View {
             if mode == .test {
                 TestModeOverlayView(detector: meshManager.testModeDetector)
                     .edgesIgnoringSafeArea(.all)
+            }
+
+            // Auto-save status banner
+            if autoSaveStatus.isVisible {
+                VStack {
+                    HStack(spacing: 8) {
+                        if case .saving = autoSaveStatus {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: {
+                                if case .success = autoSaveStatus { return "checkmark.circle.fill" }
+                                return "exclamationmark.circle.fill"
+                            }())
+                        }
+                        Text(autoSaveStatus.message)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(autoSaveStatus.color.opacity(0.9))
+                    .foregroundColor(.white)
+                    .cornerRadius(20)
+                    .padding(.top, 60)
+                    Spacer()
+                }
             }
 
             VStack {
@@ -541,18 +602,53 @@ struct ScanModeView: View {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
 
-            // Auto-save if resuming a session
+            // Auto-save session if resuming
             if let sessionId = resumeSessionId, let scan = capturedScan {
                 Task {
                     try? await sessionManager.updateSession(sessionId, with: scan)
                 }
             }
+
+            // Always upload to ScanWizard server
+            Task { await autoSaveToServer() }
         } else {
             // If not resuming, clear the scan
             if resumeSessionId == nil {
                 capturedScan = nil
             }
             meshManager.startScanning()
+        }
+    }
+
+    @MainActor
+    private func autoSaveToServer() async {
+        guard let scan = capturedScan else {
+            autoSaveStatus = .failed("No scan data")
+            dismissUploadStatus()
+            return
+        }
+
+        autoSaveStatus = .saving
+
+        let exporter = TrainingDataExporter()
+        guard let fileURL = await exporter.exportAsNumpyFormat(scan, classifier: meshManager.surfaceClassifier) else {
+            autoSaveStatus = .failed("Export failed")
+            dismissUploadStatus()
+            return
+        }
+
+        let server = ScanServerManager.shared
+        let filename = await server.uploadFile(at: fileURL)
+
+        autoSaveStatus = filename != nil
+            ? .success
+            : .failed(server.lastError ?? "Upload failed")
+        dismissUploadStatus()
+    }
+
+    private func dismissUploadStatus() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            withAnimation { autoSaveStatus = .idle }
         }
     }
 }
@@ -731,7 +827,7 @@ struct OrganicModeSettings: View {
 struct AppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("defaultExportFormat") private var defaultFormat = "USDZ"
-    @AppStorage("autoSaveScans") private var autoSave = false
+    @AppStorage("autoSaveScans") private var autoSave = true
     @AppStorage("versionCheckURL") private var versionCheckURL = ""
 
     var body: some View {
