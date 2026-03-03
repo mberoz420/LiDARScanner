@@ -8,6 +8,39 @@ struct ScannerView: View {
     @State private var showModeSelector = false
     @State private var capturedScan: CapturedScan?
 
+    // Auto-save state
+    @State private var autoSaveStatus: AutoSaveStatus = .idle
+
+    enum AutoSaveStatus {
+        case idle
+        case saving
+        case success
+        case failed(String)
+
+        var message: String {
+            switch self {
+            case .idle: return ""
+            case .saving: return "Saving to Google Drive…"
+            case .success: return "Saved to Google Drive"
+            case .failed(let err): return "Auto-save failed: \(err)"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .saving: return .blue
+            case .success: return .green
+            case .failed: return .red
+            default: return .clear
+            }
+        }
+
+        var isVisible: Bool {
+            if case .idle = self { return false }
+            return true
+        }
+    }
+
     var body: some View {
         ZStack {
             ARViewContainer(meshManager: meshManager)
@@ -17,6 +50,29 @@ struct ScannerView: View {
             if meshManager.currentMode == .test {
                 TestModeOverlayView(detector: meshManager.testModeDetector)
                     .edgesIgnoringSafeArea(.all)
+            }
+
+            // Auto-save status banner
+            if autoSaveStatus.isVisible {
+                VStack {
+                    HStack(spacing: 8) {
+                        if case .saving = autoSaveStatus {
+                            ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)).scaleEffect(0.8)
+                        } else {
+                            Image(systemName: { if case .success = autoSaveStatus { return "checkmark.circle.fill" } else { return "exclamationmark.circle.fill" } }())
+                        }
+                        Text(autoSaveStatus.message)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(autoSaveStatus.color.opacity(0.85))
+                    .foregroundColor(.white)
+                    .cornerRadius(20)
+                    .padding(.top, 60)
+                    Spacer()
+                }
             }
 
             VStack {
@@ -195,9 +251,37 @@ struct ScannerView: View {
     private func toggleScanning() {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
+            if AppSettings.shared.autoSaveAfterScan && AppSettings.shared.defaultDestination == .googleDrive {
+                Task { await autoSaveToGoogleDrive() }
+            }
         } else {
             capturedScan = nil
             meshManager.startScanning()
+        }
+    }
+
+    private func autoSaveToGoogleDrive() async {
+        guard let scan = capturedScan else { return }
+
+        autoSaveStatus = .saving
+
+        let exporter = TrainingDataExporter()
+        guard let fileURL = await exporter.exportAsNumpyFormat(scan, classifier: meshManager.surfaceClassifier) else {
+            autoSaveStatus = .failed("Export failed")
+            dismissStatusAfterDelay()
+            return
+        }
+
+        let drive = GoogleDriveManager.shared
+        let success = await drive.uploadFile(at: fileURL, mimeType: "application/json")
+
+        autoSaveStatus = success ? .success : .failed(drive.lastError ?? "Upload failed")
+        dismissStatusAfterDelay()
+    }
+
+    private func dismissStatusAfterDelay() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            withAnimation { autoSaveStatus = .idle }
         }
     }
 }
