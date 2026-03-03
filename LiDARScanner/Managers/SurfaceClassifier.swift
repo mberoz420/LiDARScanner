@@ -1006,36 +1006,41 @@ class SurfaceClassifier: ObservableObject {
         let hasEnoughCeilingSamples = ceilingHeightSamples.count >= 8
         let hasEnoughWallSamples = maxWallDistance > 0.3  // At least 30cm
 
-        // Floor detection: upward normal + farthest + at floor height (lowest dense cluster)
+        // Floor detection: upward normal + at floor height.
+        // Distance check is NOT used — floor covers the entire room at ground level,
+        // not just the farthest point. Height is the right discriminator.
         if normalY > 0.7 {
-            // If we don't have enough samples yet, collect but classify as object temporarily
             if !hasEnoughFloorSamples {
-                return .objectTop  // Will be reclassified once we have floor reference
+                return .objectTop  // Still calibrating floor height
             }
 
-            // Must be at farthest distance AND at the floor height (lowest Y with density)
+            if let floorH = statistics.floorHeight {
+                // Surface is at floor height → floor
+                if worldY <= floorH + 0.15 { return .floor }
+                // Surface is significantly above floor → object top (table, cabinet, etc.)
+                return .objectTop
+            }
+            // No height reference yet — use distance as fallback
             let atFarthestDistance = distanceFromCamera >= maxFloorDistance - distanceTolerance
-            let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.15)
-
-            if atFarthestDistance && atFloorHeight {
-                return .floor
-            }
-            return .objectTop  // Cabinet top or back reflection
+            return atFarthestDistance ? .floor : .objectTop
         }
 
-        // Ceiling detection: downward normal + farthest + at ceiling height (highest dense cluster)
+        // Ceiling detection: downward normal + at ceiling height.
+        // Same reasoning — ceiling spans the whole room, not just the farthest point.
         if normalY < -0.7 {
             if !hasEnoughCeilingSamples {
-                return .objectTop  // Will be reclassified once we have ceiling reference
+                return .objectTop  // Still calibrating ceiling height
             }
 
+            if let ceilH = statistics.ceilingHeight {
+                // Surface is at ceiling height → ceiling
+                if worldY >= ceilH - 0.15 { return .ceiling }
+                // Below ceiling → light fixture, beam, or suspended object
+                return .objectTop
+            }
+            // No height reference yet — use distance as fallback
             let atFarthestDistance = distanceFromCamera >= maxCeilingDistance - distanceTolerance
-            let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
-
-            if atFarthestDistance && atCeilingHeight {
-                return .ceiling
-            }
-            return .objectTop  // Light fixture or back reflection
+            return atFarthestDistance ? .ceiling : .objectTop
         }
 
         // Wall detection: horizontal normal + farthest per direction + highest density
@@ -1091,19 +1096,21 @@ class SurfaceClassifier: ObservableObject {
             if !hasEnoughFloorSamples {
                 return isAtWallDistance() ? .wall : .objectTop
             }
-            let atFarthestDistance = distanceFromCamera >= maxFloorDistance - distanceTolerance
-            let atFloorHeight = statistics.floorHeight == nil || worldY <= (statistics.floorHeight! + 0.2)
-            if atFarthestDistance && atFloorHeight { return .floor }
-            // Not a floor point — bumpy wall with upward tilt?
+            // Use height check (not distance) — tilted floor surfaces are at floor height
+            if let floorH = statistics.floorHeight, worldY <= floorH + 0.2 {
+                return .floor
+            }
+            // Not at floor height — curved wall with upward-tilted normal?
             return isAtWallDistance() ? .wall : .objectTop
         } else if normalY < -0.5 {
             if !hasEnoughCeilingSamples {
                 return isAtWallDistance() ? .wall : .objectTop
             }
-            let atFarthestDistance = distanceFromCamera >= maxCeilingDistance - distanceTolerance
-            let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.2)
-            if atFarthestDistance && atCeilingHeight { return .ceiling }
-            // Not a ceiling point — bumpy wall with downward tilt?
+            // Use height check (not distance) — tilted ceiling surfaces are at ceiling height
+            if let ceilH = statistics.ceilingHeight, worldY >= ceilH - 0.2 {
+                return .ceiling
+            }
+            // Not at ceiling height — curved wall with downward-tilted normal?
             return isAtWallDistance() ? .wall : .objectTop
         } else if horizontalMag > 0.5 {
             if wallDistanceByAngle.isEmpty && !hasEnoughWallSamples {
