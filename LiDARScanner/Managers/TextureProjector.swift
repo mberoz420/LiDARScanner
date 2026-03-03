@@ -63,14 +63,9 @@ class TextureProjector {
             let pixelX = Int((ndcPos.x + 1) * 0.5 * Float(width))
             let pixelY = Int((1 - ndcPos.y) * 0.5 * Float(height))
 
-            // Sample color if in bounds
-            if pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height {
-                let color = samplePixel(
-                    baseAddress: baseAddress,
-                    bytesPerRow: bytesPerRow,
-                    x: pixelX,
-                    y: pixelY
-                )
+            // Sample full RGB color if in bounds
+            if pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height,
+               let color = sampleColorRGB(from: pixelBuffer, x: pixelX, y: pixelY) {
                 colors.append(color)
             } else {
                 colors.append(VertexColor.white)
@@ -82,25 +77,6 @@ class TextureProjector {
 
     private static func getPixelBuffer(from frame: ARFrame) -> CVPixelBuffer? {
         return frame.capturedImage
-    }
-
-    private static func samplePixel(
-        baseAddress: UnsafeMutableRawPointer,
-        bytesPerRow: Int,
-        x: Int,
-        y: Int
-    ) -> VertexColor {
-        // ARFrame uses YCbCr format (420v or 420f)
-        // For simplicity, we'll convert the Y component to grayscale
-        // Full color requires YCbCr to RGB conversion
-
-        let yPlane = baseAddress.assumingMemoryBound(to: UInt8.self)
-        let yValue = yPlane[y * bytesPerRow + x]
-
-        // Simple grayscale from Y component
-        let intensity = Float(yValue) / 255.0
-
-        return VertexColor(r: intensity, g: intensity, b: intensity)
     }
 
     /// Convert YCbCr to RGB (for full color support)
