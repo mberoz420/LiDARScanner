@@ -83,16 +83,18 @@ class PhotogrammetryController: NSObject, ObservableObject {
 
     func start() {
         guard !captureSession.isRunning else { return }
-        Task.detached { [weak self] in
-            self?.captureSession.startRunning()
+        let session = captureSession
+        Task.detached(priority: .userInitiated) {
+            session.startRunning()
         }
         isRunning = true
     }
 
     func stop() {
         guard captureSession.isRunning else { return }
-        Task.detached { [weak self] in
-            self?.captureSession.stopRunning()
+        let session = captureSession
+        Task.detached(priority: .userInitiated) {
+            session.stopRunning()
         }
         isRunning = false
     }
@@ -234,7 +236,7 @@ struct PhotogrammetryView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             if let url = outputURL {
-                ShareSheet(url: url)
+                PhotogrammetryShareSheet(url: url)
             }
         }
     }
@@ -523,7 +525,7 @@ struct PhotogrammetryView: View {
 
         let detail: PhotogrammetrySession.Request.Detail = {
             switch preset {
-            case .quick:    return .preview
+            case .quick:    return .reduced
             case .standard: return .medium
             case .detailed: return .full
             case .free:     return .full
@@ -532,7 +534,7 @@ struct PhotogrammetryView: View {
 
         try session.process(requests: [.modelFile(url: outputURL, detail: detail)])
 
-        for await output in session.outputs {
+        for try await output in session.outputs {
             switch output {
             case .requestProgress(_, let fraction):
                 await MainActor.run { processingProgress = fraction }
@@ -549,9 +551,9 @@ struct PhotogrammetryView: View {
     }
 }
 
-// MARK: - Share Sheet
+// MARK: - Share Sheet (photogrammetry-specific, avoids conflict with ExportView.ShareSheet)
 
-struct ShareSheet: UIViewControllerRepresentable {
+struct PhotogrammetryShareSheet: UIViewControllerRepresentable {
     let url: URL
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
