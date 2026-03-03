@@ -371,6 +371,26 @@ struct ScanModeView: View {
                         .cornerRadius(8)
                     }
 
+                    // Camera toggle for Organic mode (TrueDepth / hybrid)
+                    if mode == .organic && meshManager.faceTrackingAvailable {
+                        Button(action: { meshManager.toggleCamera() }) {
+                            ZStack(alignment: .bottom) {
+                                Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
+                                    .font(.title3)
+                                    .foregroundColor(meshManager.hybridFaceTracking ? .green : .white)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                                if meshManager.hybridFaceTracking && !meshManager.usingFrontCamera {
+                                    Text("HYBRID")
+                                        .font(.system(size: 7, weight: .bold))
+                                        .foregroundColor(.green)
+                                        .offset(y: 8)
+                                }
+                            }
+                        }
+                    }
+
                     // Mode badge
                     HStack(spacing: 6) {
                         Image(systemName: mode.icon)
