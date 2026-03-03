@@ -552,6 +552,7 @@
         let minY = 0, maxY = 1;
         let sceneCenter = {x: 0, y: 0, z: 0};
         let sceneSize = 10;
+        let grid;
         let currentViewMode = 'perspective';  // 'perspective' | 'ortho'
 
         // Custom labels (start from index 10 to avoid conflicts)
@@ -1032,7 +1033,7 @@
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
 
-            const grid = new THREE.GridHelper(20, 20, 0x0f3460, 0x0f3460);
+            grid = new THREE.GridHelper(20, 20, 0x0f3460, 0x0f3460);
             scene.add(grid);
 
             const axes = new THREE.AxesHelper(2);
@@ -1176,6 +1177,15 @@
             // Update height info
             document.getElementById('y-range').textContent =
                 `${minY.toFixed(2)} to ${maxY.toFixed(2)} m`;
+
+            // Snap grid to floor level and resize to fit scene
+            if (grid) {
+                const gridSize = Math.ceil(sceneSize * 2);
+                scene.remove(grid);
+                grid = new THREE.GridHelper(gridSize, gridSize, 0x0f3460, 0x0f3460);
+                grid.position.set(sceneCenter.x, minY, sceneCenter.z);
+                scene.add(grid);
+            }
             document.getElementById('height-min').value = minY.toFixed(2);
             document.getElementById('height-max').value = maxY.toFixed(2);
 
