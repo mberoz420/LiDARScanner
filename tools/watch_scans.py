@@ -17,6 +17,23 @@ import urllib.error
 import json
 import time
 import sys
+import subprocess
+import os
+
+# ── Chrome launcher ───────────────────────────────────────────────────────────
+_CHROME_PATHS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Users\mbero\AppData\Local\Google\Chrome\Application\chrome.exe",
+]
+
+def open_url(url: str) -> None:
+    """Open URL in Chrome, falling back to default browser."""
+    for path in _CHROME_PATHS:
+        if os.path.exists(path):
+            subprocess.Popen([path, url])
+            return
+    open_url(url)  # fallback
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 SERVER_URL    = "https://scanwizard.robo-wizard.com"
@@ -47,7 +64,7 @@ def main():
     print(f"[Watcher] Polling every {POLL_INTERVAL}s. Press Ctrl+C to stop.\n")
 
     # Open the labeler now so it's ready
-    webbrowser.open(SERVER_URL)
+    open_url(SERVER_URL)
 
     # Seed 'seen' with whatever is already on the server
     seen: set[str] = set()
@@ -76,7 +93,7 @@ def main():
                     url = f"{SERVER_URL}/?scan={filename}"
                     print(f"\n[Watcher] New scan: {filename}")
                     print(f"[Watcher] Opening : {url}")
-                    webbrowser.open(url)
+                    open_url(url)
 
     except KeyboardInterrupt:
         print("\n[Watcher] Stopped.")
