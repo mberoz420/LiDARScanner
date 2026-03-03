@@ -1,20 +1,9 @@
 # ScanWizard — Apache config for scan-wizard.robo-wizard.com
 # Place at: public_html/scan-wizard/.htaccess
 
-# ── Password-protect the whole site ────────────────────────────────────────
-# Run: htpasswd -c .htpasswd yourname   (in the scan-wizard folder via SSH or hPanel file manager)
-AuthType Basic
-AuthName "ScanWizard — Private Access"
-AuthUserFile /home/YOUR_HOSTINGER_USER/domains/robo-wizard.com/public_html/scan-wizard/.htpasswd
-Require valid-user
-
-# ── Allow iOS app to upload without browser auth ───────────────────────────
-<Files "upload.php">
-    Satisfy Any
-    Allow from all
-</Files>
-
 # ── Security ───────────────────────────────────────────────────────────────
+# Site is protected by PHP session login (login.php).
+# Add .htpasswd basic auth later if you want a second layer.
 Options -Indexes
 DirectoryIndex index.php login.php
 
