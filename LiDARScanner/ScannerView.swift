@@ -251,7 +251,7 @@ struct ScannerView: View {
     private func toggleScanning() {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
-            if AppSettings.shared.autoSaveAfterScan && AppSettings.shared.defaultDestination == .googleDrive {
+            if AppSettings.shared.autoSaveAfterScan {
                 Task { await autoSaveToGoogleDrive() }
             }
         } else {
@@ -261,7 +261,19 @@ struct ScannerView: View {
     }
 
     private func autoSaveToGoogleDrive() async {
-        guard let scan = capturedScan else { return }
+        guard let scan = capturedScan else {
+            autoSaveStatus = .failed("No scan data")
+            dismissStatusAfterDelay()
+            return
+        }
+
+        let drive = GoogleDriveManager.shared
+
+        guard drive.isConfigured else {
+            autoSaveStatus = .failed("Set up Google Drive in Settings")
+            dismissStatusAfterDelay()
+            return
+        }
 
         autoSaveStatus = .saving
 
@@ -272,7 +284,6 @@ struct ScannerView: View {
             return
         }
 
-        let drive = GoogleDriveManager.shared
         let success = await drive.uploadFile(at: fileURL, mimeType: "application/json")
 
         autoSaveStatus = success ? .success : .failed(drive.lastError ?? "Upload failed")
