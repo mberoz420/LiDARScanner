@@ -526,7 +526,7 @@ struct PhotogrammetryView: View {
         let detail: PhotogrammetrySession.Request.Detail = {
             switch preset {
             case .quick:    return .reduced
-            case .standard: return .medium
+            case .standard: return .reduced
             case .detailed: return .full
             case .free:     return .full
             }
