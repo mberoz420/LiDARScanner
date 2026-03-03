@@ -375,6 +375,21 @@
                 <input type="range" id="radius-slider" min="0.05" max="1.0" step="0.05" value="0.3"
                        onchange="updateRadius(this.value)">
             </div>
+            <h2>Smart Auto-Classify</h2>
+            <div style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.4;">
+                From room centroid: farthest plane with highest point density in each direction = room boundary.
+            </div>
+            <div class="input-group">
+                <label>Wall tolerance: <span id="tolerance-value">0.30</span>m</label>
+                <input type="range" id="classify-tolerance" min="0.05" max="0.80" step="0.05" value="0.30"
+                       oninput="document.getElementById('tolerance-value').textContent=parseFloat(this.value).toFixed(2)">
+            </div>
+            <button class="btn btn-action" onclick="smartAutoClassify(false)"
+                    style="background:#8e44ad;">&#x2728; Classify Unlabeled</button>
+            <button class="btn btn-action" onclick="smartAutoClassify(true)"
+                    style="background:#c0392b;">&#x21BA; Re-classify All</button>
+
+            <h2>Selection Tools</h2>
             <button class="btn btn-action" onclick="selectByNormal('up')">Select Floors (normal up)</button>
             <button class="btn btn-action" onclick="selectByNormal('down')">Select Ceilings (normal down)</button>
             <button class="btn btn-action" onclick="selectByNormal('vertical')">Select Walls (vertical)</button>
@@ -717,9 +732,29 @@
         function getSurfaceType(index) {
             // Check if point has a label that indicates its type
             const label = labels[index];
+
+            // Handle string labels from JSON export
+            if (typeof label === 'string') {
+                const lowerLabel = label.toLowerCase().replace(/\s+/g, '');
+                if (lowerLabel === 'floor') return 'floor';
+                if (lowerLabel === 'ceiling') return 'ceiling';
+                if (lowerLabel === 'wall') return 'wall';
+                if (lowerLabel === 'objecttop') return 'objecttop';
+                if (lowerLabel === 'object') return 'object';
+                if (lowerLabel === 'backreflection') return 'backreflection';
+                // Unknown string label - treat as object
+                return 'object';
+            }
+
+            // Handle numeric labels (legacy/manual labeling)
             if (label === 5) return 'objecttop';
             if (label === 6) return 'backreflection';
+            if (label === 0) return 'floor';
+            if (label === 1) return 'ceiling';
+            if (label === 2) return 'wall';
+            if (label === 3) return 'object';
 
+            // Fall back to normal-based classification only if no label
             const n = normals[index] || {x: 0, y: 1, z: 0};
             const ny = Math.abs(n.y);
             const horizontalMag = Math.sqrt(n.x * n.x + n.z * n.z);
@@ -811,25 +846,16 @@
 
             switch (colorMode) {
                 case 'normal':
-                    // Check for labeled objectTop or backReflection first
-                    const label = labels[index];
-                    if (label === 5) return new THREE.Color(0xe68080);  // Object Top - light red
-                    if (label === 6) return new THREE.Color(0xff00ff);  // Back Reflection - magenta
-
-                    const n = normals[index] || {x: 0, y: 1, z: 0};
-                    const ny = Math.abs(n.y);
-                    const horizontalMag = Math.sqrt(n.x * n.x + n.z * n.z);
-
-                    if (ny > 0.7) {
-                        if (n.y > 0) {
-                            return new THREE.Color(0x2ecc71);  // Floor - green
-                        } else {
-                            return new THREE.Color(0xf1c40f);  // Ceiling - yellow
-                        }
-                    } else if (horizontalMag > 0.7) {
-                        return new THREE.Color(0x3498db);  // Wall - blue
-                    } else {
-                        return new THREE.Color(0xe74c3c);  // Object - red
+                    // Use getSurfaceType for consistent label handling (string and numeric)
+                    const surfaceType = getSurfaceType(index);
+                    switch (surfaceType) {
+                        case 'floor': return new THREE.Color(0x2ecc71);      // Floor - green
+                        case 'ceiling': return new THREE.Color(0xf1c40f);    // Ceiling - yellow
+                        case 'wall': return new THREE.Color(0x3498db);       // Wall - blue
+                        case 'objecttop': return new THREE.Color(0xe68080);  // Object Top - light red
+                        case 'backreflection': return new THREE.Color(0xff00ff); // Back Reflection - magenta
+                        case 'object':
+                        default: return new THREE.Color(0xe74c3c);           // Object - red
                     }
 
                 case 'height':
@@ -1105,6 +1131,148 @@
                 `Labeled ${count.toLocaleString()} points as "${labelName}"`;
         }
 
+        // ── Smart Auto-Classifier ────────────────────────────────────────────────
+        // From the room centroid, every direction has a farthest plane.
+        // The correct plane is identified by BOTH criteria:
+        //   1. Farthest distance in that direction
+        //   2. Highest point-cloud density at that distance
+        //
+        // +Y direction  → ceiling  (downward-facing normals, farthest high-density Y)
+        // -Y direction  → floor    (upward-facing  normals, farthest low-density  Y)
+        // XZ directions → walls    (vertical normals, farthest dense cluster per 5° bucket)
+        // Anything closer than its direction's plane → object
+
+        // Find the value at the farthest high-density cluster in a 1-D value array.
+        // pickLowest=true  → look at the low end  (floor: farthest downward = lowest Y)
+        // pickLowest=false → look at the high end (ceiling / wall: farthest = highest value)
+        function farthestDensePeak(values, binSize, pickLowest) {
+            if (!values.length) return null;
+            values.sort((a, b) => a - b);
+            const lo = values[0], hi = values[values.length - 1], range = hi - lo;
+            if (range < binSize) return pickLowest ? lo : hi;  // all points at same level
+
+            // Build histogram
+            const bins = {};
+            values.forEach(v => {
+                const key = Math.round(v / binSize) * binSize;
+                bins[key] = (bins[key] ?? 0) + 1;
+            });
+
+            // Search in the farthest 30 % of the range for the densest bin
+            const farZone = range * 0.30;
+            const threshold = pickLowest ? lo + farZone : hi - farZone;
+
+            let bestBin = null, bestCount = 0;
+            Object.entries(bins).forEach(([key, cnt]) => {
+                const kv = parseFloat(key);
+                const inFarZone = pickLowest ? kv <= threshold : kv >= threshold;
+                if (inFarZone && cnt > bestCount) { bestCount = cnt; bestBin = kv; }
+            });
+
+            // Fall back to the absolute extreme if far zone had no points
+            return bestBin ?? (pickLowest ? lo : hi);
+        }
+
+        function smartAutoClassify(overwriteExisting) {
+            if (points.length === 0) { alert('No points loaded'); return; }
+
+            const tolerance = parseFloat(document.getElementById('classify-tolerance')?.value ?? '0.3');
+            const BUCKET_DEG = 5;
+            const DIST_BIN   = 0.10;   // 10 cm distance bins for wall histograms
+            const Y_BIN      = 0.05;   // 5 cm  height  bins for floor/ceiling
+
+            // Room centroid = approximation of camera origin
+            let cx = 0, cy = 0, cz = 0;
+            points.forEach(p => { cx += p.x; cy += p.y; cz += p.z; });
+            cx /= points.length; cy /= points.length; cz /= points.length;
+
+            // ── Pass 1: collect all distances per direction ──────────────────
+            const wallDistsByAngle = {};   // bucket° → [dist, …]
+            const floorYAll        = [];   // Y values of upward-facing points
+            const ceilingYAll      = [];   // Y values of downward-facing points
+
+            points.forEach((p, i) => {
+                if (deletedIndices.has(i)) return;
+                const n = normals[i] || { x: 0, y: 1, z: 0 };
+                const ny   = n.y;
+                const hMag = Math.sqrt(n.x * n.x + n.z * n.z);
+
+                if (ny > 0.7) {
+                    floorYAll.push(p.y);          // upward normal → potential floor
+                } else if (ny < -0.7) {
+                    ceilingYAll.push(p.y);        // downward normal → potential ceiling
+                } else if (hMag > 0.7 && Math.abs(ny) < 0.5) {
+                    // Vertical normal → potential wall
+                    const dx = p.x - cx, dz = p.z - cz;
+                    const hDist  = Math.sqrt(dx * dx + dz * dz);
+                    const angle  = Math.atan2(dz, dx) * 180 / Math.PI;
+                    const bucket = Math.round(angle / BUCKET_DEG) * BUCKET_DEG;
+                    if (!wallDistsByAngle[bucket]) wallDistsByAngle[bucket] = [];
+                    wallDistsByAngle[bucket].push(hDist);
+                }
+            });
+
+            // ── Compute farthest dense-cluster distance per wall direction ───
+            const wallPlaneDist = {};  // bucket° → plane horizontal distance
+            Object.entries(wallDistsByAngle).forEach(([bucket, dists]) => {
+                wallPlaneDist[parseInt(bucket)] = farthestDensePeak(dists, DIST_BIN, false);
+            });
+
+            // ── Floor and ceiling plane Y values ────────────────────────────
+            // Floor: farthest downward = lowest Y, highest density there
+            const floorY   = farthestDensePeak(floorYAll,   Y_BIN, true);
+            // Ceiling: farthest upward = highest Y, highest density there
+            const ceilingY = farthestDensePeak(ceilingYAll, Y_BIN, false);
+
+            // ── Pass 2: assign labels ────────────────────────────────────────
+            let classified = 0;
+            points.forEach((p, i) => {
+                if (deletedIndices.has(i)) return;
+                const existing = labels[i];
+                const hasLabel = existing !== -1 && existing !== undefined && existing !== null;
+                if (hasLabel && !overwriteExisting) return;
+
+                const n = normals[i] || { x: 0, y: 1, z: 0 };
+                const ny   = n.y;
+                const hMag = Math.sqrt(n.x * n.x + n.z * n.z);
+
+                if (ny > 0.7) {
+                    // Upward-facing: floor if at farthest-downward dense Y, else object top
+                    labels[i] = (floorY !== null && Math.abs(p.y - floorY) < tolerance * 0.5) ? 0 : 5;
+                } else if (ny < -0.7) {
+                    // Downward-facing: ceiling if at farthest-upward dense Y, else protrusion/object
+                    labels[i] = (ceilingY !== null && Math.abs(p.y - ceilingY) < tolerance * 0.5) ? 1 : 5;
+                } else if (hMag > 0.7 && Math.abs(ny) < 0.5) {
+                    // Vertical: wall if at farthest dense distance for this direction
+                    const dx = p.x - cx, dz = p.z - cz;
+                    const hDist  = Math.sqrt(dx * dx + dz * dz);
+                    const angle  = Math.atan2(dz, dx) * 180 / Math.PI;
+                    const bucket = Math.round(angle / BUCKET_DEG) * BUCKET_DEG;
+                    // Check current bucket and ±5° neighbours
+                    const planeDist = [-5, 0, 5]
+                        .map(off => wallPlaneDist[bucket + off])
+                        .filter(d => d !== undefined)
+                        .reduce((a, b) => Math.max(a, b), 0);
+                    labels[i] = (planeDist > 0 && hDist >= planeDist - tolerance) ? 2 : 3;
+                } else {
+                    labels[i] = 3;  // ambiguous normal → object
+                }
+                classified++;
+            });
+
+            rebuildPointCloud();
+            updateStats();
+            const wallDirCount = Object.keys(wallPlaneDist).length;
+            const info = [
+                `Smart classify: ${classified.toLocaleString()} pts`,
+                floorY   !== null ? `floor Y≈${floorY.toFixed(2)}m`   : null,
+                ceilingY !== null ? `ceil Y≈${ceilingY.toFixed(2)}m`  : null,
+                `${wallDirCount} wall directions`
+            ].filter(Boolean).join(' · ');
+            document.getElementById('selection-info').textContent = info;
+        }
+        // ────────────────────────────────────────────────────────────────────────
+
         function selectByNormal(direction) {
             selectedIndices.clear();
 
@@ -1146,28 +1314,34 @@
         }
 
         function updateStats() {
-            const counts = { '-1': 0, '0': 0, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0 };
+            const counts = {
+                floor: 0, ceiling: 0, wall: 0, object: 0,
+                objecttop: 0, backreflection: 0, unlabeled: 0
+            };
             let activeCount = 0;
 
             labels.forEach((l, i) => {
                 if (deletedIndices.has(i)) return;
                 activeCount++;
-                const key = l.toString();
-                if (counts[key] !== undefined) {
-                    counts[key]++;
+                // Use getSurfaceType for consistent label handling
+                const surfaceType = getSurfaceType(i);
+                if (counts[surfaceType] !== undefined) {
+                    counts[surfaceType]++;
+                } else if (l === -1 || l === undefined || l === null) {
+                    counts.unlabeled++;
                 }
             });
 
             document.getElementById('stat-total').textContent =
                 `${activeCount.toLocaleString()} (${deletedIndices.size} deleted)`;
-            document.getElementById('stat-floor').textContent = counts['0'].toLocaleString();
-            document.getElementById('stat-ceiling').textContent = counts['1'].toLocaleString();
-            document.getElementById('stat-wall').textContent = counts['2'].toLocaleString();
-            document.getElementById('stat-object').textContent = counts['3'].toLocaleString();
-            document.getElementById('stat-objecttop').textContent = counts['5'].toLocaleString();
-            document.getElementById('stat-backreflection').textContent = counts['6'].toLocaleString();
-            document.getElementById('stat-noise').textContent = counts['4'].toLocaleString();
-            document.getElementById('stat-unlabeled').textContent = counts['-1'].toLocaleString();
+            document.getElementById('stat-floor').textContent = counts.floor.toLocaleString();
+            document.getElementById('stat-ceiling').textContent = counts.ceiling.toLocaleString();
+            document.getElementById('stat-wall').textContent = counts.wall.toLocaleString();
+            document.getElementById('stat-object').textContent = counts.object.toLocaleString();
+            document.getElementById('stat-objecttop').textContent = counts.objecttop.toLocaleString();
+            document.getElementById('stat-backreflection').textContent = counts.backreflection.toLocaleString();
+            document.getElementById('stat-noise').textContent = '0';  // Noise counted separately if needed
+            document.getElementById('stat-unlabeled').textContent = counts.unlabeled.toLocaleString();
         }
 
         function updateRadius(value) {

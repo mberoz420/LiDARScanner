@@ -686,50 +686,22 @@ struct SessionDetailView: View {
         guard samples.count >= 10 else { return findLowest ? samples.min()! : samples.max()! }
 
         let sorted = samples.sorted()
-        let minY = sorted.first!
-        let maxY = sorted.last!
-        let range = maxY - minY
 
-        // If all samples within 10cm, they're the same plane
-        guard range > 0.10 else { return sorted[sorted.count / 2] }
-
-        // Create 1mm bins for precise plane detection
-        let binSize: Float = 0.001
-        let binCount = max(1, Int(range / binSize) + 1)
-        var histogram = [Int](repeating: 0, count: binCount)
-
-        for y in sorted {
-            let binIndex = min(binCount - 1, Int((y - minY) / binSize))
-            histogram[binIndex] += 1
-        }
-
-        // For floor: find the LOWEST region, then pick the bin with highest density in that region
-        // For ceiling: find the HIGHEST region, then pick the bin with highest density in that region
-        let regionSize = max(1, binCount / 5)  // Look at bottom/top 20% of range
-
-        var bestBin = 0
-        var bestCount = 0
+        // For floor: take the lowest 10% of samples, find their median
+        // For ceiling: take the highest 10% of samples, find their median
+        let sampleCount = max(10, sorted.count / 10)
 
         if findLowest {
-            // Search in lowest 20% of bins for the densest one
-            for i in 0..<min(regionSize, binCount) {
-                if histogram[i] > bestCount {
-                    bestCount = histogram[i]
-                    bestBin = i
-                }
-            }
+            // Get the lowest samples
+            let lowestSamples = Array(sorted.prefix(sampleCount))
+            // Return the median of the lowest samples
+            return lowestSamples[lowestSamples.count / 2]
         } else {
-            // Search in highest 20% of bins for the densest one
-            for i in max(0, binCount - regionSize)..<binCount {
-                if histogram[i] > bestCount {
-                    bestCount = histogram[i]
-                    bestBin = i
-                }
-            }
+            // Get the highest samples
+            let highestSamples = Array(sorted.suffix(sampleCount))
+            // Return the median of the highest samples
+            return highestSamples[highestSamples.count / 2]
         }
-
-        // Return the center of the best bin
-        return minY + (Float(bestBin) + 0.5) * binSize
     }
 }
 

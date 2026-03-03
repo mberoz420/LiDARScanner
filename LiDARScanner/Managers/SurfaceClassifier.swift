@@ -663,6 +663,9 @@ class SurfaceClassifier: ObservableObject {
     /// When looking horizontally, the farthest surface = wall, closer = object
     private var wallDistanceByAngle: [Int: Float] = [:]  // angle bucket (degrees) -> farthest distance
 
+    /// Point density per angle bucket — high density at farthest distance = real wall plane
+    private var wallDensityByAngle: [Int: Int] = [:]
+
     /// Camera position when wall distances were measured
     private var wallMeasurementOrigin: SIMD3<Float>?
 
@@ -977,6 +980,19 @@ class SurfaceClassifier: ObservableObject {
                 maxCeilingDistance = distanceFromCamera
             }
         } else if horizontalMag > 0.5 {
+            // Per-direction tracking: farthest horizontal distance per camera-to-surface angle
+            let origin = wallMeasurementOrigin ?? camPos
+            let hdx = worldPosition.x - origin.x
+            let hdz = worldPosition.z - origin.z
+            let horizontalDist = sqrt(hdx * hdx + hdz * hdz)
+            let dirAngle = atan2(hdz, hdx) * 180 / Float.pi
+            let dirBucket = Int(round(dirAngle / 5)) * 5
+            if let existing = wallDistanceByAngle[dirBucket] {
+                wallDistanceByAngle[dirBucket] = max(existing, horizontalDist)
+            } else {
+                wallDistanceByAngle[dirBucket] = horizontalDist
+            }
+            // Global fallback
             if distanceFromCamera > maxWallDistance {
                 maxWallDistance = distanceFromCamera
             }
@@ -1022,13 +1038,28 @@ class SurfaceClassifier: ObservableObject {
             return .objectTop  // Light fixture or back reflection
         }
 
-        // Wall detection: horizontal normal + farthest
+        // Wall detection: horizontal normal + farthest per direction + highest density
         if horizontalMag > 0.7 && abs(normalY) < 0.5 {
-            if !hasEnoughWallSamples {
-                return .object  // Will be reclassified once we have wall reference
+            if wallDistanceByAngle.isEmpty && !hasEnoughWallSamples {
+                return .object  // Not enough data yet
             }
 
-            let atFarthestDistance = distanceFromCamera >= maxWallDistance - distanceTolerance
+            // Per-direction distance: camera-to-surface horizontal angle
+            let origin = wallMeasurementOrigin ?? camPos
+            let hdx = worldPosition.x - origin.x
+            let hdz = worldPosition.z - origin.z
+            let horizontalDist = sqrt(hdx * hdx + hdz * hdz)
+            let dirAngle = atan2(hdz, hdx) * 180 / Float.pi
+            let dirBucket = Int(round(dirAngle / 5)) * 5
+
+            // Increment density for this direction
+            wallDensityByAngle[dirBucket, default: 0] += 1
+
+            // Per-direction farthest distance (also check adjacent ±5° buckets)
+            let maxDistForDir = [-5, 0, 5].compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
+                ?? maxWallDistance
+
+            let atFarthestDistance = horizontalDist >= maxDistForDir - wallDistanceTolerance
 
             if atFarthestDistance {
                 return .wall
@@ -1052,10 +1083,18 @@ class SurfaceClassifier: ObservableObject {
             let atCeilingHeight = statistics.ceilingHeight == nil || worldY >= (statistics.ceilingHeight! - 0.15)
             return (atFarthestDistance && atCeilingHeight) ? .ceiling : .objectTop
         } else if horizontalMag > 0.5 {
-            if !hasEnoughWallSamples {
+            if wallDistanceByAngle.isEmpty && !hasEnoughWallSamples {
                 return .object
             }
-            let atFarthestDistance = distanceFromCamera >= maxWallDistance - distanceTolerance
+            let origin = wallMeasurementOrigin ?? camPos
+            let hdx = worldPosition.x - origin.x
+            let hdz = worldPosition.z - origin.z
+            let horizontalDist = sqrt(hdx * hdx + hdz * hdz)
+            let dirAngle = atan2(hdz, hdx) * 180 / Float.pi
+            let dirBucket = Int(round(dirAngle / 5)) * 5
+            let maxDistForDir = [-5, 0, 5].compactMap { wallDistanceByAngle[dirBucket + $0] }.max()
+                ?? maxWallDistance
+            let atFarthestDistance = horizontalDist >= maxDistForDir - wallDistanceTolerance
             return atFarthestDistance ? .wall : .object
         }
 
@@ -1231,9 +1270,12 @@ class SurfaceClassifier: ObservableObject {
             let center = (worldV0 + worldV1 + worldV2) / 3
             faceCenters.append(center)
 
-            // Classify based on normal
-            let avgY = center.y
-            let surfaceType = classifySurface(averageNormal: faceNormal, worldY: avgY)
+            // Classify using full world position so per-direction distance is accurate
+            let surfaceType = classifySurfaceWithPosition(
+                averageNormal: faceNormal,
+                worldPosition: center,
+                cameraPosition: cameraPositions.last
+            )
             faceClassifications.append(surfaceType)
 
             // Calculate triangle area for statistics
@@ -2363,6 +2405,7 @@ class SurfaceClassifier: ObservableObject {
         accumulatedNormals.removeAll()
         mlClassifications.removeAll()
         wallDistanceByAngle.removeAll()
+        wallDensityByAngle.removeAll()
         wallMeasurementOrigin = nil
 
         // Reset distance tracking
@@ -3117,6 +3160,7 @@ class SurfaceClassifier: ObservableObject {
     /// Clear wall distance data (call when starting a new scan or changing rooms)
     func clearWallDistances() {
         wallDistanceByAngle.removeAll()
+        wallDensityByAngle.removeAll()
         wallMeasurementOrigin = nil
         debugLog("[SurfaceClassifier] Cleared wall distance data")
     }
