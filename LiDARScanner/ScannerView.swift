@@ -123,15 +123,32 @@ struct ScannerView: View {
                     Spacer()
 
                     VStack(spacing: 8) {
-                        // Camera toggle for organic mode
+                        // Camera status for organic mode
                         if meshManager.currentMode == .organic && meshManager.faceTrackingAvailable {
-                            Button(action: { meshManager.toggleCamera() }) {
-                                Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
+                            if meshManager.hybridFaceTracking {
+                                // Hybrid: LiDAR + TrueDepth running simultaneously — show indicator only
+                                Image(systemName: "sensor.tag.radiowaves.forward.fill")
                                     .font(.title2)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.green)
                                     .frame(width: 44, height: 44)
                                     .background(Color.black.opacity(0.7))
                                     .cornerRadius(22)
+                                    .overlay(
+                                        Text("HYBRID")
+                                            .font(.system(size: 7, weight: .bold))
+                                            .foregroundColor(.green)
+                                            .offset(y: 18)
+                                    )
+                            } else {
+                                // Non-hybrid: toggle between front TrueDepth and rear LiDAR
+                                Button(action: { meshManager.toggleCamera() }) {
+                                    Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .frame(width: 44, height: 44)
+                                        .background(Color.black.opacity(0.7))
+                                        .cornerRadius(22)
+                                }
                             }
                         }
 

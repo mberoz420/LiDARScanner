@@ -29,6 +29,7 @@ class MeshManager: NSObject, ObservableObject {
     @Published var meshUpdateCount = 0
     @Published var lidarAvailable = false
     @Published var faceTrackingAvailable = false
+    @Published var hybridFaceTracking = false   // true when LiDAR + TrueDepth run simultaneously
     @Published var currentMode: ScanMode = .largeObjects
     @Published var usingFrontCamera = false
     @Published var surfaceClassificationEnabled = true
@@ -429,6 +430,15 @@ class MeshManager: NSObject, ObservableObject {
 
         config.planeDetection = [.horizontal, .vertical]
 
+        // Hybrid mode: enable front TrueDepth face tracking alongside rear LiDAR
+        // Face anchors appear in the same world coordinate space as mesh anchors
+        if ARWorldTrackingConfiguration.supportsUserFaceTracking {
+            config.userFaceTrackingEnabled = true
+            hybridFaceTracking = true
+        } else {
+            hybridFaceTracking = false
+        }
+
         // Higher frame rate for small objects
         if currentMode == .smallObjects {
             config.videoFormat = ARWorldTrackingConfiguration.supportedVideoFormats
@@ -451,6 +461,9 @@ class MeshManager: NSObject, ObservableObject {
 
     func toggleCamera() {
         guard let arView = arView, currentMode == .organic else { return }
+
+        // In hybrid mode both cameras are already running simultaneously — no toggle needed.
+        if hybridFaceTracking { return }
 
         if usingFrontCamera {
             startLiDARTracking(arView: arView)
@@ -1903,9 +1916,11 @@ class MeshManager: NSObject, ObservableObject {
             }
         }
 
-        // Sample colors from camera frame
+        // Sample colors from camera frame.
+        // In hybrid mode the face is captured by the front TrueDepth camera while
+        // currentFrame holds the rear camera image — projection would be wrong, so skip it.
         var colors: [VertexColor] = []
-        if let frame = currentFrame {
+        if !hybridFaceTracking, let frame = currentFrame {
             colors = TextureProjector.sampleColors(
                 for: vertices,
                 meshTransform: anchor.transform,
