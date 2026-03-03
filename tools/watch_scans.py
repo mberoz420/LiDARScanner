@@ -26,7 +26,7 @@ from watchdog.events import FileSystemEventHandler
 # ── Configuration ─────────────────────────────────────────────────────────────
 SCAN_FOLDER  = r"G:\My Drive\LidarScans\json"
 TOOLS_FOLDER = os.path.dirname(os.path.abspath(__file__))
-PORT         = 8765
+PREFERRED_PORTS = [5500, 5501, 7070, 9090, 9191, 9876]
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -37,7 +37,10 @@ class ScanFileHandler(FileSystemEventHandler):
     so we watch both on_created and on_moved (rename = final file ready).
     """
 
-    _opened = set()  # Avoid opening the same file twice
+    def __init__(self, port):
+        super().__init__()
+        self.port = port
+        self._opened = set()  # Avoid opening the same file twice
 
     def _open_scan(self, path):
         if path.lower().endswith('.gdoc'):
@@ -55,7 +58,7 @@ class ScanFileHandler(FileSystemEventHandler):
         # Wait for Google Drive to finish writing
         time.sleep(2)
 
-        url = f"http://localhost:{PORT}/?scan={filename}"
+        url = f"http://localhost:{self.port}/?scan={filename}"
         print(f"[Watcher] Opening: {url}")
         webbrowser.open(url)
 
@@ -133,9 +136,25 @@ class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True  # Must be class-level on Windows
 
 
-def start_server():
-    with ReusableTCPServer(('', PORT), LabelerHTTPHandler) as httpd:
-        print(f"[Server] Serving labeler at http://localhost:{PORT}")
+def find_free_port():
+    """Try preferred ports first, then let the OS pick one."""
+    import socket
+    for port in PREFERRED_PORTS:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+            return port
+        except OSError:
+            continue
+    # Let OS assign any free port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
+def start_server(port):
+    with ReusableTCPServer(('', port), LabelerHTTPHandler) as httpd:
+        print(f"[Server] Serving labeler at http://localhost:{port}")
         httpd.serve_forever()
 
 
@@ -146,21 +165,27 @@ def main():
         print("        Make sure Google Drive is running and the folder exists.")
         sys.exit(1)
 
+    port = find_free_port()
+
     # Start HTTP server in background thread
-    server_thread = threading.Thread(target=start_server, daemon=True)
+    server_thread = threading.Thread(target=start_server, args=(port,), daemon=True)
     server_thread.start()
 
+    # Give server a moment to bind
+    time.sleep(0.5)
+
     # Start file watcher
+    handler = ScanFileHandler(port)
     observer = Observer()
-    observer.schedule(ScanFileHandler(), SCAN_FOLDER, recursive=False)
+    observer.schedule(handler, SCAN_FOLDER, recursive=False)
     observer.start()
 
     print(f"[Watcher] Watching: {SCAN_FOLDER}")
-    print(f"[Watcher] Open labeler manually: http://localhost:{PORT}")
+    print(f"[Watcher] Open labeler manually: http://localhost:{port}")
     print(f"[Watcher] New scans will open automatically. Press Ctrl+C to stop.\n")
 
     # Open the labeler now so it's ready
-    webbrowser.open(f"http://localhost:{PORT}")
+    webbrowser.open(f"http://localhost:{port}")
 
     try:
         while True:
