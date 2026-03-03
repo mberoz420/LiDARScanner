@@ -589,30 +589,18 @@
         function setView(view) {
             const dist = sceneSize * 2.5;
             const c = sceneCenter;
-            const isPerspective = (view === 'perspective');
+            const isPersp = (view === 'perspective');
 
-            // Switch camera type
-            if (isPerspective && currentViewMode !== 'perspective') {
-                currentViewMode = 'perspective';
-                camera = perspCamera;
-                if (controls) controls.dispose();
-                controls = new THREE.OrbitControls(camera, renderer.domElement);
-                controls.enableDamping = true;
-                document.getElementById('ortho-badge').style.display = 'none';
-                document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan';
-            } else if (!isPerspective && currentViewMode === 'perspective') {
-                currentViewMode = 'ortho';
-                camera = orthoCamera;
-                if (controls) controls.dispose();
-                controls = new THREE.OrbitControls(camera, renderer.domElement);
-                controls.enableDamping = true;
-                controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
-                document.getElementById('ortho-badge').style.display = 'block';
-                document.getElementById('info').textContent = 'Drag to pan | Scroll to zoom | (true orthographic)';
-                // Resize ortho frustum to fit scene
+            // Pick camera — always switch, always recreate controls fresh.
+            // This avoids stale OrbitControls state when camera.up changes between views.
+            camera = isPersp ? perspCamera : orthoCamera;
+            currentViewMode = isPersp ? 'perspective' : 'ortho';
+
+            if (!isPersp) {
                 updateOrthoFrustum();
             }
 
+            // Position and orientation
             switch(view) {
                 case 'top':
                     camera.position.set(c.x, c.y + dist, c.z);
@@ -644,15 +632,32 @@
                     camera.up.set(0, 1, 0);
                     break;
             }
-
-            controls.target.set(c.x, c.y, c.z);
             camera.lookAt(c.x, c.y, c.z);
+
+            // Recreate controls every time so up-vector and camera type are respected
+            if (controls) controls.dispose();
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.target.set(c.x, c.y, c.z);
+
+            if (!isPersp) {
+                // Ortho views: disable rotation so the view stays flat
+                controls.enableRotate = false;
+                document.getElementById('ortho-badge').style.display = 'block';
+                document.getElementById('info').textContent = 'Drag to pan | Scroll to zoom | (orthographic)';
+            } else {
+                document.getElementById('ortho-badge').style.display = 'none';
+                document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan';
+            }
+
             controls.update();
         }
 
         function updateOrthoFrustum() {
             if (!orthoCamera || !renderer) return;
-            const aspect = renderer.domElement.width / renderer.domElement.height;
+            const w = renderer.domElement.clientWidth  || renderer.domElement.width;
+            const h = renderer.domElement.clientHeight || renderer.domElement.height;
+            const aspect = w / h;
             const halfH = sceneSize * 1.2;
             const halfW = halfH * aspect;
             orthoCamera.left   = -halfW;
