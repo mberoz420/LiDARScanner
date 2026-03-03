@@ -251,9 +251,7 @@ struct ScannerView: View {
     private func toggleScanning() {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
-            if AppSettings.shared.autoSaveAfterScan {
-                Task { await autoSaveToServer() }
-            }
+            Task { await autoSaveToServer() }
         } else {
             capturedScan = nil
             meshManager.startScanning()
