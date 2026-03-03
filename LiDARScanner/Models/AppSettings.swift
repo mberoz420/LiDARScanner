@@ -77,11 +77,11 @@ class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
     // Export settings
-    @AppStorage("defaultExportDestination") var defaultDestination: ExportDestination = .shareSheet
+    @AppStorage("defaultExportDestination") var defaultDestination: ExportDestination = .googleDrive
     @AppStorage("defaultExportFormat") var defaultFormat: DefaultExportFormat = .ask
-    @AppStorage("autoSaveAfterScan") var autoSaveAfterScan: Bool = false
+    @AppStorage("autoSaveAfterScan") var autoSaveAfterScan: Bool = true
     @AppStorage("includeColorsInExport") var includeColors: Bool = true
-    @AppStorage("googleDriveFolderName") var googleDriveFolderName: String = "LiDAR Scans"
+    @AppStorage("googleDriveFolderName") var googleDriveFolderName: String = "LidarScans"
 
     // Google Drive settings
     @AppStorage("googleClientID") var googleClientID: String = ""

@@ -20,7 +20,7 @@ class GoogleDriveManager: NSObject, ObservableObject {
 
     // Configuration
     @AppStorage("googleClientID") var clientID: String = ""
-    @AppStorage("googleDriveFolderName") private var folderName: String = "LiDAR Scans"
+    @AppStorage("googleDriveFolderName") private var folderName: String = "LidarScans"
 
     // OAuth configuration
     private let redirectScheme = "com.lidarscanner.oauth"
