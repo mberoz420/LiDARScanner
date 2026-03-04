@@ -523,16 +523,9 @@ struct PhotogrammetryView: View {
 
         let session = try PhotogrammetrySession(input: inputDir, configuration: config)
 
-        let detail: PhotogrammetrySession.Request.Detail = {
-            switch preset {
-            case .quick:    return .reduced
-            case .standard: return .reduced
-            case .detailed: return .full
-            case .free:     return .full
-            }
-        }()
-
-        try session.process(requests: [.modelFile(url: outputURL, detail: detail)])
+        // PhotogrammetrySession.Request.Detail is macOS-only.
+        // On iOS 17 the request omits the detail parameter.
+        try session.process(requests: [.modelFile(url: outputURL)])
 
         for try await output in session.outputs {
             switch output {
