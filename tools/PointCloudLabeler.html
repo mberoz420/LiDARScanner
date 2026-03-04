@@ -2124,8 +2124,39 @@
             const scanFile = params.get('scan');
             if (!scanFile) return;
 
-            document.getElementById('selection-info').textContent = `Auto-loading: ${scanFile}…`;
+            // Photogrammetry sessions have IDs starting with 'photos_'
+            // Handle ?scan=photos_... the same as ?photos=...
+            if (scanFile.startsWith('photos_')) {
+                document.getElementById('selection-info').textContent =
+                    `Loading photogrammetry session: ${scanFile}…`;
+                try {
+                    const sRes = await fetch(`/scans/photos/${scanFile}/session.json`);
+                    if (!sRes.ok) throw new Error(`HTTP ${sRes.status}`);
+                    const session    = await sRes.json();
+                    const photoCount = session.photo_count || 0;
+                    const poseCount  = session.pose_count  || 0;
+                    showPhotogrammetryPanel(scanFile, photoCount, poseCount);
+                    buildFilmstrip(scanFile, photoCount);
+                    try {
+                        const tRes = await fetch(`/scans/photos/${scanFile}/transforms.json`);
+                        if (tRes.ok) {
+                            const tData = await tRes.json();
+                            const poses = tData.camera_poses || [];
+                            buildCameraPath(poses);
+                            document.getElementById('photo-pose-stat').textContent = poses.length;
+                        }
+                    } catch (_) { /* transforms optional */ }
+                    document.getElementById('selection-info').textContent =
+                        `Photogrammetry session loaded — ${photoCount} photos`;
+                } catch (e) {
+                    document.getElementById('selection-info').textContent =
+                        `Failed to auto-load ${scanFile}: ${e.message}`;
+                }
+                return;
+            }
 
+            // LiDAR point-cloud scan
+            document.getElementById('selection-info').textContent = `Auto-loading: ${scanFile}…`;
             try {
                 const res = await fetch(`/scans/${scanFile}`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2133,7 +2164,6 @@
                 loadJSON(data);
                 document.getElementById('selection-info').textContent =
                     `Loaded: ${scanFile} — ${points.length.toLocaleString()} points`;
-                // Auto-classify unlabeled points
                 smartAutoClassify(false);
             } catch (e) {
                 document.getElementById('selection-info').textContent =

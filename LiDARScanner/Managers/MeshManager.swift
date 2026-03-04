@@ -1912,13 +1912,7 @@ class MeshManager: NSObject, ObservableObject {
 
         let anchor = AnchorEntity(world: volume.center)
 
-        // Ghost fill — barely visible
-        var fillMat = UnlitMaterial()
-        fillMat.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.04))
-        let fill = ModelEntity(mesh: MeshResource.generateBox(size: side), materials: [fillMat])
-        anchor.addChild(fill)
-
-        // Solid cyan edge bars
+        // Solid cyan edge bars (no fill — RealityKit ignores alpha tint on UnlitMaterial)
         var edgeMat = UnlitMaterial()
         edgeMat.color = .init(tint: UIColor(red: 0.0, green: 0.9, blue: 1.0, alpha: 1.0))
 
