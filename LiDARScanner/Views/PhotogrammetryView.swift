@@ -629,7 +629,7 @@ struct PhotogrammetryView: View {
                     )
 
                 // Center crosshair — shows where cube button samples depth from
-                if camera.latestDepthMap != nil {
+                if phase != .processing {
                     ZStack {
                         // Crosshair lines
                         Rectangle()
@@ -708,8 +708,9 @@ struct PhotogrammetryView: View {
             Button(action: {
                 if camera.targetDepth != nil {
                     camera.targetDepth = nil
-                } else if let depth = camera.sampleDepth(at: CGPoint(x: 0.5, y: 0.5)) {
-                    camera.targetDepth = depth
+                } else {
+                    // Sample from center; fall back to 1.0 m if depth map not yet available
+                    camera.targetDepth = camera.sampleDepth(at: CGPoint(x: 0.5, y: 0.5)) ?? 1.0
                 }
             }) {
                 ZStack(alignment: .topTrailing) {
@@ -783,8 +784,8 @@ struct PhotogrammetryView: View {
                         .tint(.green)
                         .frame(width: 120)
                     }
-                } else if camera.latestDepthMap != nil {
-                    Text("Tap object to set depth mask")
+                } else {
+                    Text("Tap ⬜ or object to set depth mask")
                         .font(.caption2).foregroundColor(.white.opacity(0.6))
                 }
             }
