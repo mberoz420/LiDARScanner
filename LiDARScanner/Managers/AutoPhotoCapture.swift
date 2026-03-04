@@ -34,10 +34,10 @@ class AutoPhotoCapture: ObservableObject {
 
     // ── Stillness detection state ─────────────────────────────────────────────
     private var prevFrameTransform: simd_float4x4?
-    private var prevFrameDate: Date = .distantPast
+    private var prevFrameTimestamp: TimeInterval = 0   // ARKit hardware clock (frame.timestamp)
     private var smoothedSpeedMs: Float    = 0   // m/s,  EMA
     private var smoothedAngularDs: Float  = 0   // °/s,  EMA
-    private var stillSince: Date?               // when camera first became still
+    private var stillSinceTimestamp: TimeInterval?     // ARKit hardware timestamp of "became still"
 
     // ── Thresholds ────────────────────────────────────────────────────────────
     private static let maxPhotos         = 60
@@ -67,55 +67,54 @@ class AutoPhotoCapture: ObservableObject {
         photoCount = 0
         lastCaptureTransform = nil
         cameraPoses = []
-        prevFrameTransform = nil
-        prevFrameDate = .distantPast
-        smoothedSpeedMs   = 0
-        smoothedAngularDs = 0
-        stillSince = nil
+        prevFrameTransform    = nil
+        prevFrameTimestamp    = 0
+        smoothedSpeedMs       = 0
+        smoothedAngularDs     = 0
+        stillSinceTimestamp   = nil
     }
 
     /// Call from ARSessionDelegate.session(_:didUpdate:) each frame.
-    /// Captures when the camera has been still for `stillDuration` seconds
-    /// AND has moved enough since the previous capture.
+    /// Uses frame.timestamp (ARKit hardware clock) for all timing so that
+    /// Task { @MainActor } dispatch delays don't corrupt the velocity calculation.
     func process(frame: ARFrame) {
         guard isEnabled, photoCount < Self.maxPhotos else { return }
 
-        let t   = frame.camera.transform
-        let now = Date()
+        let t  = frame.camera.transform
+        let ts = frame.timestamp   // seconds since device boot — unaffected by dispatch timing
 
-        // ── 1. Compute per-frame velocity ─────────────────────────────────────
-        if let prev = prevFrameTransform {
-            let dt = Float(max(now.timeIntervalSince(prevFrameDate), 0.001))
+        // ── 1. Per-frame velocity (hardware-timestamped) ──────────────────────
+        if let prev = prevFrameTransform, prevFrameTimestamp > 0 {
+            let dt = Float(max(ts - prevFrameTimestamp, 0.001))   // actual inter-frame interval
 
             let dp = SIMD3<Float>(
                 t.columns.3.x - prev.columns.3.x,
                 t.columns.3.y - prev.columns.3.y,
                 t.columns.3.z - prev.columns.3.z
             )
-            let speedMs = simd_length(dp) / dt                                    // m/s
+            let speedMs = simd_length(dp) / dt                    // m/s
 
             let fwd     = SIMD3<Float>(t.columns.2.x,    t.columns.2.y,    t.columns.2.z)
             let prevFwd = SIMD3<Float>(prev.columns.2.x, prev.columns.2.y, prev.columns.2.z)
             let dot     = simd_clamp(simd_dot(fwd, prevFwd), -1, 1)
-            let angDs   = acos(dot) * (180 / Float.pi) / dt                       // °/s
+            let angDs   = acos(dot) * (180 / Float.pi) / dt      // °/s
 
-            // Exponential moving average — smooths out per-frame jitter
             smoothedSpeedMs   = smoothedSpeedMs   * (1 - Self.α) + speedMs * Self.α
             smoothedAngularDs = smoothedAngularDs * (1 - Self.α) + angDs   * Self.α
         }
         prevFrameTransform = t
-        prevFrameDate      = now
+        prevFrameTimestamp = ts
 
         // ── 2. Detect stillness ───────────────────────────────────────────────
         let isStill = smoothedSpeedMs < Self.stillSpeedMs && smoothedAngularDs < Self.stillAngDs
         if isStill {
-            if stillSince == nil { stillSince = now }
+            if stillSinceTimestamp == nil { stillSinceTimestamp = ts }
         } else {
-            stillSince = nil
+            stillSinceTimestamp = nil
         }
 
-        guard let since = stillSince,
-              now.timeIntervalSince(since) >= Self.stillDuration else { return }
+        guard let since = stillSinceTimestamp,
+              ts - since >= Self.stillDuration else { return }
 
         // ── 3. Require minimum displacement from last capture ─────────────────
         if let last = lastCaptureTransform {
@@ -141,7 +140,7 @@ class AutoPhotoCapture: ObservableObject {
             photoCount += 1
             lastCaptureTransform = t
             cameraPoses.append(t)
-            stillSince = nil   // reset so next capture requires stopping again
+            stillSinceTimestamp = nil   // require stopping again for the next capture
         } catch {}
     }
 
@@ -158,7 +157,7 @@ class AutoPhotoCapture: ObservableObject {
             photoCount += 1
             lastCaptureTransform = t
             cameraPoses.append(t)
-            stillSince = nil
+            stillSinceTimestamp = nil
             return url
         } catch {
             return nil
