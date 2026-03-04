@@ -192,22 +192,9 @@ class AutoPhotoCapture: ObservableObject {
     // MARK: - Private
 
     private func buildImageData(frame: ARFrame, transform: simd_float4x4) -> Data? {
-        if let volume = scanVolume,
-           let sceneDepth = frame.sceneDepth {
-            let cam = transform.columns.3
-            let camPos = SIMD3<Float>(cam.x, cam.y, cam.z)
-            let targetDepth = simd_length(volume.center - camPos)
-            return DepthMaskProcessor.masked(
-                imageBuffer: frame.capturedImage,
-                depthMap:    sceneDepth.depthMap,
-                targetDepth: targetDepth,
-                buffer:      volume.halfExtent
-            )
-        } else {
-            let ci = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
-            guard let cg = ciContext.createCGImage(ci, from: ci.extent) else { return nil }
-            return UIImage(cgImage: cg).jpegData(compressionQuality: 0.85)
-        }
+        let ci = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
+        guard let cg = ciContext.createCGImage(ci, from: ci.extent) else { return nil }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.85)
     }
 
     private static func makeDir() -> URL {

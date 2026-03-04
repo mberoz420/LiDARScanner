@@ -1908,7 +1908,7 @@ class MeshManager: NSObject, ObservableObject {
         let side = volume.halfExtent * 2
         let mesh = MeshResource.generateBox(size: side)
         var material = UnlitMaterial()
-        material.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.28))
+        material.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.06))
         let entity = ModelEntity(mesh: mesh, materials: [material])
 
         let anchor = AnchorEntity(world: volume.center)

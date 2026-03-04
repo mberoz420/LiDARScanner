@@ -728,54 +728,44 @@ struct PhotogrammetryView: View {
     var modeSelectionOverlay: some View {
         VStack {
             Spacer()
-            VStack(spacing: 20) {
-                Text("Choose Scan Mode")
-                    .font(.title3).fontWeight(.bold).foregroundColor(.white)
+            VStack(spacing: 14) {
+                Text("Choose mode")
+                    .font(.caption).foregroundColor(.white.opacity(0.7))
 
-                HStack(spacing: 16) {
-                    // ── Cube mode ──────────────────────────────────────────────
+                HStack(spacing: 12) {
                     Button(action: { selectMode(.cube) }) {
-                        VStack(spacing: 14) {
+                        VStack(spacing: 6) {
                             Image(systemName: "cube")
-                                .font(.system(size: 42))
-                                .foregroundColor(.yellow)
+                                .font(.title3).foregroundColor(.yellow)
                             Text("Object Scan")
-                                .font(.headline).foregroundColor(.white)
-                            Text("Define a 3D cube\naround your object")
-                                .font(.caption).foregroundColor(.white.opacity(0.7))
-                                .multilineTextAlignment(.center)
+                                .font(.caption2).foregroundColor(.white)
                         }
-                        .frame(width: 148, height: 170)
+                        .frame(width: 84, height: 60)
                         .background(Color.white.opacity(0.08))
-                        .cornerRadius(18)
-                        .overlay(RoundedRectangle(cornerRadius: 18)
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.yellow.opacity(0.6), lineWidth: 1.5))
                     }
 
-                    // ── Free mode ──────────────────────────────────────────────
                     Button(action: { selectMode(.free) }) {
-                        VStack(spacing: 14) {
+                        VStack(spacing: 6) {
                             Image(systemName: "camera")
-                                .font(.system(size: 42))
-                                .foregroundColor(.white)
+                                .font(.title3).foregroundColor(.white)
                             Text("Free Capture")
-                                .font(.headline).foregroundColor(.white)
-                            Text("No limits — capture\nthe full scene")
-                                .font(.caption).foregroundColor(.white.opacity(0.7))
-                                .multilineTextAlignment(.center)
+                                .font(.caption2).foregroundColor(.white)
                         }
-                        .frame(width: 148, height: 170)
+                        .frame(width: 84, height: 60)
                         .background(Color.white.opacity(0.08))
-                        .cornerRadius(18)
-                        .overlay(RoundedRectangle(cornerRadius: 18)
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.white.opacity(0.3), lineWidth: 1.5))
                     }
                 }
             }
-            .padding(28)
+            .padding(.horizontal, 20).padding(.vertical, 16)
             .background(.ultraThinMaterial)
-            .cornerRadius(24)
-            .padding(.horizontal, 20)
+            .cornerRadius(18)
+            .padding(.horizontal, 40)
             .padding(.bottom, 60)
         }
     }
