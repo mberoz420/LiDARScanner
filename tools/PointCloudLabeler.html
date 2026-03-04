@@ -339,6 +339,74 @@
         .build-info-row span:last-child {
             color: #fff;
         }
+
+        /* ── Photogrammetry Panel ─────────────────────────────── */
+        #photo-panel {
+            margin-top: 4px;
+        }
+        .photo-filmstrip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 10px 0;
+            max-height: 220px;
+            overflow-y: auto;
+            padding: 4px;
+            background: #0f3460;
+            border-radius: 8px;
+        }
+        .photo-filmstrip img {
+            width: 58px;
+            height: 58px;
+            object-fit: cover;
+            border-radius: 4px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: border-color 0.15s;
+            flex-shrink: 0;
+        }
+        .photo-filmstrip img:hover  { border-color: #3498db; }
+        .photo-filmstrip img.active { border-color: #e94560; }
+        .photo-preview-wrap {
+            position: relative;
+            margin: 8px 0;
+            background: #0f3460;
+            border-radius: 8px;
+            overflow: hidden;
+            display: none;
+        }
+        .photo-preview-wrap img {
+            width: 100%;
+            display: block;
+            border-radius: 8px;
+        }
+        .photo-preview-label {
+            position: absolute;
+            bottom: 6px;
+            left: 8px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .photo-toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            margin: 6px 0;
+            cursor: pointer;
+        }
+        .photo-badge {
+            background: #e94560;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 10px;
+            margin-left: 6px;
+        }
     </style>
 </head>
 <body>
@@ -519,6 +587,39 @@
                 <div><span><span class="color-dot" style="background:#ff00ff"></span>Back Reflection:</span><span id="stat-backreflection">0</span></div>
                 <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
                 <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
+            </div>
+
+            <!-- ── Photogrammetry Panel (shown only when ?photos= param present) ── -->
+            <h2 id="photo-panel-header" style="display:none">
+                📷 Photogrammetry
+                <span class="photo-badge" id="photo-count-badge">0</span>
+            </h2>
+            <div id="photo-panel" style="display:none">
+                <div class="stats">
+                    <div><span>Session</span><span id="photo-session-label" style="font-family:monospace;font-size:10px">—</span></div>
+                    <div><span>Photos</span><span id="photo-count-stat">—</span></div>
+                    <div><span>Camera Poses</span><span id="photo-pose-stat">—</span></div>
+                </div>
+
+                <div class="photo-toggle-row">
+                    <input type="checkbox" id="show-camera-path" checked onchange="toggleCameraPath()">
+                    <label for="show-camera-path" style="cursor:pointer;">Show Camera Path</label>
+                </div>
+                <div class="photo-toggle-row">
+                    <input type="checkbox" id="show-photo-cones" checked onchange="toggleCameraPath()">
+                    <label for="show-photo-cones" style="cursor:pointer;">Show Camera Cones</label>
+                </div>
+
+                <div class="photo-filmstrip" id="photo-filmstrip"></div>
+
+                <div class="photo-preview-wrap" id="photo-preview-wrap">
+                    <img id="photo-preview-img" src="" alt="preview">
+                    <div class="photo-preview-label" id="photo-preview-label"></div>
+                </div>
+
+                <button class="btn btn-action btn-small" onclick="clearPhotoLayer()" style="margin-top:6px">
+                    ✕ Clear Photo Layer
+                </button>
             </div>
 
             <h2>Build Status</h2>
@@ -1844,6 +1945,171 @@
             div.textContent = text;
             return div.innerHTML;
         }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // PHOTOGRAMMETRY LAYER
+        // Activated by URL param ?photos=SESSION_ID
+        // Shows a photo filmstrip + camera path cones in the 3-D scene.
+        // ══════════════════════════════════════════════════════════════════════
+
+        let cameraPathGroup = null;   // THREE.Group holding path + cones
+        let activePhotoIdx  = -1;
+
+        function showPhotogrammetryPanel(sessionId, photoCount, poseCount) {
+            document.getElementById('photo-panel-header').style.display = '';
+            document.getElementById('photo-panel').style.display = '';
+            document.getElementById('photo-count-badge').textContent = photoCount;
+            document.getElementById('photo-session-label').textContent = sessionId;
+            document.getElementById('photo-count-stat').textContent   = photoCount;
+            document.getElementById('photo-pose-stat').textContent    = poseCount;
+        }
+
+        function buildFilmstrip(sessionId, photoCount) {
+            const strip = document.getElementById('photo-filmstrip');
+            strip.innerHTML = '';
+            for (let i = 0; i < photoCount; i++) {
+                const name = 'auto_' + String(i).padStart(4, '0') + '.jpg';
+                const img  = document.createElement('img');
+                img.src   = `/scans/photos/${sessionId}/${name}`;
+                img.title = name;
+                img.dataset.idx  = i;
+                img.dataset.name = name;
+                img.onerror = () => { img.style.display = 'none'; };
+                img.onclick = () => selectPhoto(img, sessionId, i, name);
+                strip.appendChild(img);
+            }
+        }
+
+        function selectPhoto(imgEl, sessionId, idx, name) {
+            // Deselect previous
+            document.querySelectorAll('#photo-filmstrip img').forEach(el => el.classList.remove('active'));
+            imgEl.classList.add('active');
+            activePhotoIdx = idx;
+
+            // Large preview
+            const wrap  = document.getElementById('photo-preview-wrap');
+            const pImg  = document.getElementById('photo-preview-img');
+            const pLbl  = document.getElementById('photo-preview-label');
+            pImg.src    = `/scans/photos/${sessionId}/${name}`;
+            pLbl.textContent = name + '  (#' + idx + ')';
+            wrap.style.display = 'block';
+
+            // Highlight cone in scene (child[0] = Line, child[1+] = cones for each pose)
+            if (cameraPathGroup) {
+                cameraPathGroup.children.forEach((child, ci) => {
+                    if (child.isMesh) {
+                        child.material.color.setHex(ci === idx + 1 ? 0xff2222 : 0xff8800);
+                    }
+                });
+            }
+        }
+
+        function buildCameraPath(poses) {
+            if (!scene) return;
+            if (cameraPathGroup) scene.remove(cameraPathGroup);
+            cameraPathGroup = new THREE.Group();
+
+            if (!poses || poses.length === 0) {
+                scene.add(cameraPathGroup);
+                return;
+            }
+
+            // Positions from translation column of each 4x4 column-major matrix
+            // Column-major: indices 12,13,14 = translation (x,y,z)
+            const positions = poses.map(m => new THREE.Vector3(m[12], m[13], m[14]));
+
+            // Draw path line
+            const lineGeo = new THREE.BufferGeometry().setFromPoints(positions);
+            const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800 });
+            const line    = new THREE.Line(lineGeo, lineMat);
+            cameraPathGroup.add(line);
+
+            // Draw a cone at each camera position (pointing in -Z forward dir in ARKit)
+            const coneMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+            poses.forEach((m, i) => {
+                const pos = new THREE.Vector3(m[12], m[13], m[14]);
+                // ARKit camera -Z axis (column 2, negated) = forward direction
+                const fwd = new THREE.Vector3(-m[8], -m[9], -m[10]).normalize();
+
+                const geo  = new THREE.ConeGeometry(0.025, 0.07, 8);
+                const mesh = new THREE.Mesh(geo, coneMat.clone());
+                mesh.position.copy(pos);
+
+                // Rotate default cone (+Y up) to point toward 'fwd'
+                mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), fwd);
+                cameraPathGroup.add(mesh);
+            });
+
+            scene.add(cameraPathGroup);
+        }
+
+        function toggleCameraPath() {
+            if (!cameraPathGroup) return;
+            const showPath  = document.getElementById('show-camera-path').checked;
+            const showCones = document.getElementById('show-photo-cones').checked;
+            cameraPathGroup.children.forEach((child, i) => {
+                if (i === 0) {
+                    // First child is the Line
+                    child.visible = showPath;
+                } else {
+                    // Remaining are cone meshes
+                    child.visible = showCones;
+                }
+            });
+        }
+
+        function clearPhotoLayer() {
+            if (cameraPathGroup) {
+                scene.remove(cameraPathGroup);
+                cameraPathGroup = null;
+            }
+            document.getElementById('photo-panel-header').style.display = 'none';
+            document.getElementById('photo-panel').style.display = 'none';
+            document.getElementById('photo-preview-wrap').style.display = 'none';
+            document.getElementById('photo-filmstrip').innerHTML = '';
+        }
+
+        // ── Auto-load from ?photos=SESSION_ID URL param ───────────────────────
+        (async function autoLoadPhotos() {
+            const params    = new URLSearchParams(window.location.search);
+            const sessionId = params.get('photos');
+            if (!sessionId) return;
+
+            document.getElementById('selection-info').textContent =
+                `Loading photogrammetry session: ${sessionId}…`;
+
+            try {
+                // 1. Load session metadata
+                const sRes     = await fetch(`/scans/photos/${sessionId}/session.json`);
+                if (!sRes.ok) throw new Error(`session.json HTTP ${sRes.status}`);
+                const session  = await sRes.json();
+                const photoCount = session.photo_count || 0;
+                const poseCount  = session.pose_count  || 0;
+
+                showPhotogrammetryPanel(sessionId, photoCount, poseCount);
+                buildFilmstrip(sessionId, photoCount);
+
+                // 2. Load camera transforms (optional — may not exist if no LiDAR depth)
+                try {
+                    const tRes   = await fetch(`/scans/photos/${sessionId}/transforms.json`);
+                    if (tRes.ok) {
+                        const tData  = await tRes.json();
+                        const poses  = tData.camera_poses || [];
+                        buildCameraPath(poses);
+                        document.getElementById('photo-pose-stat').textContent = poses.length;
+                    }
+                } catch (_) { /* transforms optional */ }
+
+                document.getElementById('selection-info').textContent =
+                    `Photogrammetry session loaded — ${photoCount} photos`;
+
+            } catch (e) {
+                document.getElementById('selection-info').textContent =
+                    `Failed to load photogrammetry session ${sessionId}: ${e.message}`;
+            }
+        })();
+
+        // ══════════════════════════════════════════════════════════════════════
 
         // Initialize
         init();

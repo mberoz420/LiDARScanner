@@ -90,8 +90,13 @@ def main():
                 filename = entry["filename"]
                 if filename not in seen:
                     seen.add(filename)
-                    url = f"{SERVER_URL}/?scan={filename}"
-                    print(f"\n[Watcher] New scan: {filename}")
+                    entry_type = entry.get("type", "lidar")
+                    if entry_type == "photogrammetry":
+                        url = f"{SERVER_URL}/?photos={filename}"
+                        print(f"\n[Watcher] New photogrammetry session: {filename}")
+                    else:
+                        url = f"{SERVER_URL}/?scan={filename}"
+                        print(f"\n[Watcher] New LiDAR scan: {filename}")
                     print(f"[Watcher] Opening : {url}")
                     open_url(url)
 

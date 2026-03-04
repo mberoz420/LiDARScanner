@@ -559,6 +559,10 @@ struct PhotogrammetryView: View {
     @State private var captureCount: Int = 0
     /// Briefly true when a new photo is captured — drives the flash overlay
     @State private var showFlash: Bool = false
+    /// Upload-to-labeler state
+    @State private var isUploadingToLabeler = false
+    @State private var labelerSessionId: String?
+    @State private var labelerUploadError: String?
 
     enum Phase { case capturing, processing, done, failed }
 
@@ -904,21 +908,69 @@ struct PhotogrammetryView: View {
                 Text("3D Model Ready").font(.title2).fontWeight(.bold).foregroundColor(.white)
                 Text("USDZ file — open in AR Quick Look,\nBlender, or any 3D viewer")
                     .font(.caption).multilineTextAlignment(.center).foregroundColor(.white.opacity(0.7))
-                HStack(spacing: 20) {
+
+                HStack(spacing: 16) {
                     Button(action: { showShareSheet = true }) {
                         Label("Share", systemImage: "square.and.arrow.up")
                             .font(.headline).foregroundColor(.white)
-                            .padding(.horizontal, 28).padding(.vertical, 14)
+                            .padding(.horizontal, 20).padding(.vertical, 14)
                             .background(Color.blue).cornerRadius(14)
                     }
+
+                    // ── Send to Point Cloud Labeler ──────────────────────────
+                    Button(action: sendToLabeler) {
+                        Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
+                              systemImage: "square.and.arrow.up.on.square")
+                            .font(.headline).foregroundColor(.white)
+                            .padding(.horizontal, 20).padding(.vertical, 14)
+                            .background(labelerSessionId != nil ? Color.green : Color.orange)
+                            .cornerRadius(14)
+                    }
+                    .disabled(isUploadingToLabeler)
+
                     Button(action: { dismiss() }) {
                         Text("Done").font(.headline).foregroundColor(.white)
-                            .padding(.horizontal, 28).padding(.vertical, 14)
+                            .padding(.horizontal, 20).padding(.vertical, 14)
                             .background(Color.gray.opacity(0.4)).cornerRadius(14)
                     }
                 }
+
+                // Upload status feedback
+                if isUploadingToLabeler {
+                    ProgressView("Uploading \(meshManager.autoCapture.photoCount) photos…")
+                        .foregroundColor(.white).tint(.white)
+                } else if let sid = labelerSessionId {
+                    Text("Photos uploaded — labeler will auto-open")
+                        .font(.caption).foregroundColor(.green)
+                        .multilineTextAlignment(.center)
+                    Text(sid).font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                } else if let err = labelerUploadError {
+                    Text("Upload failed: \(err)")
+                        .font(.caption).foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                }
             }
             .padding(40)
+        }
+    }
+
+    func sendToLabeler() {
+        isUploadingToLabeler = true
+        labelerSessionId     = nil
+        labelerUploadError   = nil
+        let dir    = meshManager.autoCapture.photoDir
+        let poses  = meshManager.autoCapture.posesJSON()
+        Task {
+            let sid = await ScanServerManager.shared.uploadPhotos(from: dir, posesData: poses)
+            await MainActor.run {
+                isUploadingToLabeler = false
+                if let sid {
+                    labelerSessionId = sid
+                } else {
+                    labelerUploadError = ScanServerManager.shared.lastError ?? "Unknown error"
+                }
+            }
         }
     }
 

@@ -25,6 +25,10 @@ class AutoPhotoCapture: ObservableObject {
     private var lastCaptureDate: Date = .distantPast
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
+    /// Camera pose (simd_float4x4) recorded at the moment each photo was captured.
+    /// Index N corresponds to auto_000N.jpg.
+    private(set) var cameraPoses: [simd_float4x4] = []
+
     // Capture thresholds
     private static let captureInterval: TimeInterval = 1.5  // seconds — primary trigger
     private static let minDistanceM:    Float = 0.05        // 5 cm  — movement trigger
@@ -42,6 +46,7 @@ class AutoPhotoCapture: ObservableObject {
         photoCount = 0
         lastCaptureTransform = nil
         lastCaptureDate = .distantPast
+        cameraPoses = []
     }
 
     /// Call from ARSessionDelegate.session(_:didUpdate:) each frame.
@@ -83,6 +88,7 @@ class AutoPhotoCapture: ObservableObject {
             photoCount += 1
             lastCaptureTransform = t
             lastCaptureDate = now
+            cameraPoses.append(t)
         } catch {}
     }
 
@@ -99,10 +105,26 @@ class AutoPhotoCapture: ObservableObject {
             photoCount += 1
             lastCaptureTransform = t
             lastCaptureDate = Date()
+            cameraPoses.append(t)
             return url
         } catch {
             return nil
         }
+    }
+
+    /// Serializes all camera poses as a JSON object for upload.
+    /// Each pose is a 16-element column-major Float array (simd_float4x4 layout).
+    func posesJSON() -> Data? {
+        let matrices = cameraPoses.map { m -> [Float] in
+            [m.columns.0.x, m.columns.0.y, m.columns.0.z, m.columns.0.w,
+             m.columns.1.x, m.columns.1.y, m.columns.1.z, m.columns.1.w,
+             m.columns.2.x, m.columns.2.y, m.columns.2.z, m.columns.2.w,
+             m.columns.3.x, m.columns.3.y, m.columns.3.z, m.columns.3.w]
+        }
+        return try? JSONSerialization.data(
+            withJSONObject: ["camera_poses": matrices],
+            options: .prettyPrinted
+        )
     }
 
     /// All captured photo URLs, sorted by capture order.
