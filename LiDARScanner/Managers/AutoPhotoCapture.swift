@@ -253,7 +253,7 @@ class AutoPhotoCapture: ObservableObject {
     private func buildImageData(frame: ARFrame, transform: simd_float4x4) -> Data? {
         let ci = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
         guard let cg = ciContext.createCGImage(ci, from: ci.extent) else { return nil }
-        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.85)
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.92)
     }
 
     private static func makeDir() -> URL {

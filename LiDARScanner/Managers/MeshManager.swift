@@ -538,6 +538,13 @@ class MeshManager: NSObject, ObservableObject {
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
         config.frameSemantics.insert(.sceneDepth)
+        // Pick the highest-resolution video format available (more detail for color sampling)
+        if let best = ARWorldTrackingConfiguration.supportedVideoFormats
+            .sorted(by: { $0.imageResolution.width * $0.imageResolution.height >
+                          $1.imageResolution.width * $1.imageResolution.height })
+            .first {
+            config.videoFormat = best
+        }
         // No .resetTracking — preserves the existing world coordinate system
         arView.session.run(config)
     }
