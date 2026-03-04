@@ -2415,6 +2415,106 @@
             });
         }
 
+        // ── Reconstruct dense colored point cloud from per-frame LiDAR depth maps ──
+        // Used when no LiDAR mesh is available (Photo Only mode).
+        // Each depth frame (Float32 binary, landscape orientation) is back-projected
+        // into world space using the camera pose + intrinsics, then colored from the
+        // corresponding portrait JPEG photo.
+        async function reconstructFromDepths(sessionId, poses, intrinsics, imgW, imgH, depthSizes) {
+            if (!depthSizes || !depthSizes.length || !poses.length) return;
+
+            const W = imgW || 1920, H = imgH || 1440;
+            const SCALE = 0.5;  // canvas downsample ratio for color sampling
+
+            document.getElementById('selection-info').textContent =
+                `Reconstructing point cloud from ${poses.length} depth frames…`;
+
+            // Reset point cloud — we're building fresh from depth
+            points = []; normals = []; labels = []; rgbColors = []; meshFaces = null;
+
+            for (let ci = 0; ci < poses.length; ci++) {
+                const sz   = depthSizes[ci] || [256, 192];
+                const W_d  = sz[0], H_d = sz[1];
+                const intr = (intrinsics && intrinsics[ci]) || [W*0.75, W*0.75, W/2, H/2];
+                const [fx, fy, cx, cy] = intr;
+
+                // Scale RGB intrinsics to depth map resolution
+                const fx_d = fx * W_d / W,  fy_d = fy * H_d / H;
+                const cx_d = cx * W_d / W,  cy_d = cy * H_d / H;
+
+                const m = poses[ci];  // camera-to-world, column-major 16 floats
+
+                // Load raw Float32 depth binary
+                const depthName = 'auto_' + String(ci).padStart(4,'0') + '_depth.bin';
+                const depthRes = await fetch(`/scans/photos/${sessionId}/${depthName}`);
+                if (!depthRes.ok) { console.log(`[Depth] missing ${depthName}`); continue; }
+                const depths = new Float32Array(await depthRes.arrayBuffer());
+
+                // Load portrait photo at half resolution for color sampling
+                // Portrait canvas: width = H (landscape height), height = W (landscape width)
+                const canvW = Math.round(H * SCALE);
+                const canvH = Math.round(W * SCALE);
+                const photoName = 'auto_' + String(ci).padStart(4,'0') + '.jpg';
+                const photoData = await _loadPhotoPixels(
+                    `/scans/photos/${sessionId}/${photoName}`, canvW, canvH);
+
+                let added = 0;
+                for (let v = 0; v < H_d; v++) {
+                    for (let u = 0; u < W_d; u++) {
+                        const d = depths[v * W_d + u];
+                        // Skip invalid, too-near, or too-far pixels
+                        if (!isFinite(d) || d < 0.05 || d > 5.0) continue;
+
+                        // Back-project to camera space
+                        // ARKit: X right, Y up, Z backward → in-front points have Z_c < 0
+                        const Xc =  (u - cx_d) * d / fx_d;
+                        const Yc = -(v - cy_d) * d / fy_d;  // flip: image v↓, camera Y↑
+                        const Zc = -d;
+
+                        // Transform to world space: Pw = M * [Xc, Yc, Zc, 1]
+                        // Column-major M: col0=(m[0..3]), col1=(m[4..7]), col2=(m[8..11]), col3=(m[12..15])
+                        const Xw = m[0]*Xc + m[4]*Yc + m[8] *Zc + m[12];
+                        const Yw = m[1]*Xc + m[5]*Yc + m[9] *Zc + m[13];
+                        const Zw = m[2]*Xc + m[6]*Yc + m[10]*Zc + m[14];
+
+                        // Sample color from portrait photo
+                        // Landscape pixel: (u_rgb, v_rgb); Portrait (90°CW): x_p=(H-1)-v_rgb, y_p=u_rgb
+                        const u_rgb = u * W / W_d;
+                        const v_rgb = v * H / H_d;
+                        const x_p = (H - 1) - v_rgb;  // portrait x
+                        const y_p = u_rgb;              // portrait y
+                        let color = {r:.5, g:.5, b:.5};
+                        if (photoData) {
+                            const px = Math.round(x_p * SCALE);
+                            const py = Math.round(y_p * SCALE);
+                            if (px >= 0 && px < canvW && py >= 0 && py < canvH) {
+                                const idx = (py * canvW + px) * 4;
+                                const pd  = photoData.data;
+                                color = {r: pd[idx]/255, g: pd[idx+1]/255, b: pd[idx+2]/255};
+                            }
+                        }
+
+                        points.push({x: Xw, y: Yw, z: Zw});
+                        normals.push({x: 0, y: 0, z: 0});
+                        labels.push(-1);
+                        rgbColors.push(color);
+                        added++;
+                    }
+                }
+                console.log(`[Depth] frame ${ci}: ${added} points added`);
+                await new Promise(r => setTimeout(r, 0));  // yield to browser
+            }
+
+            colorMode = 'rgb';
+            document.getElementById('color-mode').value = 'rgb';
+            rebuildPointCloud();
+            updateStats();
+            centerCamera();
+            document.getElementById('selection-info').textContent =
+                `Reconstructed ${points.length.toLocaleString()} points from ` +
+                `${poses.length} depth frame${poses.length === 1 ? '' : 's'}`;
+        }
+
         function clearPhotoLayer() {
             if (cameraPathGroup) { scene.remove(cameraPathGroup); cameraPathGroup = null; }
             if (photoPlaneGroup) { scene.remove(photoPlaneGroup); photoPlaneGroup = null; }
@@ -2443,8 +2543,8 @@
                 showPhotogrammetryPanel(sessionId, photoCount, session.pose_count || 0);
                 buildFilmstrip(sessionId, photoCount);
 
-                // 2. Camera transforms (poses + intrinsics)
-                let poses = [], intrinsics = [], imgSize = [0, 0];
+                // 2. Camera transforms (poses + intrinsics + depth_sizes)
+                let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [];
                 try {
                     const tRes = await fetch(`/scans/photos/${sessionId}/transforms.json`);
                     if (tRes.ok) {
@@ -2452,6 +2552,7 @@
                         poses        = tData.camera_poses || [];
                         intrinsics   = tData.intrinsics   || [];
                         imgSize      = tData.image_size   || [0, 0];
+                        depthSizes   = tData.depth_sizes  || [];
                         buildCameraPath(poses);
                         // Show photo planes only when we have no intrinsics for colorization
                         if (!intrinsics.length) buildPhotoPlanes(sessionId, poses);
@@ -2459,7 +2560,7 @@
                     }
                 } catch (_) { /* transforms optional */ }
 
-                // 3. LiDAR point cloud
+                // 3. LiDAR point cloud (present in normal scan mode)
                 try {
                     const pcRes = await fetch(`/scans/photos/${sessionId}/pointcloud.json`);
                     if (pcRes.ok) {
@@ -2468,12 +2569,18 @@
                         document.getElementById('selection-info').textContent =
                             `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
 
-                        // Colorize if we have intrinsics
                         await colorizePointCloudWithPhotos(
                             sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
                         return;
                     }
                 } catch (_) { /* point cloud optional */ }
+
+                // 4. No LiDAR mesh — reconstruct from per-frame depth maps (Photo Only mode)
+                if (depthSizes.length) {
+                    await reconstructFromDepths(
+                        sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes);
+                    return;
+                }
 
                 document.getElementById('selection-info').textContent =
                     `Photogrammetry session loaded — ${photoCount} photos`;
@@ -2513,7 +2620,7 @@
                     showPhotogrammetryPanel(scanFile, photoCount, session.pose_count || 0);
                     buildFilmstrip(scanFile, photoCount);
 
-                    let poses = [], intrinsics = [], imgSize = [0, 0];
+                    let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [];
                     try {
                         const tRes = await fetch(`/scans/photos/${scanFile}/transforms.json`);
                         if (tRes.ok) {
@@ -2521,6 +2628,7 @@
                             poses        = tData.camera_poses || [];
                             intrinsics   = tData.intrinsics   || [];
                             imgSize      = tData.image_size   || [0, 0];
+                            depthSizes   = tData.depth_sizes  || [];
                             buildCameraPath(poses);
                             if (!intrinsics.length) buildPhotoPlanes(scanFile, poses);
                             document.getElementById('photo-pose-stat').textContent = poses.length;
@@ -2528,12 +2636,9 @@
                     } catch (_) { /* transforms optional */ }
 
                     try {
-                        console.log(`[Load] Fetching pointcloud.json for ${scanFile}`);
                         const pcRes = await fetch(`/scans/photos/${scanFile}/pointcloud.json`);
-                        console.log(`[Load] pointcloud.json status: ${pcRes.status}`);
                         if (pcRes.ok) {
                             const pcData = await pcRes.json();
-                            console.log(`[Load] pointcloud points: ${pcData.num_points}, poses: ${poses.length}, intrinsics: ${intrinsics.length}`);
                             loadJSON(pcData);
                             document.getElementById('selection-info').textContent =
                                 `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
@@ -2542,6 +2647,13 @@
                             return;
                         }
                     } catch (e) { console.log(`[Load] pointcloud error: ${e.message}`); }
+
+                    // No LiDAR mesh — reconstruct from depth maps (Photo Only mode)
+                    if (depthSizes.length) {
+                        await reconstructFromDepths(
+                            scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes);
+                        return;
+                    }
 
                     document.getElementById('selection-info').textContent =
                         `Photogrammetry session loaded — ${photoCount} photos`;

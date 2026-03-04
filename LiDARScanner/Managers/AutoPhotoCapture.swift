@@ -38,6 +38,13 @@ class AutoPhotoCapture: ObservableObject {
     /// Landscape image resolution (width × height) captured by ARKit.
     private var capturedImageSize: CGSize = .zero
 
+    /// Raw LiDAR depth map bytes (Float32 LE, row-major, width×height) per photo.
+    /// Index N corresponds to auto_000N_depth.bin.
+    private(set) var depthMaps: [Data] = []
+
+    /// [width, height] of each depth map (typically 256×192 on iPhone with LiDAR).
+    private(set) var depthSizes: [[Int]] = []
+
     // ── Stillness detection state ─────────────────────────────────────────────
     private var prevFrameTransform: simd_float4x4?
     private var prevFrameTimestamp: TimeInterval = 0   // ARKit hardware clock (frame.timestamp)
@@ -75,6 +82,8 @@ class AutoPhotoCapture: ObservableObject {
         cameraPoses = []
         cameraIntrinsics = []
         capturedImageSize = .zero
+        depthMaps  = []
+        depthSizes = []
         prevFrameTransform    = nil
         prevFrameTimestamp    = 0
         smoothedSpeedMs       = 0
@@ -150,6 +159,7 @@ class AutoPhotoCapture: ObservableObject {
             cameraPoses.append(t)
             cameraIntrinsics.append(frame.camera.intrinsics)
             capturedImageSize = frame.camera.imageResolution
+            saveDepthMap(from: frame)
             stillSinceTimestamp = nil   // require stopping again for the next capture
         } catch {}
     }
@@ -169,6 +179,7 @@ class AutoPhotoCapture: ObservableObject {
             cameraPoses.append(t)
             cameraIntrinsics.append(frame.camera.intrinsics)
             capturedImageSize = frame.camera.imageResolution
+            saveDepthMap(from: frame)
             stillSinceTimestamp = nil
             return url
         } catch {
@@ -178,7 +189,8 @@ class AutoPhotoCapture: ObservableObject {
 
     /// Serializes all camera poses as a JSON object for upload.
     /// Each pose is a 16-element column-major Float array (simd_float4x4 layout).
-    /// Also includes per-frame intrinsics [fx, fy, cx, cy] and the landscape image_size [W, H].
+    /// Also includes per-frame intrinsics [fx, fy, cx, cy], landscape image_size [W, H],
+    /// and depth_sizes [[W_d, H_d]] when depth maps were captured.
     func posesJSON() -> Data? {
         let matrices = cameraPoses.map { m -> [Float] in
             [m.columns.0.x, m.columns.0.y, m.columns.0.z, m.columns.0.w,
@@ -202,6 +214,9 @@ class AutoPhotoCapture: ObservableObject {
             payload["image_size"] = [Float(capturedImageSize.width),
                                      Float(capturedImageSize.height)]
         }
+        if !depthSizes.isEmpty {
+            payload["depth_sizes"] = depthSizes
+        }
         return try? JSONSerialization.data(withJSONObject: payload, options: .prettyPrinted)
     }
 
@@ -216,6 +231,21 @@ class AutoPhotoCapture: ObservableObject {
     }
 
     // MARK: - Private
+
+    /// Captures the LiDAR depth map from the current frame and stores it in memory.
+    /// Silently skips if sceneDepth is unavailable (non-LiDAR device or semantics not enabled).
+    private func saveDepthMap(from frame: ARFrame) {
+        guard let sceneDepth = frame.sceneDepth else { return }
+        let buf = sceneDepth.depthMap
+        let w   = CVPixelBufferGetWidth(buf)
+        let h   = CVPixelBufferGetHeight(buf)
+        CVPixelBufferLockBaseAddress(buf, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buf, .readOnly) }
+        guard let ptr = CVPixelBufferGetBaseAddress(buf) else { return }
+        let byteCount = w * h * MemoryLayout<Float32>.size
+        depthMaps.append(Data(bytes: ptr, count: byteCount))
+        depthSizes.append([w, h])
+    }
 
     private func buildImageData(frame: ARFrame, transform: simd_float4x4) -> Data? {
         let ci = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)

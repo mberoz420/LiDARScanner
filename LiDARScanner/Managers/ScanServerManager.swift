@@ -62,7 +62,9 @@ class ScanServerManager: ObservableObject {
 
     /// Upload auto-captured photos + camera transforms to the photogrammetry endpoint.
     /// Returns the server session_id on success, nil on failure.
-    func uploadPhotos(from dir: URL, posesData: Data?, pointCloudData: Data? = nil) async -> String? {
+    func uploadPhotos(from dir: URL, posesData: Data?,
+                      pointCloudData: Data? = nil,
+                      depthMaps: [Data] = []) async -> String? {
         isUploading = true
         lastError   = nil
         defer { isUploading = false }
@@ -104,6 +106,12 @@ class ScanServerManager: ObservableObject {
         if let pcData = pointCloudData,
            let pcObj = try? JSONSerialization.jsonObject(with: pcData) {
             payload["point_cloud"] = pcObj
+        }
+        if !depthMaps.isEmpty {
+            payload["depths"] = depthMaps.enumerated().map { (i, d) in
+                ["name": String(format: "auto_%04d_depth.bin", i),
+                 "data": d.base64EncodedString()]
+            }
         }
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {

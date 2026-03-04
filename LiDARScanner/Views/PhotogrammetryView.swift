@@ -922,8 +922,10 @@ struct PhotogrammetryView: View {
         let poses      = meshManager.autoCapture.posesJSON()
         // Photo-only mode has no LiDAR mesh — skip point cloud
         let pointCloud = (captureMode == .photoOnly) ? nil : meshManager.pointCloudJSON()
+        let depths     = meshManager.autoCapture.depthMaps
         Task {
-            let sid = await ScanServerManager.shared.uploadPhotos(from: dir, posesData: poses, pointCloudData: pointCloud)
+            let sid = await ScanServerManager.shared.uploadPhotos(
+                from: dir, posesData: poses, pointCloudData: pointCloud, depthMaps: depths)
             await MainActor.run {
                 isUploadingToLabeler = false
                 if let sid {

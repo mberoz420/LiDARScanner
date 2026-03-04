@@ -89,8 +89,29 @@ if (!empty($cameraPoses)) {
         $transforms['image_size'] = $imageSize;
     }
 
+    // Depth map dimensions [[W_d, H_d], ...] per frame (for back-projection in labeler)
+    $depthSizes = $decoded['depth_sizes'] ?? [];
+    if (!empty($depthSizes)) {
+        $transforms['depth_sizes'] = $depthSizes;
+    }
+
     file_put_contents($sessionPath . '/transforms.json',
                       json_encode($transforms, JSON_PRETTY_PRINT));
+}
+
+// ── Save depth maps (.bin raw Float32 LE files) ───────────────────────────────
+$depths     = $decoded['depths'] ?? [];
+$depthCount = 0;
+foreach ($depths as $depth) {
+    $name   = basename($depth['name'] ?? '');
+    $base64 = $depth['data'] ?? '';
+    if (empty($name) || empty($base64)) { continue; }
+    if (!preg_match('/^auto_\d{4}_depth\.bin$/', $name)) { continue; }
+    $data = base64_decode($base64, true);
+    if ($data === false) { continue; }
+    if (file_put_contents($sessionPath . '/' . $name, $data) !== false) {
+        $depthCount++;
+    }
 }
 
 // ── Save pointcloud.json (LiDAR geometry captured during same session) ────────
@@ -105,6 +126,7 @@ $sessionMeta = [
     'session_id'  => $sessionId,
     'photo_count' => $savedCount,
     'pose_count'  => count($cameraPoses),
+    'depth_count' => $depthCount,
     'created'     => date('c'),
     'uploaded'    => date('c'),
 ];
