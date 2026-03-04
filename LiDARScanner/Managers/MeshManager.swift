@@ -308,6 +308,33 @@ class MeshManager: NSObject, ObservableObject {
         return autoCapture.captureNow(frame: frame)
     }
 
+    /// Export current LiDAR mesh as labeler-compatible JSON (same format as regular scan uploads).
+    /// Returns nil if no mesh data has been captured yet.
+    func pointCloudJSON() -> Data? {
+        guard let scan = capturedScan, !scan.meshes.isEmpty else { return nil }
+        var points: [[Float]] = []
+        var labels: [Int] = []
+        for mesh in scan.meshes {
+            let t = mesh.transform
+            let count = min(mesh.vertices.count, mesh.normals.count)
+            for i in 0..<count {
+                let v = mesh.vertices[i]
+                let n = mesh.normals[i]
+                let vw = t * SIMD4<Float>(v.x, v.y, v.z, 1)
+                let nw = t * SIMD4<Float>(n.x, n.y, n.z, 0)
+                points.append([vw.x, vw.y, vw.z, nw.x, nw.y, nw.z])
+                labels.append(-1)
+            }
+        }
+        guard !points.isEmpty else { return nil }
+        let data: [String: Any] = [
+            "points": points, "labels": labels,
+            "num_points": points.count, "num_classes": 4,
+            "class_names": ["floor", "ceiling", "wall", "object"]
+        ]
+        return try? JSONSerialization.data(withJSONObject: data)
+    }
+
     /// Active scan volume — filters LiDAR mesh to this cube. nil = capture everything.
     @Published var scanVolume: ScanVolume? = nil
     /// Half-extent (metres) used when placing a new volume. Side = halfExtent × 2.

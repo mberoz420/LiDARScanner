@@ -2051,20 +2051,66 @@
             const showCones = document.getElementById('show-photo-cones').checked;
             cameraPathGroup.children.forEach((child, i) => {
                 if (i === 0) {
-                    // First child is the Line
                     child.visible = showPath;
                 } else {
-                    // Remaining are cone meshes
                     child.visible = showCones;
                 }
+            });
+            if (photoPlaneGroup) photoPlaneGroup.visible = showCones;
+        }
+
+        // ── Photo planes — show each captured image as a 3D quad at its camera position ──
+        let photoPlaneGroup = null;
+
+        function buildPhotoPlanes(sessionId, poses) {
+            if (!poses || poses.length === 0 || !scene) return;
+            if (photoPlaneGroup) { scene.remove(photoPlaneGroup); photoPlaneGroup = null; }
+            photoPlaneGroup = new THREE.Group();
+            scene.add(photoPlaneGroup);
+
+            const loader = new THREE.TextureLoader();
+            const DIST   = 0.45;   // metres in front of the camera
+
+            poses.forEach((pf, i) => {
+                const name = 'auto_' + String(i).padStart(4, '0') + '.jpg';
+                loader.load(
+                    `/scans/photos/${sessionId}/${name}`,
+                    texture => {
+                        // 4:3 aspect, ~30 cm wide
+                        const geo = new THREE.PlaneGeometry(0.32, 0.24);
+                        const mat = new THREE.MeshBasicMaterial({
+                            map: texture, side: THREE.DoubleSide,
+                            transparent: true, opacity: 0.92
+                        });
+                        const plane = new THREE.Mesh(geo, mat);
+
+                        // Camera position (column 3 of column-major 4×4)
+                        const cx = pf[12], cy = pf[13], cz = pf[14];
+                        // Camera forward = −Z (negate column 2)
+                        const fx = -pf[8], fy = -pf[9], fz = -pf[10];
+                        const fl = Math.sqrt(fx*fx + fy*fy + fz*fz) || 1;
+
+                        // Place plane in front of camera
+                        plane.position.set(
+                            cx + (fx/fl) * DIST,
+                            cy + (fy/fl) * DIST,
+                            cz + (fz/fl) * DIST
+                        );
+                        // Orient: camera up (column 1), facing back toward camera
+                        plane.up.set(pf[4], pf[5], pf[6]);
+                        plane.lookAt(cx, cy, cz);
+
+                        photoPlaneGroup.add(plane);
+                    },
+                    undefined,
+                    () => {}   // ignore load errors silently
+                );
             });
         }
 
         function clearPhotoLayer() {
-            if (cameraPathGroup) {
-                scene.remove(cameraPathGroup);
-                cameraPathGroup = null;
-            }
+            if (cameraPathGroup) { scene.remove(cameraPathGroup); cameraPathGroup = null; }
+            if (photoPlaneGroup) { scene.remove(photoPlaneGroup); photoPlaneGroup = null; }
             document.getElementById('photo-panel-header').style.display = 'none';
             document.getElementById('photo-panel').style.display = 'none';
             document.getElementById('photo-preview-wrap').style.display = 'none';
@@ -2091,16 +2137,30 @@
                 showPhotogrammetryPanel(sessionId, photoCount, poseCount);
                 buildFilmstrip(sessionId, photoCount);
 
-                // 2. Load camera transforms (optional — may not exist if no LiDAR depth)
+                // 2. Load camera transforms + photo planes (optional)
+                let poses = [];
                 try {
-                    const tRes   = await fetch(`/scans/photos/${sessionId}/transforms.json`);
+                    const tRes = await fetch(`/scans/photos/${sessionId}/transforms.json`);
                     if (tRes.ok) {
-                        const tData  = await tRes.json();
-                        const poses  = tData.camera_poses || [];
+                        const tData = await tRes.json();
+                        poses = tData.camera_poses || [];
                         buildCameraPath(poses);
+                        buildPhotoPlanes(sessionId, poses);
                         document.getElementById('photo-pose-stat').textContent = poses.length;
                     }
                 } catch (_) { /* transforms optional */ }
+
+                // 3. Load LiDAR point cloud if captured in same session
+                try {
+                    const pcRes = await fetch(`/scans/photos/${sessionId}/pointcloud.json`);
+                    if (pcRes.ok) {
+                        const pcData = await pcRes.json();
+                        loadJSON(pcData);
+                        document.getElementById('selection-info').textContent =
+                            `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
+                        return;
+                    }
+                } catch (_) { /* point cloud optional */ }
 
                 document.getElementById('selection-info').textContent =
                     `Photogrammetry session loaded — ${photoCount} photos`;
@@ -2139,15 +2199,29 @@
                     const poseCount  = session.pose_count  || 0;
                     showPhotogrammetryPanel(scanFile, photoCount, poseCount);
                     buildFilmstrip(scanFile, photoCount);
+                    let poses = [];
                     try {
                         const tRes = await fetch(`/scans/photos/${scanFile}/transforms.json`);
                         if (tRes.ok) {
                             const tData = await tRes.json();
-                            const poses = tData.camera_poses || [];
+                            poses = tData.camera_poses || [];
                             buildCameraPath(poses);
+                            buildPhotoPlanes(scanFile, poses);
                             document.getElementById('photo-pose-stat').textContent = poses.length;
                         }
                     } catch (_) { /* transforms optional */ }
+
+                    try {
+                        const pcRes = await fetch(`/scans/photos/${scanFile}/pointcloud.json`);
+                        if (pcRes.ok) {
+                            const pcData = await pcRes.json();
+                            loadJSON(pcData);
+                            document.getElementById('selection-info').textContent =
+                                `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
+                            return;
+                        }
+                    } catch (_) { /* point cloud optional */ }
+
                     document.getElementById('selection-info').textContent =
                         `Photogrammetry session loaded — ${photoCount} photos`;
                 } catch (e) {

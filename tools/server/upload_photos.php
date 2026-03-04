@@ -80,6 +80,13 @@ if (!empty($cameraPoses)) {
                       json_encode($transforms, JSON_PRETTY_PRINT));
 }
 
+// ── Save pointcloud.json (LiDAR geometry captured during same session) ────────
+$pointCloud = $decoded['point_cloud'] ?? null;
+if (!empty($pointCloud)) {
+    file_put_contents($sessionPath . '/pointcloud.json',
+                      json_encode($pointCloud, JSON_PRETTY_PRINT));
+}
+
 // ── Save session.json ─────────────────────────────────────────────────────────
 $sessionMeta = [
     'session_id'  => $sessionId,

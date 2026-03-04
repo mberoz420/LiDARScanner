@@ -844,10 +844,11 @@ struct PhotogrammetryView: View {
         isUploadingToLabeler = true
         labelerSessionId     = nil
         labelerUploadError   = nil
-        let dir    = meshManager.autoCapture.photoDir
-        let poses  = meshManager.autoCapture.posesJSON()
+        let dir        = meshManager.autoCapture.photoDir
+        let poses      = meshManager.autoCapture.posesJSON()
+        let pointCloud = meshManager.pointCloudJSON()
         Task {
-            let sid = await ScanServerManager.shared.uploadPhotos(from: dir, posesData: poses)
+            let sid = await ScanServerManager.shared.uploadPhotos(from: dir, posesData: poses, pointCloudData: pointCloud)
             await MainActor.run {
                 isUploadingToLabeler = false
                 if let sid {
