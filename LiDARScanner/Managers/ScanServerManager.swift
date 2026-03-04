@@ -97,6 +97,9 @@ class ScanServerManager: ObservableObject {
         if let poses = posesData,
            let posesObj = try? JSONSerialization.jsonObject(with: poses) as? [String: Any] {
             payload["camera_poses"] = posesObj["camera_poses"] ?? []
+            // Also forward intrinsics and image_size so the labeler can use real focal lengths
+            if let intrinsics = posesObj["intrinsics"] { payload["intrinsics"]  = intrinsics }
+            if let imgSize    = posesObj["image_size"]  { payload["image_size"] = imgSize }
         }
         if let pcData = pointCloudData,
            let pcObj = try? JSONSerialization.jsonObject(with: pcData) {
