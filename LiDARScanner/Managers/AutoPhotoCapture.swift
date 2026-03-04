@@ -41,18 +41,20 @@ class AutoPhotoCapture: ObservableObject {
 
     // ── Thresholds ────────────────────────────────────────────────────────────
     private static let maxPhotos         = 60
-    /// EMA coefficient — higher = reacts faster to speed changes (0.1 – 0.3 is good)
-    private static let α: Float          = 0.15
-    /// Camera is "still" when smoothed linear speed is below this (m/s)
-    private static let stillSpeedMs: Float   = 0.015   // 1.5 cm/s
+    /// EMA coefficient — lower = more smoothing of high-freq hand tremor
+    private static let α: Float          = 0.08
+    /// Camera is "still" when smoothed linear speed is below this (m/s).
+    /// Hand tremor in ARKit tracking ≈ 3–8 cm/s, so 10 cm/s clearly separates
+    /// "genuinely still" from "moving".
+    private static let stillSpeedMs: Float   = 0.10   // 10 cm/s
     /// Camera is "still" when smoothed angular speed is below this (°/s)
-    private static let stillAngDs: Float     = 2.5     // 2.5°/s
+    private static let stillAngDs: Float     = 6.0    // 6°/s
     /// How long the camera must stay still before a capture fires (seconds)
-    private static let stillDuration: TimeInterval = 0.45
+    private static let stillDuration: TimeInterval = 0.6
     /// Minimum position change from last capture before another stillness capture is eligible
-    private static let minMoveDist: Float = 0.06       // 6 cm
+    private static let minMoveDist: Float = 0.07      // 7 cm
     /// Minimum angle change from last capture before another stillness capture is eligible
-    private static let minMoveAngle: Float = 12.0      // 12°
+    private static let minMoveAngle: Float = 12.0     // 12°
 
     init() {
         photoDir = Self.makeDir()
