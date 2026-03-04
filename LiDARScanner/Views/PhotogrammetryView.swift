@@ -2,6 +2,8 @@ import SwiftUI
 import AVFoundation
 import RealityKit
 import Vision
+import CoreImage
+import CoreMedia
 
 // MARK: - Geometry Analyzer
 
@@ -192,18 +194,131 @@ enum PhotogrammetryPreset: String, CaseIterable, Identifiable {
 
 // MARK: - Camera Controller
 
+// MARK: - Depth Mask Processor
+
+struct DepthMaskProcessor {
+
+    /// Applies a depth-range mask to a captured photo.
+    /// Pixels whose depth is outside [targetDepth-buffer, targetDepth+buffer] become black.
+    /// Returns a masked JPEG, or the original data if depth is unavailable.
+    static func masked(photo: AVCapturePhoto,
+                       targetDepth: Float,
+                       buffer: Float) -> Data? {
+
+        guard let depthData = photo.depthData,
+              let cgImage   = photo.cgImageRepresentation() else {
+            return photo.fileDataRepresentation()
+        }
+
+        let converted = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        let depthMap   = converted.depthDataMap
+
+        let depthW = CVPixelBufferGetWidth(depthMap)
+        let depthH = CVPixelBufferGetHeight(depthMap)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(depthMap) else {
+            return photo.fileDataRepresentation()
+        }
+
+        let depthPtr = base.assumingMemoryBound(to: Float32.self)
+        let minD = targetDepth - buffer
+        let maxD = targetDepth + buffer
+
+        // Build a grayscale mask the same size as the depth map
+        var maskBytes = [UInt8](repeating: 0, count: depthW * depthH)
+        for i in 0..<(depthW * depthH) {
+            let d = depthPtr[i]
+            maskBytes[i] = (d.isFinite && d > 0 && d >= minD && d <= maxD) ? 255 : 0
+        }
+
+        // Create mask as CIImage (will be scaled to photo size by CoreImage)
+        let maskColorSpace = CGColorSpaceCreateDeviceGray()
+        guard let maskProvider = CGDataProvider(data: Data(maskBytes) as CFData),
+              let maskCG = CGImage(width: depthW, height: depthH,
+                                   bitsPerComponent: 8, bitsPerPixel: 8,
+                                   bytesPerRow: depthW,
+                                   space: maskColorSpace,
+                                   bitmapInfo: CGBitmapInfo(rawValue: 0),
+                                   provider: maskProvider,
+                                   decode: nil, shouldInterpolate: true,
+                                   intent: .defaultIntent) else {
+            return photo.fileDataRepresentation()
+        }
+
+        // Scale mask to photo resolution using CIImage blend
+        let ciPhoto  = CIImage(cgImage: cgImage)
+        let ciMask   = CIImage(cgImage: maskCG)
+            .transformed(by: CGAffineTransform(
+                scaleX: CGFloat(cgImage.width)  / CGFloat(depthW),
+                y:      CGFloat(cgImage.height) / CGFloat(depthH)))
+
+        guard let blendFilter = CIFilter(name: "CIBlendWithMask") else {
+            return photo.fileDataRepresentation()
+        }
+        blendFilter.setValue(ciPhoto,         forKey: kCIInputImageKey)
+        blendFilter.setValue(CIImage.black,   forKey: kCIInputBackgroundImageKey)
+        blendFilter.setValue(ciMask,          forKey: kCIInputMaskImageKey)
+
+        guard let output = blendFilter.outputImage else {
+            return photo.fileDataRepresentation()
+        }
+
+        let ctx = CIContext()
+        guard let maskedCG = ctx.createCGImage(output, from: output.extent) else {
+            return photo.fileDataRepresentation()
+        }
+
+        // Return as JPEG
+        let uiImage = UIImage(cgImage: maskedCG)
+        return uiImage.jpegData(compressionQuality: 0.92)
+    }
+
+    /// Sample depth at a normalised point (0–1, 0–1) from a CVPixelBuffer depth map.
+    static func sampleDepth(from depthMap: CVPixelBuffer, at normalised: CGPoint) -> Float? {
+        let w = CVPixelBufferGetWidth(depthMap)
+        let h = CVPixelBufferGetHeight(depthMap)
+        let x = max(0, min(w - 1, Int(normalised.x * CGFloat(w))))
+        let y = max(0, min(h - 1, Int(normalised.y * CGFloat(h))))
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+
+        let depth = base.assumingMemoryBound(to: Float32.self)[y * w + x]
+        return (depth.isFinite && depth > 0) ? depth : nil
+    }
+}
+
+// MARK: - Photo Controller
+
 @MainActor
 class PhotogrammetryController: NSObject, ObservableObject {
     @Published var capturedCount = 0
     @Published var isRunning = false
     @Published var lastThumbnail: UIImage?
 
-    private let captureSession = AVCaptureSession()
-    private let photoOutput    = AVCapturePhotoOutput()
-    let previewLayer           = AVCaptureVideoPreviewLayer()
+    // Depth masking
+    @Published var targetDepth: Float? = nil    // metres — nil = no masking
+    @Published var depthBuffer: Float = 0.25    // ± metres around targetDepth
+    @Published private(set) var latestDepthMap: CVPixelBuffer?  // live depth from LiDAR
+
+    private let captureSession  = AVCaptureSession()
+    private let photoOutput     = AVCapturePhotoOutput()
+    private let depthOutput     = AVCaptureDepthDataOutput()
+    private let depthQueue      = DispatchQueue(label: "depth.queue")
+
+    let previewLayer = AVCaptureVideoPreviewLayer()
     let tempDir: URL
 
     private var captureCallback: ((URL) -> Void)?
+
+    /// Sample live depth (metres) at a normalised point (0–1, 0–1) from the LiDAR depth map.
+    func sampleDepth(at normalised: CGPoint) -> Float? {
+        guard let map = latestDepthMap else { return nil }
+        return DepthMaskProcessor.sampleDepth(from: map, at: normalised)
+    }
 
     override init() {
         tempDir = FileManager.default.temporaryDirectory
@@ -229,9 +344,15 @@ class PhotogrammetryController: NSObject, ObservableObject {
 
         if captureSession.canAddOutput(photoOutput) {
             captureSession.addOutput(photoOutput)
-            // Enable depth delivery on devices that support it (LiDAR / dual camera)
             photoOutput.isDepthDataDeliveryEnabled = photoOutput.isDepthDataDeliverySupported
             photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
+        }
+
+        // Live depth stream for tap-to-set-depth (LiDAR / dual-camera devices)
+        if captureSession.canAddOutput(depthOutput) {
+            captureSession.addOutput(depthOutput)
+            depthOutput.isFilteringEnabled = false
+            depthOutput.setDelegate(self, callbackQueue: depthQueue)
         }
 
         captureSession.commitConfiguration()
@@ -282,14 +403,22 @@ extension PhotogrammetryController: AVCapturePhotoCaptureDelegate {
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
                                  didFinishProcessingPhoto photo: AVCapturePhoto,
                                  error: Error?) {
-        guard error == nil, let data = photo.fileDataRepresentation() else { return }
+        guard error == nil else { return }
 
         Task { @MainActor in
+            // Apply depth mask when a target depth is set
+            let data: Data?
+            if let target = self.targetDepth {
+                data = DepthMaskProcessor.masked(photo: photo, targetDepth: target, buffer: self.depthBuffer)
+            } else {
+                data = photo.fileDataRepresentation()
+            }
+            guard let data else { return }
+
             let filename = String(format: "%04d.heic", self.capturedCount)
             let url = self.tempDir.appendingPathComponent(filename)
             try? data.write(to: url)
 
-            // Thumbnail for UI
             if let image = UIImage(data: data) {
                 self.lastThumbnail = image
             }
@@ -297,6 +426,19 @@ extension PhotogrammetryController: AVCapturePhotoCaptureDelegate {
             self.capturedCount += 1
             self.captureCallback?(url)
             self.captureCallback = nil
+        }
+    }
+}
+
+extension PhotogrammetryController: AVCaptureDepthDataOutputDelegate {
+    nonisolated func depthDataOutput(_ output: AVCaptureDepthDataOutput,
+                                     didOutput depthData: AVDepthData,
+                                     timestamp: CMTime,
+                                     connection: AVCaptureConnection) {
+        let converted = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        let map = converted.depthDataMap
+        Task { @MainActor in
+            self.latestDepthMap = map
         }
     }
 }
@@ -381,9 +523,24 @@ struct PhotogrammetryView: View {
 
     var body: some View {
         ZStack {
-            // Camera feed
-            CameraPreviewView(controller: camera)
-                .edgesIgnoringSafeArea(.all)
+            // Camera feed — tap to set depth mask target
+            GeometryReader { geo in
+                CameraPreviewView(controller: camera)
+                    .edgesIgnoringSafeArea(.all)
+                    .gesture(
+                        SpatialTapGesture()
+                            .onEnded { value in
+                                let norm = CGPoint(
+                                    x: value.location.x / geo.size.width,
+                                    y: value.location.y / geo.size.height
+                                )
+                                if let depth = camera.sampleDepth(at: norm) {
+                                    camera.targetDepth = depth
+                                }
+                            }
+                    )
+            }
+            .edgesIgnoringSafeArea(.all)
 
             // Main UI
             VStack(spacing: 0) {
@@ -462,6 +619,30 @@ struct PhotogrammetryView: View {
                         ProgressView().scaleEffect(0.6).tint(.white)
                         Text("Analyzing…").font(.caption2).foregroundColor(.white.opacity(0.7))
                     }
+                }
+
+                // Depth mask controls
+                if let depth = camera.targetDepth {
+                    VStack(spacing: 4) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "scope").font(.caption).foregroundColor(.green)
+                            Text(String(format: "%.2fm ±%.2fm", depth, camera.depthBuffer))
+                                .font(.caption).foregroundColor(.green)
+                            Button(action: { camera.targetDepth = nil }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.caption).foregroundColor(.green.opacity(0.7))
+                            }
+                        }
+                        Slider(value: Binding(
+                            get: { Double(camera.depthBuffer) },
+                            set: { camera.depthBuffer = Float($0) }
+                        ), in: 0.05...1.0, step: 0.05)
+                        .tint(.green)
+                        .frame(width: 120)
+                    }
+                } else if camera.latestDepthMap != nil {
+                    Text("Tap object to set depth mask")
+                        .font(.caption2).foregroundColor(.white.opacity(0.6))
                 }
             }
             .padding(.horizontal, 12)
