@@ -384,6 +384,7 @@ struct ScanModeView: View {
                             } else {
                                 meshManager.autoCapture.reset()
                                 meshManager.autoCapture.isEnabled = true
+                                if !meshManager.isScanning { toggleScanning() }
                             }
                         }) {
                             ZStack(alignment: .topTrailing) {
@@ -412,6 +413,7 @@ struct ScanModeView: View {
                             if meshManager.scanVolume != nil {
                                 meshManager.clearScanVolume()
                             } else {
+                                if !meshManager.isScanning { toggleScanning() }
                                 meshManager.placeScanVolume()
                             }
                         }) {
@@ -571,82 +573,64 @@ struct ScanModeView: View {
                         .padding(.horizontal)
                     }
 
-                    // Bottom controls
-                    HStack(spacing: 20) {
-                        // Settings button
-                        Button(action: { showModeSettings = true }) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 56, height: 56)
-                                .background(Color.black.opacity(0.5))
-                                .cornerRadius(14)
-                        }
+                    // Bottom controls — labeled pill buttons
+                    HStack(spacing: 0) {
+                        // Settings pill (left)
+                        ScanPillButton(
+                            icon: "slider.horizontal.3",
+                            label: "Settings",
+                            color: Color.white.opacity(0.18)
+                        ) { showModeSettings = true }
                         .disabled(meshManager.isScanning)
-                        .opacity(meshManager.isScanning ? 0.5 : 1)
+                        .opacity(meshManager.isScanning ? 0.35 : 1)
 
-                        // Start/Stop button
+                        Spacer()
+
+                        // Start / Stop — large prominent circle
                         Button(action: toggleScanning) {
-                            Image(systemName: meshManager.isScanning ? "stop.fill" : "play.fill")
-                                .font(.system(size: 28))
-                                .foregroundColor(.white)
-                                .frame(width: 80, height: 80)
-                                .background(
-                                    Circle()
-                                        .fill(meshManager.isScanning ? Color.red : Color.green)
-                                )
+                            ZStack {
+                                Circle()
+                                    .fill(meshManager.isScanning ? Color.red : Color.green)
+                                    .frame(width: 76, height: 76)
+                                    .shadow(color: (meshManager.isScanning ? Color.red : Color.green).opacity(0.5), radius: 10)
+                                Image(systemName: meshManager.isScanning ? "stop.fill" : "play.fill")
+                                    .font(.system(size: 26, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
                         }
 
-                        // Save & Export buttons
+                        Spacer()
+
+                        // Post-scan action pills (right)
                         if capturedScan != nil && !meshManager.isScanning {
                             HStack(spacing: 8) {
-                                // Quick Save button
-                                Button(action: { showSavePrompt = true }) {
-                                    Image(systemName: "square.and.arrow.down")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .frame(width: 56, height: 56)
-                                        .background(Color.green)
-                                        .cornerRadius(14)
-                                }
-
-                                // Export button
-                                Button(action: { showExport = true }) {
-                                    Image(systemName: "square.and.arrow.up")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .frame(width: 56, height: 56)
-                                        .background(Color.blue)
-                                        .cornerRadius(14)
-                                }
-
-                                // Run photogrammetry on auto-captured photos
+                                ScanPillButton(icon: "square.and.arrow.down", label: "Save",   color: .green) { showSavePrompt = true }
+                                ScanPillButton(icon: "square.and.arrow.up",   label: "Upload", color: .blue)  { showExport = true }
                                 if meshManager.autoCapture.photoCount >= 5 {
-                                    Button(action: { showPhotogrammetryFromScan = true }) {
-                                        ZStack(alignment: .topTrailing) {
-                                            Image(systemName: "cube.transparent.fill")
-                                                .font(.title2)
-                                                .foregroundColor(.white)
-                                                .frame(width: 56, height: 56)
-                                                .background(Color.cyan)
-                                                .cornerRadius(14)
-                                            Text("\(meshManager.autoCapture.photoCount)")
-                                                .font(.system(size: 9, weight: .bold))
-                                                .foregroundColor(.black)
-                                                .padding(3)
-                                                .background(Color.white)
-                                                .clipShape(Circle())
-                                                .offset(x: 4, y: -4)
-                                        }
-                                    }
+                                    ScanPillButton(
+                                        icon: "cube.transparent",
+                                        label: "\(meshManager.autoCapture.photoCount) photos",
+                                        color: .cyan
+                                    ) { showPhotogrammetryFromScan = true }
                                 }
                             }
                         } else {
-                            Color.clear.frame(width: 56, height: 56)
+                            // Invisible spacer to keep layout balanced
+                            ScanPillButton(icon: "slider.horizontal.3", label: "Settings", color: .clear) {}
+                                .opacity(0)
                         }
                     }
+                    .padding(.horizontal, 24)
                 }
-                .padding(.bottom, 40)
+                .padding(.bottom, 44)
+                .padding(.top, 10)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.82)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
             }
         }
         .onAppear {
@@ -1053,6 +1037,35 @@ struct ScanStatusBar: View {
             return String(format: "%.1fK", Double(n) / 1000)
         }
         return "\(n)"
+    }
+}
+
+// MARK: - Scan Pill Button
+
+/// Compact labeled pill button used in the scan mode bottom control bar.
+struct ScanPillButton: View {
+    let icon: String
+    let label: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 19, weight: .medium))
+                Text(label)
+                    .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .foregroundColor(.white)
+            .frame(minWidth: 54)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(color)
+            .cornerRadius(13)
+        }
     }
 }
 
