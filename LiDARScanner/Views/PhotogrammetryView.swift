@@ -405,8 +405,13 @@ struct PhotogrammetryView: View {
     @State private var isUploadingToLabeler = false
     @State private var labelerSessionId: String?
     @State private var labelerUploadError: String?
+    /// Scan mode chosen by the user before capture starts
+    @State private var captureMode: CaptureMode? = nil
+    /// True once the user has tapped Start and capture is actively running
+    @State private var isCapturing = false
 
     enum Phase { case capturing, processing, done, failed }
+    enum CaptureMode { case cube, free }
 
     /// Standard init — launches with ARKit scanning + auto-capture.
     init() {
@@ -481,6 +486,11 @@ struct PhotogrammetryView: View {
                 bottomPanel
             }
 
+            // Mode selection — shown until user picks cube or free
+            if captureMode == nil && phase == .capturing {
+                modeSelectionOverlay
+            }
+
             // Photo capture flash — brief white flicker so user knows a photo was taken
             if showFlash {
                 Color.white.opacity(0.35)
@@ -500,13 +510,11 @@ struct PhotogrammetryView: View {
                 startProcessing()
                 return
             }
-            // ARViewContainer calls setup + startScanning immediately (autoStartScanning: true).
-            // We just need to configure mode and enable auto-capture.
-            // Brief yield lets the ARViewContainer Task run first.
+            // ARKit starts tracking immediately (needed for cube raycast).
+            // Photo capture stays off until the user taps Start.
             await Task.yield()
             meshManager.setMode(.largeObjects)
             meshManager.autoCapture.reset()
-            meshManager.autoCapture.isEnabled = true
         }
         .onReceive(meshManager.autoCapture.$photoCount) { count in
             captureCount = count
@@ -523,6 +531,7 @@ struct PhotogrammetryView: View {
         }
         .onDisappear {
             meshManager.autoCapture.isEnabled = false
+            isCapturing = false
             if meshManager.isScanning { _ = meshManager.stopScanning() }
         }
         .sheet(isPresented: $showShareSheet) {
@@ -543,19 +552,18 @@ struct PhotogrammetryView: View {
                     .clipShape(Circle())
             }
 
-            if phase == .capturing {
-                // Scan-volume cube button (same as Walls/Rooms card)
+            // Cube reposition button — only shown in cube mode
+            if phase == .capturing && captureMode == .cube {
                 Button(action: {
                     if meshManager.scanVolume != nil {
                         meshManager.clearScanVolume()
-                    } else {
                         meshManager.placeScanVolume()
                     }
                 }) {
                     ZStack(alignment: .topTrailing) {
-                        Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                        Image(systemName: "cube.fill")
                             .font(.title3)
-                            .foregroundColor(meshManager.scanVolume != nil ? .yellow : .white)
+                            .foregroundColor(.yellow)
                             .frame(width: 44, height: 44)
                             .background(Color.black.opacity(0.55))
                             .clipShape(Circle())
@@ -569,7 +577,6 @@ struct PhotogrammetryView: View {
                         }
                     }
                 }
-
             }
 
             Spacer()
@@ -590,10 +597,10 @@ struct PhotogrammetryView: View {
                 }
 
 
-                if phase == .capturing {
-                    Text(meshManager.scanVolume != nil
+                if phase == .capturing && isCapturing {
+                    Text(captureMode == .cube
                          ? "Cube active — walk around object"
-                         : "Tap ⬜ to define object space")
+                         : "Free — walk around object")
                         .font(.caption2).foregroundColor(.white.opacity(0.6))
                 }
             }
@@ -627,70 +634,150 @@ struct PhotogrammetryView: View {
 
     var bottomPanel: some View {
         VStack(spacing: 12) {
-            // Preset picker
-            Picker("Quality", selection: $preset) {
-                ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
-            }
-            .pickerStyle(.segmented).padding(.horizontal)
-            .background(Color.black.opacity(0.01)).colorScheme(.dark)
+            if captureMode != nil && !isCapturing {
+                // ── Mode selected, not yet capturing — show Start ──────────────
+                Picker("Quality", selection: $preset) {
+                    ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
+                }
+                .pickerStyle(.segmented).padding(.horizontal)
+                .background(Color.black.opacity(0.01)).colorScheme(.dark)
 
-            // Target hint
-            if let target = effectiveTarget {
-                Text("Target: \(target) photos  •  min \(preset.minToProcess) to start")
-                    .font(.caption2).foregroundColor(.white.opacity(0.7))
-            } else {
-                Text("Free mode — take as many as you like  •  min \(preset.minToProcess) to start")
-                    .font(.caption2).foregroundColor(.white.opacity(0.7))
-            }
-
-            HStack(spacing: 24) {
-                // Thumbnail of last capture
-                Group {
-                    if let thumb = lastThumbnail {
-                        Image(uiImage: thumb)
-                            .resizable().scaledToFill()
-                            .frame(width: 52, height: 52)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.white.opacity(0.4), lineWidth: 1))
-                    } else {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.1)).frame(width: 52, height: 52)
-                    }
+                if captureMode == .cube {
+                    Text("Aim at your object, then tap Start")
+                        .font(.caption).foregroundColor(.yellow.opacity(0.9))
+                } else {
+                    Text("Point at your object, then tap Start")
+                        .font(.caption).foregroundColor(.white.opacity(0.7))
                 }
 
-                // Shutter button — force-captures current ARFrame
-                Button(action: capturePhoto) {
-                    ZStack {
-                        Circle().fill(Color.white).frame(width: 72, height: 72)
-                        Circle().stroke(Color.white.opacity(0.4), lineWidth: 3)
-                            .frame(width: 84, height: 84)
-                    }
+                Button(action: startCapture) {
+                    Label("Start Capture", systemImage: "record.circle.fill")
+                        .font(.headline).foregroundColor(.white)
+                        .padding(.horizontal, 44).padding(.vertical, 16)
+                        .background(Color.green).cornerRadius(16)
                 }
-                .disabled(phase != .capturing)
 
-                // ── Stop & Build 3D ── always visible, prominent termination button
-                Button(action: startProcessing) {
-                    VStack(spacing: 5) {
-                        ZStack {
-                            Circle()
-                                .fill(canProcess ? Color.green : Color.white.opacity(0.2))
+            } else if isCapturing {
+                // ── Actively capturing ────────────────────────────────────────
+                Picker("Quality", selection: $preset) {
+                    ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
+                }
+                .pickerStyle(.segmented).padding(.horizontal)
+                .background(Color.black.opacity(0.01)).colorScheme(.dark)
+
+                if let target = effectiveTarget {
+                    Text("Target: \(target) photos  •  min \(preset.minToProcess) to start")
+                        .font(.caption2).foregroundColor(.white.opacity(0.7))
+                } else {
+                    Text("Free — min \(preset.minToProcess) photos to build")
+                        .font(.caption2).foregroundColor(.white.opacity(0.7))
+                }
+
+                HStack(spacing: 24) {
+                    // Thumbnail
+                    Group {
+                        if let thumb = lastThumbnail {
+                            Image(uiImage: thumb)
+                                .resizable().scaledToFill()
                                 .frame(width: 52, height: 52)
-                            Image(systemName: canProcess ? "checkmark" : "hourglass")
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundColor(canProcess ? .black : .white.opacity(0.5))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.4), lineWidth: 1))
+                        } else {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.1)).frame(width: 52, height: 52)
                         }
-                        Text(canProcess ? "Build 3D" : "\(capturedCount)/\(preset.minToProcess)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(canProcess ? .green : .white.opacity(0.5))
                     }
+
+                    // Shutter — manual capture
+                    Button(action: capturePhoto) {
+                        ZStack {
+                            Circle().fill(Color.white).frame(width: 72, height: 72)
+                            Circle().stroke(Color.white.opacity(0.4), lineWidth: 3)
+                                .frame(width: 84, height: 84)
+                        }
+                    }
+
+                    // Build 3D
+                    Button(action: startProcessing) {
+                        VStack(spacing: 5) {
+                            ZStack {
+                                Circle()
+                                    .fill(canProcess ? Color.green : Color.white.opacity(0.2))
+                                    .frame(width: 52, height: 52)
+                                Image(systemName: canProcess ? "checkmark" : "hourglass")
+                                    .font(.system(size: 22, weight: .bold))
+                                    .foregroundColor(canProcess ? .black : .white.opacity(0.5))
+                            }
+                            Text(canProcess ? "Build 3D" : "\(capturedCount)/\(preset.minToProcess)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(canProcess ? .green : .white.opacity(0.5))
+                        }
+                    }
+                    .disabled(!canProcess)
                 }
-                .disabled(!canProcess)
             }
         }
         .padding(.bottom, 50).padding(.top, 12)
         .background(LinearGradient(colors: [.clear, .black.opacity(0.75)],
                                    startPoint: .top, endPoint: .bottom))
+    }
+
+    // MARK: - Mode selection overlay
+
+    var modeSelectionOverlay: some View {
+        VStack {
+            Spacer()
+            VStack(spacing: 20) {
+                Text("Choose Scan Mode")
+                    .font(.title3).fontWeight(.bold).foregroundColor(.white)
+
+                HStack(spacing: 16) {
+                    // ── Cube mode ──────────────────────────────────────────────
+                    Button(action: { selectMode(.cube) }) {
+                        VStack(spacing: 14) {
+                            Image(systemName: "cube")
+                                .font(.system(size: 42))
+                                .foregroundColor(.yellow)
+                            Text("Object Scan")
+                                .font(.headline).foregroundColor(.white)
+                            Text("Define a 3D cube\naround your object")
+                                .font(.caption).foregroundColor(.white.opacity(0.7))
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(width: 148, height: 170)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(18)
+                        .overlay(RoundedRectangle(cornerRadius: 18)
+                            .stroke(Color.yellow.opacity(0.6), lineWidth: 1.5))
+                    }
+
+                    // ── Free mode ──────────────────────────────────────────────
+                    Button(action: { selectMode(.free) }) {
+                        VStack(spacing: 14) {
+                            Image(systemName: "camera")
+                                .font(.system(size: 42))
+                                .foregroundColor(.white)
+                            Text("Free Capture")
+                                .font(.headline).foregroundColor(.white)
+                            Text("No limits — capture\nthe full scene")
+                                .font(.caption).foregroundColor(.white.opacity(0.7))
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(width: 148, height: 170)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(18)
+                        .overlay(RoundedRectangle(cornerRadius: 18)
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1.5))
+                    }
+                }
+            }
+            .padding(28)
+            .background(.ultraThinMaterial)
+            .cornerRadius(24)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 60)
+        }
     }
 
     // MARK: - Processing overlay
@@ -816,6 +903,18 @@ struct PhotogrammetryView: View {
 
     // MARK: - Actions
 
+    func selectMode(_ mode: CaptureMode) {
+        captureMode = mode
+        if mode == .cube {
+            meshManager.placeScanVolume()
+        }
+    }
+
+    func startCapture() {
+        isCapturing = true
+        meshManager.autoCapture.isEnabled = true
+    }
+
     /// Manual shutter — force-captures the current ARFrame.
     func capturePhoto() {
         meshManager.capturePhotoNow()
@@ -825,6 +924,7 @@ struct PhotogrammetryView: View {
     func startProcessing() {
         guard canProcess || preloadedPhotoDir != nil else { return }
         meshManager.autoCapture.isEnabled = false
+        isCapturing = false
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .processing
         processingProgress = 0
