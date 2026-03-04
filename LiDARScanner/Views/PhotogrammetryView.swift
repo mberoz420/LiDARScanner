@@ -552,17 +552,10 @@ struct PhotogrammetryView: View {
                     .clipShape(Circle())
             }
 
-            // Box toggle — shown in cube mode AND photo-only mode
-            if phase == .capturing && (captureMode == .cube || captureMode == .photoOnly) {
+            // Cube reposition button — only shown in cube mode
+            if phase == .capturing && captureMode == .cube {
                 Button(action: {
-                    if captureMode == .photoOnly {
-                        // Toggle box on/off in photo-only mode
-                        if meshManager.scanVolume != nil {
-                            meshManager.clearScanVolume()
-                        } else {
-                            meshManager.placeScanVolume()
-                        }
-                    } else if meshManager.scanVolume != nil {
+                    if meshManager.scanVolume != nil {
                         meshManager.clearScanVolume()
                         meshManager.placeScanVolume()
                     }
@@ -570,7 +563,7 @@ struct PhotogrammetryView: View {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "cube.fill")
                             .font(.title3)
-                            .foregroundColor(captureMode == .photoOnly ? .cyan : .yellow)
+                            .foregroundColor(.yellow)
                             .frame(width: 44, height: 44)
                             .background(Color.black.opacity(0.55))
                             .clipShape(Circle())
@@ -654,6 +647,29 @@ struct PhotogrammetryView: View {
                 if captureMode == .cube {
                     Text("Aim at your object, then tap Start")
                         .font(.caption).foregroundColor(.yellow.opacity(0.9))
+                } else if captureMode == .photoOnly {
+                    // Box toggle for Photo Only mode
+                    Button(action: {
+                        if meshManager.scanVolume != nil {
+                            meshManager.clearScanVolume()
+                        } else {
+                            meshManager.placeScanVolume()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                                .foregroundColor(.cyan)
+                            Text(meshManager.scanVolume != nil
+                                 ? "Box: ON — tap to remove"
+                                 : "Box: OFF — tap to add box constraint")
+                                .font(.caption).foregroundColor(.white.opacity(0.8))
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color.black.opacity(0.45)).cornerRadius(10)
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.cyan.opacity(0.6), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                 } else {
                     Text("Point at your object, then tap Start")
                         .font(.caption).foregroundColor(.white.opacity(0.7))
