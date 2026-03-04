@@ -320,12 +320,24 @@ class PhotogrammetryController: NSObject, ObservableObject {
         return DepthMaskProcessor.sampleDepth(from: map, at: normalised)
     }
 
-    override init() {
-        tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("photogrammetry_\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    /// `existingDir`: reuse an existing photo directory (e.g. auto-captured during LiDAR scan).
+    /// Pass `nil` to create a fresh temp directory.
+    init(existingDir: URL? = nil) {
+        if let dir = existingDir {
+            tempDir = dir
+        } else {
+            let newDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("photogrammetry_\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: newDir, withIntermediateDirectories: true)
+            tempDir = newDir
+        }
         super.init()
         setupSession()
+        // Sync capturedCount so new files don't overwrite pre-existing photos
+        if existingDir != nil {
+            let existing = (try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)) ?? []
+            capturedCount = existing.filter { ["jpg","heic","png"].contains($0.pathExtension.lowercased()) }.count
+        }
     }
 
     private func setupSession() {
@@ -476,18 +488,39 @@ struct CameraPreviewView: UIViewRepresentable {
 
 struct PhotogrammetryView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var camera    = PhotogrammetryController()
+    @StateObject private var camera:   PhotogrammetryController
     @StateObject private var analyzer  = GeometryAnalyzer()
 
     @State private var preset: PhotogrammetryPreset = .auto
-    @State private var phase: Phase = .capturing
+    @State private var phase: Phase
     @State private var processingProgress: Double = 0
     @State private var outputURL: URL?
     @State private var errorMessage: String?
     @State private var showShareSheet = false
-    @State private var capturedURLs: [URL] = []
+    @State private var capturedURLs: [URL]
 
     enum Phase { case capturing, processing, done, failed }
+
+    /// Standard init — launches with empty capture session.
+    init() {
+        _camera = StateObject(wrappedValue: PhotogrammetryController())
+        _capturedURLs = State(initialValue: [])
+        _phase = State(initialValue: .capturing)
+    }
+
+    /// Pre-loaded init — skips capture and jumps straight to processing.
+    /// Used when photos were auto-captured during a LiDAR scan.
+    init(preloadedDir: URL) {
+        let ctrl = PhotogrammetryController(existingDir: preloadedDir)
+        _camera = StateObject(wrappedValue: ctrl)
+        // Pre-populate capturedURLs from the existing directory
+        let urls = (try? FileManager.default.contentsOfDirectory(at: preloadedDir, includingPropertiesForKeys: nil))
+            .map { $0.filter { ["jpg","heic","png"].contains($0.pathExtension.lowercased()) }
+                     .sorted { $0.lastPathComponent < $1.lastPathComponent } }
+            ?? []
+        _capturedURLs = State(initialValue: urls)
+        _phase = State(initialValue: .processing)  // jump straight to processing
+    }
 
     // MARK: Computed properties
 
@@ -564,7 +597,14 @@ struct PhotogrammetryView: View {
                 errorOverlay(msg)
             }
         }
-        .onAppear { camera.start() }
+        .onAppear {
+            if phase == .processing {
+                // Pre-loaded mode: skip camera, go straight to processing
+                startProcessing()
+            } else {
+                camera.start()
+            }
+        }
         .onDisappear {
             camera.stop()
             if phase != .done { camera.cleanup() }

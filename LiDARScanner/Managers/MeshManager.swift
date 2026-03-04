@@ -283,6 +283,9 @@ class MeshManager: NSObject, ObservableObject {
     private var meshUpdateTimes: [UUID: Date] = [:]  // Per-anchor throttling
     private var currentFrame: ARFrame?
 
+    /// Auto photo capture — saves camera frames during scanning for later photogrammetry.
+    let autoCapture = AutoPhotoCapture()
+
     // MARK: - Setup
     func setup(arView: ARView) {
         self.arView = arView
@@ -2217,6 +2220,11 @@ extension MeshManager: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         Task { @MainActor in
             currentFrame = frame
+
+            // Auto-capture photos for photogrammetry (when enabled)
+            if isScanning {
+                autoCapture.process(frame: frame)
+            }
 
             // Update device orientation from gyroscope/accelerometer
             surfaceClassifier.updateDeviceOrientation(from: frame)

@@ -279,6 +279,7 @@ struct ScanModeView: View {
     @State private var repairModeEnabled = false
     @State private var loadError: String?
     @State private var autoSaveStatus: AutoSaveStatus = .idle
+    @State private var showPhotogrammetryFromScan = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -373,6 +374,36 @@ struct ScanModeView: View {
                         .padding(.vertical, 4)
                         .background(Color.orange)
                         .cornerRadius(8)
+                    }
+
+                    // Auto photo capture toggle (all LiDAR modes)
+                    if mode != .test {
+                        Button(action: {
+                            if meshManager.autoCapture.isEnabled {
+                                meshManager.autoCapture.isEnabled = false
+                            } else {
+                                meshManager.autoCapture.reset()
+                                meshManager.autoCapture.isEnabled = true
+                            }
+                        }) {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: meshManager.autoCapture.isEnabled ? "camera.fill" : "camera")
+                                    .font(.title3)
+                                    .foregroundColor(meshManager.autoCapture.isEnabled ? .cyan : .white)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                                if meshManager.autoCapture.photoCount > 0 {
+                                    Text("\(meshManager.autoCapture.photoCount)")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.black)
+                                        .padding(3)
+                                        .background(Color.cyan)
+                                        .clipShape(Circle())
+                                        .offset(x: 4, y: -4)
+                                }
+                            }
+                        }
                     }
 
                     // Camera toggle for Organic mode (TrueDepth / hybrid)
@@ -532,6 +563,27 @@ struct ScanModeView: View {
                                         .background(Color.blue)
                                         .cornerRadius(14)
                                 }
+
+                                // Run photogrammetry on auto-captured photos
+                                if meshManager.autoCapture.photoCount >= 5 {
+                                    Button(action: { showPhotogrammetryFromScan = true }) {
+                                        ZStack(alignment: .topTrailing) {
+                                            Image(systemName: "cube.transparent.fill")
+                                                .font(.title2)
+                                                .foregroundColor(.white)
+                                                .frame(width: 56, height: 56)
+                                                .background(Color.cyan)
+                                                .cornerRadius(14)
+                                            Text("\(meshManager.autoCapture.photoCount)")
+                                                .font(.system(size: 9, weight: .bold))
+                                                .foregroundColor(.black)
+                                                .padding(3)
+                                                .background(Color.white)
+                                                .clipShape(Circle())
+                                                .offset(x: 4, y: -4)
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             Color.clear.frame(width: 56, height: 56)
@@ -551,6 +603,9 @@ struct ScanModeView: View {
                     await loadResumeSession(sessionId)
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showPhotogrammetryFromScan) {
+            PhotogrammetryView(preloadedDir: meshManager.autoCapture.photoDir)
         }
         .sheet(isPresented: $showModeSettings) {
             ModeSettingsView(mode: mode)
