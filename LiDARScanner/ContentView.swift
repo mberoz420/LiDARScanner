@@ -346,10 +346,10 @@ struct ScanModeView: View {
                 }
             }
 
-            VStack {
-                // Top Bar - minimal (moved down for test mode to avoid reticle overlap)
-                HStack {
-                    // Back button - positioned lower when in test mode
+            VStack(spacing: 0) {
+                // ── Row 1: back button (left)  •  action icons (right) ──
+                HStack(alignment: .top, spacing: 8) {
+                    // Back button
                     Button(action: { dismiss() }) {
                         Image(systemName: "chevron.left")
                             .font(.title3)
@@ -358,106 +358,114 @@ struct ScanModeView: View {
                             .background(Color.black.opacity(0.5))
                             .clipShape(Circle())
                     }
-                    .padding(.top, mode == .test ? 60 : 0)  // Move down in test mode
+                    .padding(.top, mode == .test ? 60 : 0)
 
                     Spacer()
 
-                    // Repair mode indicator (when resuming)
-                    if resumeSessionId != nil && repairModeEnabled {
-                        HStack(spacing: 4) {
-                            Image(systemName: "wrench.and.screwdriver")
-                            Text("Repair")
-                        }
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.orange)
-                        .cornerRadius(8)
-                    }
-
-                    // Auto photo capture toggle (all LiDAR modes)
-                    if mode != .test {
-                        Button(action: {
-                            if meshManager.autoCapture.isEnabled {
-                                meshManager.autoCapture.isEnabled = false
-                            } else {
-                                meshManager.autoCapture.reset()
-                                meshManager.autoCapture.isEnabled = true
-                                if !meshManager.isScanning { toggleScanning() }
+                    // Action icon group — always on the right, never crowds the badge
+                    HStack(spacing: 8) {
+                        // Repair indicator (when resuming)
+                        if resumeSessionId != nil && repairModeEnabled {
+                            HStack(spacing: 4) {
+                                Image(systemName: "wrench.and.screwdriver")
+                                Text("Repair")
                             }
-                        }) {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: meshManager.autoCapture.isEnabled ? "camera.fill" : "camera")
-                                    .font(.title3)
-                                    .foregroundColor(meshManager.autoCapture.isEnabled ? .cyan : .white)
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
-                                if meshManager.autoCapture.photoCount > 0 {
-                                    Text("\(meshManager.autoCapture.photoCount)")
-                                        .font(.system(size: 9, weight: .bold))
-                                        .foregroundColor(.black)
-                                        .padding(3)
-                                        .background(Color.cyan)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.orange)
+                            .cornerRadius(8)
+                        }
+
+                        // Auto photo capture toggle
+                        if mode != .test {
+                            Button(action: {
+                                if meshManager.autoCapture.isEnabled {
+                                    meshManager.autoCapture.isEnabled = false
+                                } else {
+                                    meshManager.autoCapture.reset()
+                                    meshManager.autoCapture.isEnabled = true
+                                    if !meshManager.isScanning { toggleScanning() }
+                                }
+                            }) {
+                                ZStack(alignment: .topTrailing) {
+                                    Image(systemName: meshManager.autoCapture.isEnabled ? "camera.fill" : "camera")
+                                        .font(.title3)
+                                        .foregroundColor(meshManager.autoCapture.isEnabled ? .cyan : .white)
+                                        .frame(width: 44, height: 44)
+                                        .background(Color.black.opacity(0.5))
                                         .clipShape(Circle())
-                                        .offset(x: 4, y: -4)
+                                    if meshManager.autoCapture.photoCount > 0 {
+                                        Text("\(meshManager.autoCapture.photoCount)")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(.black)
+                                            .padding(3)
+                                            .background(Color.cyan)
+                                            .clipShape(Circle())
+                                            .offset(x: 4, y: -4)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Scan volume button
+                        if mode != .test {
+                            Button(action: {
+                                if meshManager.scanVolume != nil {
+                                    meshManager.clearScanVolume()
+                                } else {
+                                    if !meshManager.isScanning { toggleScanning() }
+                                    meshManager.placeScanVolume()
+                                }
+                            }) {
+                                ZStack(alignment: .topTrailing) {
+                                    Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                                        .font(.title3)
+                                        .foregroundColor(meshManager.scanVolume != nil ? .yellow : .white)
+                                        .frame(width: 44, height: 44)
+                                        .background(Color.black.opacity(0.5))
+                                        .clipShape(Circle())
+                                    if let v = meshManager.scanVolume {
+                                        Text("\(Int(v.halfExtent * 200))cm")
+                                            .font(.system(size: 7, weight: .bold))
+                                            .foregroundColor(.black)
+                                            .padding(2)
+                                            .background(Color.yellow)
+                                            .clipShape(Capsule())
+                                            .offset(x: 4, y: -4)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Camera flip (Organic mode + TrueDepth)
+                        if mode == .organic && meshManager.faceTrackingAvailable {
+                            Button(action: { meshManager.toggleCamera() }) {
+                                ZStack(alignment: .bottom) {
+                                    Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
+                                        .font(.title3)
+                                        .foregroundColor(meshManager.hybridFaceTracking ? .green : .white)
+                                        .frame(width: 44, height: 44)
+                                        .background(Color.black.opacity(0.5))
+                                        .clipShape(Circle())
+                                    if meshManager.hybridFaceTracking && !meshManager.usingFrontCamera {
+                                        Text("HYBRID")
+                                            .font(.system(size: 7, weight: .bold))
+                                            .foregroundColor(.green)
+                                            .offset(y: 8)
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
 
-                    // Scan volume button (tap to place/clear the focus cube)
-                    if mode != .test {
-                        Button(action: {
-                            if meshManager.scanVolume != nil {
-                                meshManager.clearScanVolume()
-                            } else {
-                                if !meshManager.isScanning { toggleScanning() }
-                                meshManager.placeScanVolume()
-                            }
-                        }) {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
-                                    .font(.title3)
-                                    .foregroundColor(meshManager.scanVolume != nil ? .yellow : .white)
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
-                                if let v = meshManager.scanVolume {
-                                    Text("\(Int(v.halfExtent * 200))cm")
-                                        .font(.system(size: 7, weight: .bold))
-                                        .foregroundColor(.black)
-                                        .padding(2)
-                                        .background(Color.yellow)
-                                        .clipShape(Capsule())
-                                        .offset(x: 4, y: -4)
-                                }
-                            }
-                        }
-                    }
-
-                    // Camera toggle for Organic mode (TrueDepth / hybrid)
-                    if mode == .organic && meshManager.faceTrackingAvailable {
-                        Button(action: { meshManager.toggleCamera() }) {
-                            ZStack(alignment: .bottom) {
-                                Image(systemName: meshManager.usingFrontCamera ? "camera.rotate" : "camera.rotate.fill")
-                                    .font(.title3)
-                                    .foregroundColor(meshManager.hybridFaceTracking ? .green : .white)
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
-                                if meshManager.hybridFaceTracking && !meshManager.usingFrontCamera {
-                                    Text("HYBRID")
-                                        .font(.system(size: 7, weight: .bold))
-                                        .foregroundColor(.green)
-                                        .offset(y: 8)
-                                }
-                            }
-                        }
-                    }
-
-                    // Mode badge
+                // ── Row 2: mode badge centred ──
+                HStack {
+                    Spacer()
                     HStack(spacing: 6) {
                         Image(systemName: mode.icon)
                             .foregroundColor(mode.color)
@@ -467,11 +475,12 @@ struct ScanModeView: View {
                     .font(.subheadline)
                     .foregroundColor(.white)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 7)
                     .background(Color.black.opacity(0.5))
                     .cornerRadius(20)
+                    Spacer()
                 }
-                .padding()
+                .padding(.bottom, 4)
 
                 // Scan volume size slider (appears below top bar when volume is active)
                 if meshManager.scanVolume != nil {
