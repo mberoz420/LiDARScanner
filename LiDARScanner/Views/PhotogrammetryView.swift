@@ -746,6 +746,7 @@ struct PhotogrammetryView: View {
                         .overlay(RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.yellow.opacity(0.6), lineWidth: 1.5))
                     }
+                    .buttonStyle(.plain)
 
                     Button(action: { selectMode(.free) }) {
                         VStack(spacing: 6) {
@@ -760,6 +761,7 @@ struct PhotogrammetryView: View {
                         .overlay(RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.white.opacity(0.3), lineWidth: 1.5))
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20).padding(.vertical, 16)
