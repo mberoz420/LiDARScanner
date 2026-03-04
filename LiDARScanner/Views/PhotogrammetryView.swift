@@ -144,20 +144,30 @@ extension PhotogrammetryController: AVCapturePhotoCaptureDelegate {
 
 // MARK: - Camera Preview (UIViewRepresentable)
 
+/// UIView subclass that keeps the preview layer filling its bounds on every layout pass.
+private class CameraPreviewContainer: UIView {
+    var previewLayer: AVCaptureVideoPreviewLayer?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        previewLayer?.frame = bounds
+    }
+}
+
 struct CameraPreviewView: UIViewRepresentable {
     let controller: PhotogrammetryController
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
+    func makeUIView(context: Context) -> CameraPreviewContainer {
+        let view = CameraPreviewContainer()
         view.backgroundColor = .black
-        controller.previewLayer.frame = view.bounds
+        view.previewLayer = controller.previewLayer
         controller.previewLayer.videoGravity = .resizeAspectFill
         view.layer.addSublayer(controller.previewLayer)
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        controller.previewLayer.frame = uiView.bounds
+    func updateUIView(_ uiView: CameraPreviewContainer, context: Context) {
+        uiView.setNeedsLayout()
     }
 }
 
