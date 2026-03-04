@@ -1865,10 +1865,11 @@ class MeshManager: NSObject, ObservableObject {
         let screenCenter = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
         let hits = arView.raycast(from: screenCenter, allowing: .estimatedPlane, alignment: .any)
 
-        let worldCenter: SIMD3<Float>
+        var worldCenter: SIMD3<Float>
         if let hit = hits.first {
             let c = hit.worldTransform.columns.3
-            worldCenter = SIMD3<Float>(c.x, c.y, c.z)
+            // Lift by halfExtent so the bottom face sits on the detected surface
+            worldCenter = SIMD3<Float>(c.x, c.y + scanVolumeHalfExtent, c.z)
         } else {
             // Place a point 0.8 m ahead along the camera's forward axis
             let cam = frame.camera.transform
@@ -1907,7 +1908,7 @@ class MeshManager: NSObject, ObservableObject {
         let side = volume.halfExtent * 2
         let mesh = MeshResource.generateBox(size: side)
         var material = UnlitMaterial()
-        material.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.18))
+        material.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.28))
         let entity = ModelEntity(mesh: mesh, materials: [material])
 
         let anchor = AnchorEntity(world: volume.center)
