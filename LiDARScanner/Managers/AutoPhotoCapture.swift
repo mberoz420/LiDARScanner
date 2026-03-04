@@ -19,6 +19,7 @@ class AutoPhotoCapture: ObservableObject {
 
     @Published var isEnabled  = false
     @Published var photoCount = 0
+    @Published var depthCount = 0   // incremented each time a depth map is saved
 
     private(set) var photoDir: URL
 
@@ -84,6 +85,7 @@ class AutoPhotoCapture: ObservableObject {
         capturedImageSize = .zero
         depthMaps  = []
         depthSizes = []
+        depthCount = 0
         prevFrameTransform    = nil
         prevFrameTimestamp    = 0
         smoothedSpeedMs       = 0
@@ -245,6 +247,7 @@ class AutoPhotoCapture: ObservableObject {
         let byteCount = w * h * MemoryLayout<Float32>.size
         depthMaps.append(Data(bytes: ptr, count: byteCount))
         depthSizes.append([w, h])
+        depthCount += 1
     }
 
     private func buildImageData(frame: ARFrame, transform: simd_float4x4) -> Data? {
