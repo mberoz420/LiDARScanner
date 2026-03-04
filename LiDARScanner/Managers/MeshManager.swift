@@ -530,6 +530,18 @@ class MeshManager: NSObject, ObservableObject {
         usingFrontCamera = false
     }
 
+    /// Enables `.sceneDepth` in the ARKit session without resetting tracking.
+    /// Call this in Photo Only mode so that `frame.sceneDepth` is non-nil.
+    func startDepthSession() {
+        guard let arView = arView else { return }
+        guard ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) else { return }
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal, .vertical]
+        config.frameSemantics.insert(.sceneDepth)
+        // No .resetTracking — preserves the existing world coordinate system
+        arView.session.run(config)
+    }
+
     private func startFaceTracking(arView: ARView) {
         let config = ARFaceTrackingConfiguration()
         config.maximumNumberOfTrackedFaces = 1

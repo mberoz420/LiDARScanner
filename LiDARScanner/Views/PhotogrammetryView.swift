@@ -890,6 +890,7 @@ struct PhotogrammetryView: View {
         case .photoOnly:
             // No LiDAR mesh needed — stop scanning to save battery
             if meshManager.isScanning { _ = meshManager.stopScanning() }
+            meshManager.startDepthSession()  // ensure .sceneDepth is enabled for depth maps
         case .free:
             break
         }
