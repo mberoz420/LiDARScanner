@@ -627,6 +627,26 @@ struct PhotogrammetryView: View {
                                 }
                             }
                     )
+
+                // Center crosshair — shows where cube button samples depth from
+                if camera.latestDepthMap != nil {
+                    ZStack {
+                        // Crosshair lines
+                        Rectangle()
+                            .fill(Color.white.opacity(0.7))
+                            .frame(width: 1, height: 20)
+                        Rectangle()
+                            .fill(Color.white.opacity(0.7))
+                            .frame(width: 20, height: 1)
+                        // Outer ring
+                        Circle()
+                            .stroke(camera.targetDepth != nil ? Color.yellow : Color.white.opacity(0.5),
+                                    lineWidth: 1.5)
+                            .frame(width: 40, height: 40)
+                    }
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    .allowsHitTesting(false)
+                }
             }
             .edgesIgnoringSafeArea(.all)
 
@@ -682,6 +702,34 @@ struct PhotogrammetryView: View {
                     .frame(width: 44, height: 44)
                     .background(Color.black.opacity(0.55))
                     .clipShape(Circle())
+            }
+
+            // Cube / depth-focus button
+            Button(action: {
+                if camera.targetDepth != nil {
+                    camera.targetDepth = nil
+                } else if let depth = camera.sampleDepth(at: CGPoint(x: 0.5, y: 0.5)) {
+                    camera.targetDepth = depth
+                }
+            }) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: camera.targetDepth != nil ? "cube.fill" : "cube")
+                        .font(.title3)
+                        .foregroundColor(camera.targetDepth != nil ? .yellow : .white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.black.opacity(0.55))
+                        .clipShape(Circle())
+                    if let depth = camera.targetDepth {
+                        Text(String(format: "%.1fm", depth))
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(Color.yellow)
+                            .clipShape(Capsule())
+                            .offset(x: 4, y: -4)
+                    }
+                }
             }
 
             Spacer()
