@@ -555,6 +555,8 @@ struct PhotogrammetryView: View {
     @State private var showShareSheet = false
     @State private var lastThumbnail: UIImage?
     @State private var preloadedPhotoDir: URL?  // non-nil when launched from LiDAR scan
+    /// Mirrors autoCapture.photoCount — updated via onReceive so SwiftUI sees it
+    @State private var captureCount: Int = 0
 
     enum Phase { case capturing, processing, done, failed }
 
@@ -577,7 +579,7 @@ struct PhotogrammetryView: View {
             return (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
                 .filter { ["jpg","heic","png"].contains($0.pathExtension.lowercased()) }.count ?? 0
         }
-        return meshManager.autoCapture.photoCount
+        return captureCount  // updated via onReceive — guaranteed to trigger re-render
     }
 
     var inputPhotoDir: URL {
@@ -658,6 +660,19 @@ struct PhotogrammetryView: View {
             meshManager.autoCapture.isEnabled = true
             meshManager.startScanning()
         }
+        .onReceive(meshManager.autoCapture.$photoCount) { count in
+            captureCount = count
+            // Update thumbnail whenever a new photo is saved
+            if let url = meshManager.autoCapture.photoURLs().last,
+               let image = UIImage(contentsOfFile: url.path) {
+                lastThumbnail = image
+            }
+            // Analyze every 3rd photo in Auto mode
+            if preset == .auto && count % 3 == 0 && count > 0,
+               let url = meshManager.autoCapture.photoURLs().last {
+                analyzer.analyze(imageURL: url)
+            }
+        }
         .onDisappear {
             meshManager.autoCapture.isEnabled = false
             if meshManager.isScanning { _ = meshManager.stopScanning() }
@@ -680,8 +695,8 @@ struct PhotogrammetryView: View {
                     .clipShape(Circle())
             }
 
-            // Scan-volume cube button (same as Walls/Rooms card)
             if phase == .capturing {
+                // Scan-volume cube button (same as Walls/Rooms card)
                 Button(action: {
                     if meshManager.scanVolume != nil {
                         meshManager.clearScanVolume()
@@ -705,6 +720,28 @@ struct PhotogrammetryView: View {
                                 .offset(x: 4, y: -4)
                         }
                     }
+                }
+
+                // Stop & Build 3D — shown once cube is active
+                if meshManager.scanVolume != nil {
+                    Button(action: startProcessing) {
+                        HStack(spacing: 6) {
+                            Image(systemName: canProcess ? "checkmark.circle.fill" : "hourglass")
+                                .font(.system(size: 15, weight: .semibold))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(canProcess ? "Build 3D" : "\(captureCount)/\(preset.minToProcess)")
+                                    .font(.system(size: 13, weight: .bold))
+                                Text(canProcess ? "Stop scan" : "keep scanning")
+                                    .font(.system(size: 9))
+                                    .opacity(0.8)
+                            }
+                        }
+                        .foregroundColor(canProcess ? .black : .white)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(canProcess ? Color.green : Color.white.opacity(0.25))
+                        .cornerRadius(12)
+                    }
+                    .disabled(!canProcess)
                 }
             }
 
@@ -913,10 +950,8 @@ struct PhotogrammetryView: View {
 
     /// Manual shutter — force-captures the current ARFrame.
     func capturePhoto() {
-        guard let url = meshManager.capturePhotoNow() else { return }
-        if let image = UIImage(contentsOfFile: url.path) { lastThumbnail = image }
-        let count = meshManager.autoCapture.photoCount
-        if preset == .auto && count % 3 == 0 { analyzer.analyze(imageURL: url) }
+        meshManager.capturePhotoNow()
+        // thumbnail + analysis handled by onReceive($photoCount)
     }
 
     func startProcessing() {
