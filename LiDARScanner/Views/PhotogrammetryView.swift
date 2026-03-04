@@ -698,23 +698,23 @@ struct PhotogrammetryView: View {
                         }
                     }
 
-                    // Build 3D
-                    Button(action: startProcessing) {
+                    // Stop & Upload
+                    Button(action: stopAndUpload) {
                         VStack(spacing: 5) {
                             ZStack {
                                 Circle()
-                                    .fill(canProcess ? Color.green : Color.white.opacity(0.2))
+                                    .fill(capturedCount > 0 ? Color.orange : Color.white.opacity(0.2))
                                     .frame(width: 52, height: 52)
-                                Image(systemName: canProcess ? "checkmark" : "hourglass")
-                                    .font(.system(size: 22, weight: .bold))
-                                    .foregroundColor(canProcess ? .black : .white.opacity(0.5))
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(capturedCount > 0 ? .white : .white.opacity(0.4))
                             }
-                            Text(canProcess ? "Build 3D" : "\(capturedCount)/\(preset.minToProcess)")
+                            Text("Stop & Send")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(canProcess ? .green : .white.opacity(0.5))
+                                .foregroundColor(capturedCount > 0 ? .orange : .white.opacity(0.5))
                         }
                     }
-                    .disabled(!canProcess)
+                    .disabled(capturedCount == 0)
                 }
             }
         }
@@ -728,47 +728,38 @@ struct PhotogrammetryView: View {
     var modeSelectionOverlay: some View {
         VStack {
             Spacer()
-            VStack(spacing: 14) {
-                Text("Choose mode")
-                    .font(.caption).foregroundColor(.white.opacity(0.7))
-
-                HStack(spacing: 12) {
-                    Button(action: { selectMode(.cube) }) {
-                        VStack(spacing: 6) {
-                            Image(systemName: "cube")
-                                .font(.title3).foregroundColor(.yellow)
-                            Text("Object Scan")
-                                .font(.caption2).foregroundColor(.white)
-                        }
-                        .frame(width: 84, height: 60)
-                        .background(Color.white.opacity(0.08))
-                        .cornerRadius(12)
-                        .overlay(RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.yellow.opacity(0.6), lineWidth: 1.5))
+            HStack(spacing: 12) {
+                Button(action: { selectMode(.cube) }) {
+                    VStack(spacing: 5) {
+                        Image(systemName: "cube")
+                            .font(.title3).foregroundColor(.yellow)
+                        Text("Object Scan")
+                            .font(.caption2).foregroundColor(.white)
                     }
-                    .buttonStyle(.plain)
-
-                    Button(action: { selectMode(.free) }) {
-                        VStack(spacing: 6) {
-                            Image(systemName: "camera")
-                                .font(.title3).foregroundColor(.white)
-                            Text("Free Capture")
-                                .font(.caption2).foregroundColor(.white)
-                        }
-                        .frame(width: 84, height: 60)
-                        .background(Color.white.opacity(0.08))
-                        .cornerRadius(12)
-                        .overlay(RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1.5))
-                    }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .background(Color.black.opacity(0.55))
+                    .cornerRadius(12)
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.yellow.opacity(0.7), lineWidth: 1.5))
                 }
+                .buttonStyle(.plain)
+
+                Button(action: { selectMode(.free) }) {
+                    VStack(spacing: 5) {
+                        Image(systemName: "camera")
+                            .font(.title3).foregroundColor(.white)
+                        Text("Free Capture")
+                            .font(.caption2).foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .background(Color.black.opacity(0.55))
+                    .cornerRadius(12)
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.35), lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 20).padding(.vertical, 16)
-            .background(.ultraThinMaterial)
-            .cornerRadius(18)
-            .padding(.horizontal, 40)
-            .padding(.bottom, 60)
+            .padding(.bottom, 140)
         }
     }
 
@@ -911,6 +902,14 @@ struct PhotogrammetryView: View {
     func capturePhoto() {
         meshManager.capturePhotoNow()
         // thumbnail + analysis handled by onReceive($photoCount)
+    }
+
+    func stopAndUpload() {
+        meshManager.autoCapture.isEnabled = false
+        isCapturing = false
+        if meshManager.isScanning { _ = meshManager.stopScanning() }
+        phase = .done
+        sendToLabeler()
     }
 
     func startProcessing() {

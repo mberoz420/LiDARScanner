@@ -1899,20 +1899,49 @@ class MeshManager: NSObject, ObservableObject {
         updateVolumeVisualization()
     }
 
-    /// Rebuild the translucent AR box that marks the active scan volume.
+    /// Rebuild the wireframe AR box that marks the active scan volume.
+    /// 12 solid-cyan edge bars + a barely-there transparent fill so the interior is visible.
     private func updateVolumeVisualization() {
         volumeAnchor?.removeFromParent()
         volumeAnchor = nil
         guard let arView, let volume = scanVolume else { return }
 
-        let side = volume.halfExtent * 2
-        let mesh = MeshResource.generateBox(size: side)
-        var material = UnlitMaterial()
-        material.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.06))
-        let entity = ModelEntity(mesh: mesh, materials: [material])
+        let h    = volume.halfExtent
+        let side = h * 2
+        let t: Float = 0.005   // 5 mm edge thickness
 
         let anchor = AnchorEntity(world: volume.center)
-        anchor.addChild(entity)
+
+        // Ghost fill — barely visible
+        var fillMat = UnlitMaterial()
+        fillMat.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.04))
+        let fill = ModelEntity(mesh: MeshResource.generateBox(size: side), materials: [fillMat])
+        anchor.addChild(fill)
+
+        // Solid cyan edge bars
+        var edgeMat = UnlitMaterial()
+        edgeMat.color = .init(tint: UIColor(red: 0.0, green: 0.9, blue: 1.0, alpha: 1.0))
+
+        let edges: [(SIMD3<Float>, SIMD3<Float>)] = [
+            // 4 edges along X
+            ([ 0,  h,  h], [side, t, t]),  ([ 0,  h, -h], [side, t, t]),
+            ([ 0, -h,  h], [side, t, t]),  ([ 0, -h, -h], [side, t, t]),
+            // 4 edges along Y
+            ([ h,  0,  h], [t, side, t]),  ([ h,  0, -h], [t, side, t]),
+            ([-h,  0,  h], [t, side, t]),  ([-h,  0, -h], [t, side, t]),
+            // 4 edges along Z
+            ([ h,  h,  0], [t, t, side]),  ([ h, -h,  0], [t, t, side]),
+            ([-h,  h,  0], [t, t, side]),  ([-h, -h,  0], [t, t, side]),
+        ]
+        for (pos, size) in edges {
+            let bar = ModelEntity(
+                mesh: MeshResource.generateBox(size: size),
+                materials: [edgeMat]
+            )
+            bar.position = pos
+            anchor.addChild(bar)
+        }
+
         arView.scene.addAnchor(anchor)
         volumeAnchor = anchor
     }
