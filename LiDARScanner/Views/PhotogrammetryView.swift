@@ -411,7 +411,7 @@ struct PhotogrammetryView: View {
     @State private var isCapturing = false
 
     enum Phase { case capturing, processing, done, failed }
-    enum CaptureMode { case cube, free }
+    enum CaptureMode { case cube, free, photoOnly }
 
     /// Standard init — launches with ARKit scanning + auto-capture.
     init() {
@@ -598,9 +598,9 @@ struct PhotogrammetryView: View {
 
 
                 if phase == .capturing && isCapturing {
-                    Text(captureMode == .cube
-                         ? "Cube active — walk around object"
-                         : "Free — walk around object")
+                    Text(captureMode == .cube    ? "Cube active — walk around object" :
+                         captureMode == .free    ? "Free — walk around object" :
+                                                   "Photo only — walk around object")
                         .font(.caption2).foregroundColor(.white.opacity(0.6))
                 }
             }
@@ -758,6 +758,21 @@ struct PhotogrammetryView: View {
                         .stroke(Color.white.opacity(0.35), lineWidth: 1.5))
                 }
                 .buttonStyle(.plain)
+
+                Button(action: { selectMode(.photoOnly) }) {
+                    VStack(spacing: 5) {
+                        Image(systemName: "photo.stack")
+                            .font(.title3).foregroundColor(.cyan)
+                        Text("Photo Only")
+                            .font(.caption2).foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .background(Color.black.opacity(0.55))
+                    .cornerRadius(12)
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.cyan.opacity(0.7), lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
             }
             .padding(.bottom, 140)
         }
@@ -840,26 +855,6 @@ struct PhotogrammetryView: View {
         }
     }
 
-    func sendToLabeler() {
-        isUploadingToLabeler = true
-        labelerSessionId     = nil
-        labelerUploadError   = nil
-        let dir        = meshManager.autoCapture.photoDir
-        let poses      = meshManager.autoCapture.posesJSON()
-        let pointCloud = meshManager.pointCloudJSON()
-        Task {
-            let sid = await ScanServerManager.shared.uploadPhotos(from: dir, posesData: poses, pointCloudData: pointCloud)
-            await MainActor.run {
-                isUploadingToLabeler = false
-                if let sid {
-                    labelerSessionId = sid
-                } else {
-                    labelerUploadError = ScanServerManager.shared.lastError ?? "Unknown error"
-                }
-            }
-        }
-    }
-
     // MARK: - Error overlay
 
     func errorOverlay(_ message: String) -> some View {
@@ -889,8 +884,14 @@ struct PhotogrammetryView: View {
 
     func selectMode(_ mode: CaptureMode) {
         captureMode = mode
-        if mode == .cube {
+        switch mode {
+        case .cube:
             meshManager.placeScanVolume()
+        case .photoOnly:
+            // No LiDAR mesh needed — stop scanning to save battery
+            if meshManager.isScanning { _ = meshManager.stopScanning() }
+        case .free:
+            break
         }
     }
 
@@ -911,6 +912,27 @@ struct PhotogrammetryView: View {
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .done
         sendToLabeler()
+    }
+
+    func sendToLabeler() {
+        isUploadingToLabeler = true
+        labelerSessionId     = nil
+        labelerUploadError   = nil
+        let dir        = meshManager.autoCapture.photoDir
+        let poses      = meshManager.autoCapture.posesJSON()
+        // Photo-only mode has no LiDAR mesh — skip point cloud
+        let pointCloud = (captureMode == .photoOnly) ? nil : meshManager.pointCloudJSON()
+        Task {
+            let sid = await ScanServerManager.shared.uploadPhotos(from: dir, posesData: poses, pointCloudData: pointCloud)
+            await MainActor.run {
+                isUploadingToLabeler = false
+                if let sid {
+                    labelerSessionId = sid
+                } else {
+                    labelerUploadError = ScanServerManager.shared.lastError ?? "Unknown error"
+                }
+            }
+        }
     }
 
     func startProcessing() {
