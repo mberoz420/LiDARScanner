@@ -618,8 +618,9 @@ struct PhotogrammetryView: View {
     var body: some View {
         ZStack {
             // AR View — camera feed + 3D scan-volume cube visualization
+            // autoStartScanning: starts scanning immediately after setup (no delay, no reset)
             if phase == .capturing {
-                ARViewContainer(meshManager: meshManager)
+                ARViewContainer(meshManager: meshManager, autoStartScanning: true)
                     .edgesIgnoringSafeArea(.all)
             } else {
                 Color.black.edgesIgnoringSafeArea(.all)
@@ -649,16 +650,16 @@ struct PhotogrammetryView: View {
         }
         .task {
             guard phase == .capturing else {
-                // Pre-loaded: start processing once view is ready
                 startProcessing()
                 return
             }
-            // Give ARViewContainer time to call meshManager.setup(arView:)
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // ARViewContainer calls setup + startScanning immediately (autoStartScanning: true).
+            // We just need to configure mode and enable auto-capture.
+            // Brief yield lets the ARViewContainer Task run first.
+            await Task.yield()
             meshManager.setMode(.largeObjects)
             meshManager.autoCapture.reset()
             meshManager.autoCapture.isEnabled = true
-            meshManager.startScanning()
         }
         .onReceive(meshManager.autoCapture.$photoCount) { count in
             captureCount = count
@@ -722,27 +723,6 @@ struct PhotogrammetryView: View {
                     }
                 }
 
-                // Stop & Build 3D — shown once cube is active
-                if meshManager.scanVolume != nil {
-                    Button(action: startProcessing) {
-                        HStack(spacing: 6) {
-                            Image(systemName: canProcess ? "checkmark.circle.fill" : "hourglass")
-                                .font(.system(size: 15, weight: .semibold))
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(canProcess ? "Build 3D" : "\(captureCount)/\(preset.minToProcess)")
-                                    .font(.system(size: 13, weight: .bold))
-                                Text(canProcess ? "Stop scan" : "keep scanning")
-                                    .font(.system(size: 9))
-                                    .opacity(0.8)
-                            }
-                        }
-                        .foregroundColor(canProcess ? .black : .white)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(canProcess ? Color.green : Color.white.opacity(0.25))
-                        .cornerRadius(12)
-                    }
-                    .disabled(!canProcess)
-                }
             }
 
             Spacer()
@@ -830,7 +810,7 @@ struct PhotogrammetryView: View {
                     .font(.caption2).foregroundColor(.white.opacity(0.7))
             }
 
-            HStack(spacing: 50) {
+            HStack(spacing: 24) {
                 // Thumbnail of last capture
                 Group {
                     if let thumb = lastThumbnail {
@@ -856,13 +836,21 @@ struct PhotogrammetryView: View {
                 }
                 .disabled(phase != .capturing)
 
-                // Process button
+                // ── Stop & Build 3D ── always visible, prominent termination button
                 Button(action: startProcessing) {
-                    VStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill").font(.system(size: 28))
-                        Text("Process").font(.caption).fontWeight(.semibold)
+                    VStack(spacing: 5) {
+                        ZStack {
+                            Circle()
+                                .fill(canProcess ? Color.green : Color.white.opacity(0.2))
+                                .frame(width: 52, height: 52)
+                            Image(systemName: canProcess ? "checkmark" : "hourglass")
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundColor(canProcess ? .black : .white.opacity(0.5))
+                        }
+                        Text(canProcess ? "Build 3D" : "\(capturedCount)/\(preset.minToProcess)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(canProcess ? .green : .white.opacity(0.5))
                     }
-                    .foregroundColor(canProcess ? .green : .gray).frame(width: 52)
                 }
                 .disabled(!canProcess)
             }

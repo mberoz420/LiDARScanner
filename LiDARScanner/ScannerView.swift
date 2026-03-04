@@ -477,6 +477,9 @@ struct SpecItem: View {
 
 struct ARViewContainer: UIViewRepresentable {
     let meshManager: MeshManager
+    /// When true, startScanning() is called immediately after setup — no delay, no separate timer.
+    /// Used by PhotogrammetryView so scanning is continuous from the first frame.
+    var autoStartScanning: Bool = false
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
@@ -492,6 +495,9 @@ struct ARViewContainer: UIViewRepresentable {
 
         Task { @MainActor in
             meshManager.setup(arView: arView)
+            if autoStartScanning {
+                meshManager.startScanning()
+            }
         }
 
         return arView
