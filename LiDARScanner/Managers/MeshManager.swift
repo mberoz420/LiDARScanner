@@ -296,10 +296,17 @@ class MeshManager: NSObject, ObservableObject {
     private var surfaceTypes: [UUID: SurfaceType] = [:]  // Track surface type per mesh
     private var capturedScan: CapturedScan?
     private var meshUpdateTimes: [UUID: Date] = [:]  // Per-anchor throttling
-    private var currentFrame: ARFrame?
+    private(set) var currentFrame: ARFrame?
 
     /// Auto photo capture — saves camera frames during scanning for later photogrammetry.
     let autoCapture = AutoPhotoCapture()
+
+    /// Force-save the current ARFrame as a photo. Used by the manual shutter in PhotogrammetryView.
+    @discardableResult
+    func capturePhotoNow() -> URL? {
+        guard let frame = currentFrame else { return nil }
+        return autoCapture.captureNow(frame: frame)
+    }
 
     /// Active scan volume — filters LiDAR mesh to this cube. nil = capture everything.
     @Published var scanVolume: ScanVolume? = nil
@@ -2359,7 +2366,7 @@ extension MeshManager: ARSessionDelegate {
             currentFrame = frame
 
             // Auto-capture photos for photogrammetry (when enabled)
-            if isScanning {
+            if autoCapture.isEnabled {
                 autoCapture.process(frame: frame)
             }
 

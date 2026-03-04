@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import ARKit
 import RealityKit
 import Vision
 import CoreImage
@@ -543,8 +544,8 @@ struct CameraPreviewView: UIViewRepresentable {
 
 struct PhotogrammetryView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var camera:   PhotogrammetryController
-    @StateObject private var analyzer  = GeometryAnalyzer()
+    @StateObject private var meshManager = MeshManager()
+    @StateObject private var analyzer    = GeometryAnalyzer()
 
     @State private var preset: PhotogrammetryPreset = .auto
     @State private var phase: Phase
@@ -552,46 +553,49 @@ struct PhotogrammetryView: View {
     @State private var outputURL: URL?
     @State private var errorMessage: String?
     @State private var showShareSheet = false
-    @State private var capturedURLs: [URL]
+    @State private var lastThumbnail: UIImage?
+    @State private var preloadedPhotoDir: URL?  // non-nil when launched from LiDAR scan
 
     enum Phase { case capturing, processing, done, failed }
 
-    /// Standard init — launches with empty capture session.
+    /// Standard init — launches with ARKit scanning + auto-capture.
     init() {
-        _camera = StateObject(wrappedValue: PhotogrammetryController())
-        _capturedURLs = State(initialValue: [])
         _phase = State(initialValue: .capturing)
     }
 
     /// Pre-loaded init — skips capture and jumps straight to processing.
     /// Used when photos were auto-captured during a LiDAR scan.
     init(preloadedDir: URL) {
-        let ctrl = PhotogrammetryController(existingDir: preloadedDir)
-        _camera = StateObject(wrappedValue: ctrl)
-        // Pre-populate capturedURLs from the existing directory
-        let urls = (try? FileManager.default.contentsOfDirectory(at: preloadedDir, includingPropertiesForKeys: nil))
-            .map { $0.filter { ["jpg","heic","png"].contains($0.pathExtension.lowercased()) }
-                     .sorted { $0.lastPathComponent < $1.lastPathComponent } }
-            ?? []
-        _capturedURLs = State(initialValue: urls)
-        _phase = State(initialValue: .processing)  // jump straight to processing
+        _phase = State(initialValue: .processing)
+        _preloadedPhotoDir = State(initialValue: preloadedDir)
     }
 
-    // MARK: Computed properties
+    // MARK: - Helpers
 
-    /// Effective target: Auto uses analyzer recommendation, others use fixed value
+    var capturedCount: Int {
+        if let dir = preloadedPhotoDir {
+            return (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+                .filter { ["jpg","heic","png"].contains($0.pathExtension.lowercased()) }.count ?? 0
+        }
+        return meshManager.autoCapture.photoCount
+    }
+
+    var inputPhotoDir: URL {
+        preloadedPhotoDir ?? meshManager.autoCapture.photoDir
+    }
+
     var effectiveTarget: Int? {
         if preset == .auto {
-            return capturedURLs.count >= 3 ? analyzer.shapeClass.recommendedTarget : nil
+            return capturedCount >= 3 ? analyzer.shapeClass.recommendedTarget : nil
         }
         return preset.targetCount
     }
 
     var qualityInfo: (label: String, color: Color) {
-        if preset == .auto && capturedURLs.count >= 3 {
+        if preset == .auto && capturedCount >= 3 {
             return (analyzer.shapeClass.label, analyzer.shapeClass.color)
         }
-        switch capturedURLs.count {
+        switch capturedCount {
         case 0..<5:   return ("Need at least 5 photos", .red)
         case 5..<10:  return ("Basic shape", .orange)
         case 10..<20: return ("Good quality", .yellow)
@@ -602,162 +606,125 @@ struct PhotogrammetryView: View {
 
     var progressToTarget: Double {
         guard let target = effectiveTarget, target > 0 else { return 1 }
-        return min(Double(capturedURLs.count) / Double(target), 1)
+        return min(Double(capturedCount) / Double(target), 1)
     }
 
-    var canProcess: Bool { capturedURLs.count >= preset.minToProcess }
+    var canProcess: Bool { capturedCount >= preset.minToProcess }
 
-    // MARK: Body
+    // MARK: - Body
 
     var body: some View {
         ZStack {
-            // Camera feed — tap to set depth mask target
-            GeometryReader { geo in
-                CameraPreviewView(controller: camera)
+            // AR View — camera feed + 3D scan-volume cube visualization
+            if phase == .capturing {
+                ARViewContainer(meshManager: meshManager)
                     .edgesIgnoringSafeArea(.all)
-                    .gesture(
-                        SpatialTapGesture()
-                            .onEnded { value in
-                                let norm = CGPoint(
-                                    x: value.location.x / geo.size.width,
-                                    y: value.location.y / geo.size.height
-                                )
-                                if let depth = camera.sampleDepth(at: norm) {
-                                    camera.targetDepth = depth
-                                }
-                            }
-                    )
-
-                // Center crosshair — shows where cube button samples depth from
-                if phase != .processing {
-                    ZStack {
-                        // Crosshair lines
-                        Rectangle()
-                            .fill(Color.white.opacity(0.7))
-                            .frame(width: 1, height: 20)
-                        Rectangle()
-                            .fill(Color.white.opacity(0.7))
-                            .frame(width: 20, height: 1)
-                        // Outer ring
-                        Circle()
-                            .stroke(camera.targetDepth != nil ? Color.yellow : Color.white.opacity(0.5),
-                                    lineWidth: 1.5)
-                            .frame(width: 40, height: 40)
-                    }
-                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
-                    .allowsHitTesting(false)
-                }
+            } else {
+                Color.black.edgesIgnoringSafeArea(.all)
             }
-            .edgesIgnoringSafeArea(.all)
 
             // Main UI
             VStack(spacing: 0) {
                 topBar
+
+                // Volume size slider (shown below top bar when cube is active)
+                if meshManager.scanVolume != nil && phase == .capturing {
+                    volumeSlider
+                        .padding(.horizontal)
+                        .transition(.opacity)
+                }
+
                 Spacer()
                 bottomPanel
             }
 
             // Processing overlay
-            if phase == .processing {
-                processingOverlay
-            }
-
+            if phase == .processing { processingOverlay }
             // Done overlay
-            if phase == .done {
-                doneOverlay
-            }
-
+            if phase == .done { doneOverlay }
             // Error overlay
-            if phase == .failed, let msg = errorMessage {
-                errorOverlay(msg)
-            }
+            if phase == .failed, let msg = errorMessage { errorOverlay(msg) }
         }
-        .onAppear {
-            if phase == .processing {
-                // Pre-loaded mode: skip camera, go straight to processing
+        .task {
+            guard phase == .capturing else {
+                // Pre-loaded: start processing once view is ready
                 startProcessing()
-            } else {
-                camera.start()
+                return
             }
+            // Give ARViewContainer time to call meshManager.setup(arView:)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            meshManager.setMode(.largeObjects)
+            meshManager.autoCapture.reset()
+            meshManager.autoCapture.isEnabled = true
+            meshManager.startScanning()
         }
         .onDisappear {
-            camera.stop()
-            if phase != .done { camera.cleanup() }
+            meshManager.autoCapture.isEnabled = false
+            if meshManager.isScanning { _ = meshManager.stopScanning() }
         }
         .sheet(isPresented: $showShareSheet) {
-            if let url = outputURL {
-                PhotogrammetryShareSheet(url: url)
-            }
+            if let url = outputURL { PhotogrammetryShareSheet(url: url) }
         }
     }
 
-    // MARK: Top bar
+    // MARK: - Top bar
 
     var topBar: some View {
         HStack(alignment: .top) {
+            // Dismiss
             Button(action: { dismiss() }) {
                 Image(systemName: "xmark")
-                    .font(.title3)
-                    .foregroundColor(.white)
+                    .font(.title3).foregroundColor(.white)
                     .frame(width: 44, height: 44)
                     .background(Color.black.opacity(0.55))
                     .clipShape(Circle())
             }
 
-            // Cube / depth-focus button
-            Button(action: {
-                if camera.targetDepth != nil {
-                    camera.targetDepth = nil
-                } else {
-                    // Sample from center; fall back to 1.0 m if depth map not yet available
-                    camera.targetDepth = camera.sampleDepth(at: CGPoint(x: 0.5, y: 0.5)) ?? 1.0
-                }
-            }) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: camera.targetDepth != nil ? "cube.fill" : "cube")
-                        .font(.title3)
-                        .foregroundColor(camera.targetDepth != nil ? .yellow : .white)
-                        .frame(width: 44, height: 44)
-                        .background(Color.black.opacity(0.55))
-                        .clipShape(Circle())
-                    if let depth = camera.targetDepth {
-                        Text(String(format: "%.1fm", depth))
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundColor(.black)
-                            .padding(.horizontal, 3)
-                            .padding(.vertical, 1)
-                            .background(Color.yellow)
-                            .clipShape(Capsule())
-                            .offset(x: 4, y: -4)
+            // Scan-volume cube button (same as Walls/Rooms card)
+            if phase == .capturing {
+                Button(action: {
+                    if meshManager.scanVolume != nil {
+                        meshManager.clearScanVolume()
+                    } else {
+                        meshManager.placeScanVolume()
+                    }
+                }) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                            .font(.title3)
+                            .foregroundColor(meshManager.scanVolume != nil ? .yellow : .white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.black.opacity(0.55))
+                            .clipShape(Circle())
+                        if let v = meshManager.scanVolume {
+                            Text("\(Int(v.halfExtent * 200))cm")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 3).padding(.vertical, 1)
+                                .background(Color.yellow).clipShape(Capsule())
+                                .offset(x: 4, y: -4)
+                        }
                     }
                 }
             }
 
             Spacer()
 
+            // Info panel
             VStack(alignment: .trailing, spacing: 6) {
-                // Photo counter
                 HStack(spacing: 6) {
-                    Image(systemName: "camera.fill")
-                        .foregroundColor(.white)
-                    Text("\(capturedURLs.count) photos")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                    Image(systemName: "camera.fill").foregroundColor(.white)
+                    Text("\(capturedCount) photos").fontWeight(.semibold).foregroundColor(.white)
                 }
 
-                // Quality label
-                Text(qualityInfo.label)
-                    .font(.caption)
-                    .foregroundColor(qualityInfo.color)
+                Text(qualityInfo.label).font(.caption).foregroundColor(qualityInfo.color)
 
-                // Progress toward target
                 if effectiveTarget != nil {
                     ProgressView(value: progressToTarget)
                         .progressViewStyle(LinearProgressViewStyle(tint: qualityInfo.color))
                         .frame(width: 120)
                 }
 
-                // Auto mode: analyzing indicator
                 if preset == .auto && analyzer.isAnalyzing {
                     HStack(spacing: 4) {
                         ProgressView().scaleEffect(0.6).tint(.white)
@@ -765,203 +732,150 @@ struct PhotogrammetryView: View {
                     }
                 }
 
-                // Depth mask controls
-                if let depth = camera.targetDepth {
-                    VStack(spacing: 4) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "scope").font(.caption).foregroundColor(.green)
-                            Text(String(format: "%.2fm ±%.2fm", depth, camera.depthBuffer))
-                                .font(.caption).foregroundColor(.green)
-                            Button(action: { camera.targetDepth = nil }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.caption).foregroundColor(.green.opacity(0.7))
-                            }
-                        }
-                        Slider(value: Binding(
-                            get: { Double(camera.depthBuffer) },
-                            set: { camera.depthBuffer = Float($0) }
-                        ), in: 0.05...1.0, step: 0.05)
-                        .tint(.green)
-                        .frame(width: 120)
-                    }
-                } else {
-                    Text("Tap ⬜ or object to set depth mask")
+                if phase == .capturing {
+                    Text(meshManager.scanVolume != nil
+                         ? "Cube active — walk around object"
+                         : "Tap ⬜ to define object space")
                         .font(.caption2).foregroundColor(.white.opacity(0.6))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.55))
-            .cornerRadius(14)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(Color.black.opacity(0.55)).cornerRadius(14)
         }
         .padding()
     }
 
-    // MARK: Bottom panel
+    // MARK: - Volume size slider
+
+    var volumeSlider: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "cube").font(.caption).foregroundColor(.yellow)
+            Slider(
+                value: Binding(
+                    get: { Double(meshManager.scanVolumeHalfExtent) },
+                    set: { meshManager.updateScanVolumeSize(Float($0)) }
+                ),
+                in: 0.1...1.5, step: 0.05
+            )
+            .tint(.yellow).frame(width: 130)
+            Text("\(Int(meshManager.scanVolumeHalfExtent * 200)) cm")
+                .font(.caption2).foregroundColor(.yellow).frame(width: 44, alignment: .leading)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Color.black.opacity(0.6)).cornerRadius(12)
+    }
+
+    // MARK: - Bottom panel
 
     var bottomPanel: some View {
         VStack(spacing: 12) {
             // Preset picker
             Picker("Quality", selection: $preset) {
-                ForEach(PhotogrammetryPreset.allCases) { p in
-                    Text(p.rawValue).tag(p)
-                }
+                ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .background(Color.black.opacity(0.01)) // force dark tint context
-            .colorScheme(.dark)
+            .pickerStyle(.segmented).padding(.horizontal)
+            .background(Color.black.opacity(0.01)).colorScheme(.dark)
 
             // Target hint
             if preset == .auto {
                 if let target = effectiveTarget {
                     Text("AI target: \(target) photos  •  adjusts as you scan")
-                        .font(.caption2)
-                        .foregroundColor(analyzer.shapeClass.color.opacity(0.9))
+                        .font(.caption2).foregroundColor(analyzer.shapeClass.color.opacity(0.9))
                 } else {
                     Text("Auto mode — take 3+ photos to detect shape")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
+                        .font(.caption2).foregroundColor(.white.opacity(0.7))
                 }
             } else if let target = effectiveTarget {
                 Text("Target: \(target) photos  •  min \(preset.minToProcess) to start")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(.caption2).foregroundColor(.white.opacity(0.7))
             } else {
                 Text("Free mode — take as many as you like  •  min \(preset.minToProcess) to start")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(.caption2).foregroundColor(.white.opacity(0.7))
             }
 
             HStack(spacing: 50) {
                 // Thumbnail of last capture
                 Group {
-                    if let thumb = camera.lastThumbnail {
+                    if let thumb = lastThumbnail {
                         Image(uiImage: thumb)
-                            .resizable()
-                            .scaledToFill()
+                            .resizable().scaledToFill()
                             .frame(width: 52, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.4), lineWidth: 1)
-                            )
+                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.4), lineWidth: 1))
                     } else {
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.1))
-                            .frame(width: 52, height: 52)
+                            .fill(Color.white.opacity(0.1)).frame(width: 52, height: 52)
                     }
                 }
 
-                // Shutter button
+                // Shutter button — force-captures current ARFrame
                 Button(action: capturePhoto) {
                     ZStack {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 72, height: 72)
-                        Circle()
-                            .stroke(Color.white.opacity(0.4), lineWidth: 3)
+                        Circle().fill(Color.white).frame(width: 72, height: 72)
+                        Circle().stroke(Color.white.opacity(0.4), lineWidth: 3)
                             .frame(width: 84, height: 84)
                     }
                 }
+                .disabled(phase != .capturing)
 
-                // Done button
+                // Process button
                 Button(action: startProcessing) {
                     VStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 28))
-                        Text("Process")
-                            .font(.caption)
-                            .fontWeight(.semibold)
+                        Image(systemName: "checkmark.circle.fill").font(.system(size: 28))
+                        Text("Process").font(.caption).fontWeight(.semibold)
                     }
-                    .foregroundColor(canProcess ? .green : .gray)
-                    .frame(width: 52)
+                    .foregroundColor(canProcess ? .green : .gray).frame(width: 52)
                 }
                 .disabled(!canProcess)
             }
         }
-        .padding(.bottom, 50)
-        .padding(.top, 12)
-        .background(
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.75)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .padding(.bottom, 50).padding(.top, 12)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.75)],
+                                   startPoint: .top, endPoint: .bottom))
     }
 
-    // MARK: Processing overlay
+    // MARK: - Processing overlay
 
     var processingOverlay: some View {
         ZStack {
             Color.black.opacity(0.85).edgesIgnoringSafeArea(.all)
             VStack(spacing: 24) {
-                Image(systemName: "cube.transparent")
-                    .font(.system(size: 60))
-                    .foregroundColor(.cyan)
-
-                Text("Building 3D model…")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-
+                Image(systemName: "cube.transparent").font(.system(size: 60)).foregroundColor(.cyan)
+                Text("Building 3D model…").font(.title3).fontWeight(.semibold).foregroundColor(.white)
                 VStack(spacing: 8) {
                     ProgressView(value: processingProgress)
-                        .progressViewStyle(LinearProgressViewStyle(tint: .cyan))
-                        .frame(width: 260)
-                    Text("\(Int(processingProgress * 100))%  •  \(capturedURLs.count) photos")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
+                        .progressViewStyle(LinearProgressViewStyle(tint: .cyan)).frame(width: 260)
+                    Text("\(Int(processingProgress * 100))%  •  \(capturedCount) photos")
+                        .font(.caption).foregroundColor(.white.opacity(0.7))
                 }
-
-                Text("Keep the app open")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.4))
+                Text("Keep the app open").font(.caption2).foregroundColor(.white.opacity(0.4))
             }
             .padding(40)
         }
     }
 
-    // MARK: Done overlay
+    // MARK: - Done overlay
 
     var doneOverlay: some View {
         ZStack {
             Color.black.opacity(0.85).edgesIgnoringSafeArea(.all)
             VStack(spacing: 24) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.green)
-
-                Text("3D Model Ready")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 60)).foregroundColor(.green)
+                Text("3D Model Ready").font(.title2).fontWeight(.bold).foregroundColor(.white)
                 Text("USDZ file — open in AR Quick Look,\nBlender, or any 3D viewer")
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.white.opacity(0.7))
-
+                    .font(.caption).multilineTextAlignment(.center).foregroundColor(.white.opacity(0.7))
                 HStack(spacing: 20) {
                     Button(action: { showShareSheet = true }) {
                         Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 14)
-                            .background(Color.blue)
-                            .cornerRadius(14)
+                            .font(.headline).foregroundColor(.white)
+                            .padding(.horizontal, 28).padding(.vertical, 14)
+                            .background(Color.blue).cornerRadius(14)
                     }
-
                     Button(action: { dismiss() }) {
-                        Text("Done")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 14)
-                            .background(Color.gray.opacity(0.4))
-                            .cornerRadius(14)
+                        Text("Done").font(.headline).foregroundColor(.white)
+                            .padding(.horizontal, 28).padding(.vertical, 14)
+                            .background(Color.gray.opacity(0.4)).cornerRadius(14)
                     }
                 }
             }
@@ -969,25 +883,22 @@ struct PhotogrammetryView: View {
         }
     }
 
-    // MARK: Error overlay
+    // MARK: - Error overlay
 
     func errorOverlay(_ message: String) -> some View {
         ZStack {
             Color.black.opacity(0.85).edgesIgnoringSafeArea(.all)
             VStack(spacing: 20) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 50))
-                    .foregroundColor(.red)
-                Text("Processing Failed")
-                    .font(.title3).fontWeight(.bold).foregroundColor(.white)
-                Text(message)
-                    .font(.caption).foregroundColor(.white.opacity(0.7))
+                    .font(.system(size: 50)).foregroundColor(.red)
+                Text("Processing Failed").font(.title3).fontWeight(.bold).foregroundColor(.white)
+                Text(message).font(.caption).foregroundColor(.white.opacity(0.7))
                     .multilineTextAlignment(.center)
                 Button("Try Again") {
                     phase = .capturing
-                    capturedURLs = []
-                    camera.capturedCount = 0
-                    camera.lastThumbnail = nil
+                    lastThumbnail = nil
+                    meshManager.autoCapture.reset()
+                    meshManager.autoCapture.isEnabled = true
                     analyzer.reset()
                 }
                 .foregroundColor(.white)
@@ -998,21 +909,20 @@ struct PhotogrammetryView: View {
         }
     }
 
-    // MARK: Actions
+    // MARK: - Actions
 
+    /// Manual shutter — force-captures the current ARFrame.
     func capturePhoto() {
-        camera.capturePhoto { url in
-            capturedURLs.append(url)
-            // Analyze every 3rd photo in Auto mode (avoid hammering Vision on every shot)
-            if self.preset == .auto && self.capturedURLs.count % 3 == 0 {
-                self.analyzer.analyze(imageURL: url)
-            }
-        }
+        guard let url = meshManager.capturePhotoNow() else { return }
+        if let image = UIImage(contentsOfFile: url.path) { lastThumbnail = image }
+        let count = meshManager.autoCapture.photoCount
+        if preset == .auto && count % 3 == 0 { analyzer.analyze(imageURL: url) }
     }
 
     func startProcessing() {
-        guard canProcess else { return }
-        camera.stop()
+        guard canProcess || preloadedPhotoDir != nil else { return }
+        meshManager.autoCapture.isEnabled = false
+        if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .processing
         processingProgress = 0
 
@@ -1020,39 +930,24 @@ struct PhotogrammetryView: View {
             do {
                 let output = FileManager.default.temporaryDirectory
                     .appendingPathComponent("scan_\(Int(Date().timeIntervalSince1970)).usdz")
-
-                try await runPhotogrammetry(inputDir: camera.tempDir, outputURL: output)
-
-                await MainActor.run {
-                    outputURL = output
-                    phase = .done
-                }
+                try await runPhotogrammetry(inputDir: inputPhotoDir, outputURL: output)
+                await MainActor.run { outputURL = output; phase = .done }
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    phase = .failed
-                }
+                await MainActor.run { errorMessage = error.localizedDescription; phase = .failed }
             }
         }
     }
 
     func runPhotogrammetry(inputDir: URL, outputURL: URL) async throws {
         guard #available(iOS 17.0, *) else {
-            throw NSError(domain: "Photogrammetry",
-                          code: 0,
+            throw NSError(domain: "Photogrammetry", code: 0,
                           userInfo: [NSLocalizedDescriptionKey: "Requires iOS 17 or later"])
         }
-
         var config = PhotogrammetrySession.Configuration()
-        config.sampleOrdering   = .unordered
+        config.sampleOrdering    = .unordered
         config.featureSensitivity = .high
-
         let session = try PhotogrammetrySession(input: inputDir, configuration: config)
-
-        // PhotogrammetrySession.Request.Detail is macOS-only.
-        // On iOS 17 the request omits the detail parameter.
         try session.process(requests: [.modelFile(url: outputURL)])
-
         for try await output in session.outputs {
             switch output {
             case .requestProgress(_, let fraction):

@@ -91,6 +91,44 @@ class AutoPhotoCapture: ObservableObject {
         } catch {}
     }
 
+    /// Force-capture the current frame regardless of movement thresholds.
+    /// Returns the saved URL on success. Use this for the manual shutter button.
+    @discardableResult
+    func captureNow(frame: ARFrame) -> URL? {
+        guard photoCount < Self.maxPhotos else { return nil }
+        let t = frame.camera.transform
+
+        let data: Data?
+        if let volume = scanVolume,
+           let sceneDepth = frame.sceneDepth {
+            let cam = t.columns.3
+            let camPos = SIMD3<Float>(cam.x, cam.y, cam.z)
+            let targetDepth = simd_length(volume.center - camPos)
+            data = DepthMaskProcessor.masked(
+                imageBuffer: frame.capturedImage,
+                depthMap:    sceneDepth.depthMap,
+                targetDepth: targetDepth,
+                buffer:      volume.halfExtent
+            )
+        } else {
+            let ci = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
+            guard let cg = ciContext.createCGImage(ci, from: ci.extent) else { return nil }
+            data = UIImage(cgImage: cg).jpegData(compressionQuality: 0.85)
+        }
+
+        guard let data else { return nil }
+
+        let url = photoDir.appendingPathComponent(String(format: "auto_%04d.jpg", photoCount))
+        do {
+            try data.write(to: url)
+            photoCount += 1
+            lastCaptureTransform = t
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     /// All captured photo URLs, sorted by capture order.
     func photoURLs() -> [URL] {
         guard let contents = try? FileManager.default.contentsOfDirectory(
