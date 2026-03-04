@@ -557,6 +557,8 @@ struct PhotogrammetryView: View {
     @State private var preloadedPhotoDir: URL?  // non-nil when launched from LiDAR scan
     /// Mirrors autoCapture.photoCount — updated via onReceive so SwiftUI sees it
     @State private var captureCount: Int = 0
+    /// Briefly true when a new photo is captured — drives the flash overlay
+    @State private var showFlash: Bool = false
 
     enum Phase { case capturing, processing, done, failed }
 
@@ -641,6 +643,13 @@ struct PhotogrammetryView: View {
                 bottomPanel
             }
 
+            // Photo capture flash — brief white flicker so user knows a photo was taken
+            if showFlash {
+                Color.white.opacity(0.35)
+                    .edgesIgnoringSafeArea(.all)
+                    .allowsHitTesting(false)
+            }
+
             // Processing overlay
             if phase == .processing { processingOverlay }
             // Done overlay
@@ -672,6 +681,11 @@ struct PhotogrammetryView: View {
             if preset == .auto && count % 3 == 0 && count > 0,
                let url = meshManager.autoCapture.photoURLs().last {
                 analyzer.analyze(imageURL: url)
+            }
+            // Flash feedback — briefly white so user sees each capture
+            if count > 0 {
+                showFlash = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { showFlash = false }
             }
         }
         .onDisappear {
