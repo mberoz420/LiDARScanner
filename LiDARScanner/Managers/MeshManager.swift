@@ -20,6 +20,21 @@ func debugLog(_ message: String) {
 // Maximum total vertices to store (prevents memory bloat)
 private let kMaxTotalVertices = 2_000_000  // 2 million vertices max
 
+// MARK: - Scan Volume
+
+/// An axis-aligned cube in ARKit world space that constrains LiDAR mesh capture.
+/// Only geometry inside the cube is stored; everything else (walls, floor, background) is discarded.
+struct ScanVolume {
+    var center: SIMD3<Float>   // world-space centre
+    var halfExtent: Float      // half side-length in metres (cube side = halfExtent × 2)
+
+    func contains(_ p: SIMD3<Float>) -> Bool {
+        abs(p.x - center.x) <= halfExtent &&
+        abs(p.y - center.y) <= halfExtent &&
+        abs(p.z - center.z) <= halfExtent
+    }
+}
+
 @MainActor
 class MeshManager: NSObject, ObservableObject {
     // MARK: - Published State
@@ -286,6 +301,12 @@ class MeshManager: NSObject, ObservableObject {
     /// Auto photo capture — saves camera frames during scanning for later photogrammetry.
     let autoCapture = AutoPhotoCapture()
 
+    /// Active scan volume — filters LiDAR mesh to this cube. nil = capture everything.
+    @Published var scanVolume: ScanVolume? = nil
+    /// Half-extent (metres) used when placing a new volume. Side = halfExtent × 2.
+    @Published var scanVolumeHalfExtent: Float = 0.4    // default: 80 cm cube
+    private var volumeAnchor: AnchorEntity?
+
     // MARK: - Setup
     func setup(arView: ARView) {
         self.arView = arView
@@ -432,6 +453,11 @@ class MeshManager: NSObject, ObservableObject {
         }
 
         config.planeDetection = [.horizontal, .vertical]
+
+        // Enable per-frame LiDAR depth map (used for auto-photo depth masking)
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
 
         // Hybrid mode: enable front TrueDepth face tracking alongside rear LiDAR
         // Face anchors appear in the same world coordinate space as mesh anchors
@@ -1776,11 +1802,16 @@ class MeshManager: NSObject, ObservableObject {
         let rawNormals = geometry.extractAllNormals()
         let rawFaces = geometry.extractAllFaceIndices()
 
-        // Use raw vertices/normals/faces without filtering
-        // Filtering based on estimated room bounds was too aggressive and removed valid data
-        let vertices = rawVertices
-        let normals = rawNormals
-        let faces = rawFaces
+        // Filter to scan volume when active — discards background/room geometry
+        let vertices: [SIMD3<Float>]
+        let normals:  [SIMD3<Float>]
+        let faces:    [[UInt32]]
+        if let volume = scanVolume {
+            (vertices, normals, faces) = filterToVolume(rawVertices, rawNormals, rawFaces,
+                                                        transform: transform, volume: volume)
+        } else {
+            (vertices, normals, faces) = (rawVertices, rawNormals, rawFaces)
+        }
 
         // Sample colors from camera frame (skip for Walls mode - geometry only)
         var colors: [VertexColor] = []
@@ -1816,6 +1847,112 @@ class MeshManager: NSObject, ObservableObject {
             surfaceType: surfaceType,
             faceClassifications: faceClassifications
         )
+    }
+
+    // MARK: - Scan Volume Management
+
+    /// Place a scan volume centered on the surface the camera is pointing at.
+    /// Raycasts from screen center; falls back to 0.8 m ahead if no surface hit.
+    func placeScanVolume() {
+        guard let arView, let frame = currentFrame else { return }
+        let screenCenter = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+        let hits = arView.raycast(from: screenCenter, allowing: .estimatedPlane, alignment: .any)
+
+        let worldCenter: SIMD3<Float>
+        if let hit = hits.first {
+            let c = hit.worldTransform.columns.3
+            worldCenter = SIMD3<Float>(c.x, c.y, c.z)
+        } else {
+            // Place a point 0.8 m ahead along the camera's forward axis
+            let cam = frame.camera.transform
+            let fwd = SIMD3<Float>(-cam.columns.2.x, -cam.columns.2.y, -cam.columns.2.z)
+            let pos = SIMD3<Float>(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+            worldCenter = pos + fwd * 0.8
+        }
+
+        scanVolume = ScanVolume(center: worldCenter, halfExtent: scanVolumeHalfExtent)
+        autoCapture.scanVolume = scanVolume
+        updateVolumeVisualization()
+    }
+
+    func clearScanVolume() {
+        scanVolume = nil
+        autoCapture.scanVolume = nil
+        volumeAnchor?.removeFromParent()
+        volumeAnchor = nil
+    }
+
+    func updateScanVolumeSize(_ halfExtent: Float) {
+        scanVolumeHalfExtent = halfExtent
+        guard var v = scanVolume else { return }
+        v.halfExtent = halfExtent
+        scanVolume = v
+        autoCapture.scanVolume = scanVolume
+        updateVolumeVisualization()
+    }
+
+    /// Rebuild the translucent AR box that marks the active scan volume.
+    private func updateVolumeVisualization() {
+        volumeAnchor?.removeFromParent()
+        volumeAnchor = nil
+        guard let arView, let volume = scanVolume else { return }
+
+        let side = volume.halfExtent * 2
+        let mesh = MeshResource.generateBox(size: side)
+        var material = UnlitMaterial()
+        material.color = .init(tint: UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 0.18))
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+
+        let anchor = AnchorEntity(world: volume.center)
+        anchor.addChild(entity)
+        arView.scene.addAnchor(anchor)
+        volumeAnchor = anchor
+    }
+
+    // MARK: - Scan Volume Vertex Filtering
+
+    /// Keep only mesh faces where every vertex lies inside the scan volume.
+    private func filterToVolume(
+        _ rawVertices: [SIMD3<Float>],
+        _ rawNormals:  [SIMD3<Float>],
+        _ rawFaces:    [[UInt32]],
+        transform: simd_float4x4,
+        volume: ScanVolume
+    ) -> ([SIMD3<Float>], [SIMD3<Float>], [[UInt32]]) {
+
+        // Mark which local-space vertices fall inside the world-space cube
+        var inside = [Bool](repeating: false, count: rawVertices.count)
+        for (i, v) in rawVertices.enumerated() {
+            let w = transform * SIMD4<Float>(v.x, v.y, v.z, 1)
+            inside[i] = volume.contains(SIMD3<Float>(w.x, w.y, w.z))
+        }
+
+        // Rebuild compact vertex/normal arrays for faces fully inside the volume
+        var remap    = [Int: UInt32]()
+        var newVerts = [SIMD3<Float>]()
+        var newNorms = [SIMD3<Float>]()
+        var newFaces = [[UInt32]]()
+        newVerts.reserveCapacity(rawVertices.count / 4)
+        newFaces.reserveCapacity(rawFaces.count / 4)
+
+        for face in rawFaces {
+            guard face.allSatisfy({ inside[Int($0)] }) else { continue }
+            var newFace = [UInt32]()
+            for idx in face {
+                let old = Int(idx)
+                if let n = remap[old] {
+                    newFace.append(n)
+                } else {
+                    let n = UInt32(newVerts.count)
+                    remap[old] = n
+                    newVerts.append(rawVertices[old])
+                    newNorms.append(old < rawNormals.count ? rawNormals[old] : .zero)
+                    newFace.append(n)
+                }
+            }
+            newFaces.append(newFace)
+        }
+        return (newVerts, newNorms, newFaces)
     }
 
     /// Filter mesh to only include faces within room bounds (between floor and ceiling)

@@ -275,6 +275,61 @@ struct DepthMaskProcessor {
         return uiImage.jpegData(compressionQuality: 0.92)
     }
 
+    /// Mask a raw CVPixelBuffer (e.g. ARFrame.capturedImage) using a LiDAR depth map.
+    /// Pixels whose depth is outside [targetDepth ± buffer] are blacked out.
+    /// Returns a JPEG-encoded masked image, or nil on failure.
+    static func masked(
+        imageBuffer: CVPixelBuffer,
+        depthMap: CVPixelBuffer,
+        targetDepth: Float,
+        buffer: Float
+    ) -> Data? {
+        let depthW = CVPixelBufferGetWidth(depthMap)
+        let depthH = CVPixelBufferGetHeight(depthMap)
+        let imgW   = CVPixelBufferGetWidth(imageBuffer)
+        let imgH   = CVPixelBufferGetHeight(imageBuffer)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+        guard let depthBase = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let depthPtr = depthBase.assumingMemoryBound(to: Float32.self)
+
+        let minD = targetDepth - buffer
+        let maxD = targetDepth + buffer
+        var maskBytes = [UInt8](repeating: 0, count: depthW * depthH)
+        for i in 0..<(depthW * depthH) {
+            let d = depthPtr[i]
+            maskBytes[i] = (d.isFinite && d > 0 && d >= minD && d <= maxD) ? 255 : 0
+        }
+
+        let maskCS = CGColorSpaceCreateDeviceGray()
+        guard let provider = CGDataProvider(data: Data(maskBytes) as CFData),
+              let maskCG   = CGImage(width: depthW, height: depthH,
+                                     bitsPerComponent: 8, bitsPerPixel: 8,
+                                     bytesPerRow: depthW, space: maskCS,
+                                     bitmapInfo: CGBitmapInfo(rawValue: 0),
+                                     provider: provider,
+                                     decode: nil, shouldInterpolate: true,
+                                     intent: .defaultIntent) else { return nil }
+
+        // Orient YCbCr image and scale mask to photo size
+        let ciPhoto = CIImage(cvPixelBuffer: imageBuffer).oriented(.right)
+        let ciMask  = CIImage(cgImage: maskCG)
+            .transformed(by: CGAffineTransform(
+                scaleX: CGFloat(imgW) / CGFloat(depthW),
+                y:      CGFloat(imgH) / CGFloat(depthH)))
+
+        guard let blend = CIFilter(name: "CIBlendWithMask") else { return nil }
+        blend.setValue(ciPhoto,         forKey: kCIInputImageKey)
+        blend.setValue(CIImage.black,   forKey: kCIInputBackgroundImageKey)
+        blend.setValue(ciMask,          forKey: kCIInputMaskImageKey)
+        guard let output = blend.outputImage else { return nil }
+
+        let ctx = CIContext(options: [.useSoftwareRenderer: false])
+        guard let maskedCG = ctx.createCGImage(output, from: output.extent) else { return nil }
+        return UIImage(cgImage: maskedCG).jpegData(compressionQuality: 0.85)
+    }
+
     /// Sample depth at a normalised point (0–1, 0–1) from a CVPixelBuffer depth map.
     static func sampleDepth(from depthMap: CVPixelBuffer, at normalised: CGPoint) -> Float? {
         let w = CVPixelBufferGetWidth(depthMap)

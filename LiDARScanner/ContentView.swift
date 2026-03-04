@@ -406,6 +406,35 @@ struct ScanModeView: View {
                         }
                     }
 
+                    // Scan volume button (tap to place/clear the focus cube)
+                    if mode != .test {
+                        Button(action: {
+                            if meshManager.scanVolume != nil {
+                                meshManager.clearScanVolume()
+                            } else {
+                                meshManager.placeScanVolume()
+                            }
+                        }) {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                                    .font(.title3)
+                                    .foregroundColor(meshManager.scanVolume != nil ? .yellow : .white)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                                if let v = meshManager.scanVolume {
+                                    Text("\(Int(v.halfExtent * 200))cm")
+                                        .font(.system(size: 7, weight: .bold))
+                                        .foregroundColor(.black)
+                                        .padding(2)
+                                        .background(Color.yellow)
+                                        .clipShape(Capsule())
+                                        .offset(x: 4, y: -4)
+                                }
+                            }
+                        }
+                    }
+
                     // Camera toggle for Organic mode (TrueDepth / hybrid)
                     if mode == .organic && meshManager.faceTrackingAvailable {
                         Button(action: { meshManager.toggleCamera() }) {
@@ -441,6 +470,33 @@ struct ScanModeView: View {
                     .cornerRadius(20)
                 }
                 .padding()
+
+                // Scan volume size slider (appears below top bar when volume is active)
+                if meshManager.scanVolume != nil {
+                    HStack(spacing: 10) {
+                        Image(systemName: "cube")
+                            .font(.caption)
+                            .foregroundColor(.yellow)
+                        Slider(
+                            value: Binding(
+                                get: { Double(meshManager.scanVolumeHalfExtent) },
+                                set: { meshManager.updateScanVolumeSize(Float($0)) }
+                            ),
+                            in: 0.1...1.5,
+                            step: 0.05
+                        )
+                        .tint(.yellow)
+                        .frame(width: 130)
+                        Text("\(Int(meshManager.scanVolumeHalfExtent * 200)) cm")
+                            .font(.caption2)
+                            .foregroundColor(.yellow)
+                            .frame(width: 44, alignment: .leading)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(12)
+                }
 
                 Spacer()
 
