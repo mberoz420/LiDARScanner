@@ -314,9 +314,14 @@ class MeshManager: NSObject, ObservableObject {
         guard let scan = capturedScan, !scan.meshes.isEmpty else { return nil }
         var points: [[Float]] = []
         var labels: [Int] = []
+        var allFaces: [[UInt32]] = []
+
         for mesh in scan.meshes {
             let t = mesh.transform
+            let vertexOffset = UInt32(points.count)
             let count = min(mesh.vertices.count, mesh.normals.count)
+            let uCount = UInt32(count)
+
             for i in 0..<count {
                 let v = mesh.vertices[i]
                 let n = mesh.normals[i]
@@ -325,13 +330,25 @@ class MeshManager: NSObject, ObservableObject {
                 points.append([vw.x, vw.y, vw.z, nw.x, nw.y, nw.z])
                 labels.append(-1)
             }
+            // Collect face indices with vertex offset, skip any out-of-range
+            for face in mesh.faces {
+                guard face.count == 3,
+                      face[0] < uCount, face[1] < uCount, face[2] < uCount else { continue }
+                allFaces.append([face[0] + vertexOffset,
+                                 face[1] + vertexOffset,
+                                 face[2] + vertexOffset])
+            }
         }
         guard !points.isEmpty else { return nil }
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "points": points, "labels": labels,
             "num_points": points.count, "num_classes": 4,
             "class_names": ["floor", "ceiling", "wall", "object"]
         ]
+        if !allFaces.isEmpty {
+            data["faces"]     = allFaces
+            data["num_faces"] = allFaces.count
+        }
         return try? JSONSerialization.data(withJSONObject: data)
     }
 

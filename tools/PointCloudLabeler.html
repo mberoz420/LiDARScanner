@@ -635,6 +635,7 @@
             <h2>Export</h2>
             <button class="btn btn-file" onclick="exportLabeled()">Export Labeled JSON</button>
             <button class="btn btn-action" onclick="exportForTraining()">Export for ML Training</button>
+            <button class="btn btn-action" style="background:#27ae60;border-color:#2ecc71" onclick="exportGLB()">&#x1F4E6; Export Colored Mesh (.glb)</button>
         </div>
     </div>
 
@@ -655,6 +656,7 @@
         let sceneSize = 10;
         let grid;
         let currentViewMode = 'perspective';  // 'perspective' | 'ortho'
+        let meshFaces = null;               // [[i0,i1,i2], ...] from pointcloud.json
 
         // Custom labels (start from index 10 to avoid conflicts)
         let customLabels = [];
@@ -1215,6 +1217,7 @@
             labels = [];
             normals = [];
             rgbColors = [];
+            meshFaces = data.faces || null;
             deletedIndices.clear();
             selectedIndices.clear();
 
@@ -1809,6 +1812,122 @@
             a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
+        }
+
+        // ── GLB (binary GLTF) export ──────────────────────────────────────────
+        // Exports a triangle mesh with per-vertex RGB colors (if faces available),
+        // or a colored point cloud when faces are not present (old scans).
+        function exportGLB() {
+            if (points.length === 0) { alert('No point cloud loaded'); return; }
+
+            const hasFaces = !!(meshFaces && meshFaces.length > 0 &&
+                                rgbColors.some(c => c !== null));
+            const nV = points.length;
+
+            // Build position (Float32) and color (Uint8 RGBA) buffers
+            const posArr = new Float32Array(nV * 3);
+            const colArr = new Uint8Array(nV * 4);
+            let xMin=Infinity,xMax=-Infinity,yMin=Infinity,yMax=-Infinity,
+                zMin=Infinity,zMax=-Infinity;
+
+            for (let i = 0; i < nV; i++) {
+                const p = points[i];
+                posArr[i*3]   = p.x;
+                posArr[i*3+1] = p.y;
+                posArr[i*3+2] = p.z;
+                if (p.x<xMin)xMin=p.x; if (p.x>xMax)xMax=p.x;
+                if (p.y<yMin)yMin=p.y; if (p.y>yMax)yMax=p.y;
+                if (p.z<zMin)zMin=p.z; if (p.z>zMax)zMax=p.z;
+                const c = rgbColors[i] || {r:.5,g:.5,b:.5};
+                colArr[i*4]   = Math.round(c.r * 255);
+                colArr[i*4+1] = Math.round(c.g * 255);
+                colArr[i*4+2] = Math.round(c.b * 255);
+                colArr[i*4+3] = 255;
+            }
+
+            // Build index buffer (triangle mesh)
+            let idxArr = null;
+            if (hasFaces) {
+                idxArr = new Uint32Array(meshFaces.length * 3);
+                for (let f = 0; f < meshFaces.length; f++) {
+                    idxArr[f*3]   = meshFaces[f][0];
+                    idxArr[f*3+1] = meshFaces[f][1];
+                    idxArr[f*3+2] = meshFaces[f][2];
+                }
+            }
+
+            // Binary layout: [positions | colors | indices?]
+            const posBytes = posArr.byteLength;  // nV * 12
+            const colBytes = colArr.byteLength;  // nV * 4
+            const idxBytes = idxArr ? idxArr.byteLength : 0;
+            const binRaw   = posBytes + colBytes + idxBytes;
+            const binPad   = Math.ceil(binRaw / 4) * 4;
+
+            const bufferViews = [
+                { buffer:0, byteOffset:0,        byteLength:posBytes, target:34962 },
+                { buffer:0, byteOffset:posBytes, byteLength:colBytes, target:34962 }
+            ];
+            const accessors = [
+                { bufferView:0, componentType:5126, count:nV, type:'VEC3',
+                  min:[xMin,yMin,zMin], max:[xMax,yMax,zMax] },
+                { bufferView:1, componentType:5121, normalized:true,
+                  count:nV, type:'VEC4' }
+            ];
+            const primitive = {
+                mode: hasFaces ? 4 : 0,   // 4 = TRIANGLES, 0 = POINTS
+                attributes: { POSITION:0, COLOR_0:1 }
+            };
+            if (hasFaces) {
+                bufferViews.push({ buffer:0, byteOffset:posBytes+colBytes,
+                                   byteLength:idxBytes, target:34963 });
+                accessors.push({ bufferView:2, componentType:5125,
+                                 count:idxArr.length, type:'SCALAR' });
+                primitive.indices = 2;
+            }
+
+            const gltf = {
+                asset: { version:'2.0', generator:'LiDAR Scanner' },
+                scene:0, scenes:[{nodes:[0]}], nodes:[{mesh:0}],
+                meshes:[{ name:'LiDAR Scan', primitives:[primitive] }],
+                accessors, bufferViews,
+                buffers:[{ byteLength:binPad }]
+            };
+
+            // Pack into binary GLB container
+            const jsonStr = JSON.stringify(gltf);
+            const jsonPad = jsonStr + ' '.repeat((4 - jsonStr.length % 4) % 4);
+            const jsonEnc = new TextEncoder().encode(jsonPad);
+            const total   = 12 + 8 + jsonEnc.length + 8 + binPad;
+            const glb     = new ArrayBuffer(total);
+            const dv      = new DataView(glb);
+            let off = 0;
+
+            dv.setUint32(off, 0x46546C67, true); off+=4;  // magic "glTF"
+            dv.setUint32(off, 2,          true); off+=4;  // version 2
+            dv.setUint32(off, total,      true); off+=4;  // total length
+
+            dv.setUint32(off, jsonEnc.length, true); off+=4;
+            dv.setUint32(off, 0x4E4F534A,     true); off+=4;  // "JSON"
+            new Uint8Array(glb, off, jsonEnc.length).set(jsonEnc);
+            off += jsonEnc.length;
+
+            dv.setUint32(off, binPad,     true); off+=4;
+            dv.setUint32(off, 0x004E4942, true); off+=4;  // "BIN\0"
+            new Float32Array(glb, off, posArr.length).set(posArr); off += posBytes;
+            new Uint8Array(glb,  off, colArr.length).set(colArr);  off += colBytes;
+            if (idxArr) { new Uint32Array(glb, off, idxArr.length).set(idxArr); }
+
+            const blob = new Blob([glb], {type:'model/gltf-binary'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'scan.glb';
+            a.click();
+            URL.revokeObjectURL(a.href);
+
+            const mode = hasFaces ? 'triangle mesh' : 'point cloud';
+            document.getElementById('selection-info').textContent =
+                `Exported ${mode} GLB — ${nV.toLocaleString()} vertices` +
+                (hasFaces ? `, ${meshFaces.length.toLocaleString()} faces` : '');
         }
 
         // File handling
