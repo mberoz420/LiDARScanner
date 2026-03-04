@@ -2076,35 +2076,145 @@
                 loader.load(
                     `/scans/photos/${sessionId}/${name}`,
                     texture => {
-                        // 4:3 aspect, ~30 cm wide
                         const geo = new THREE.PlaneGeometry(0.32, 0.24);
                         const mat = new THREE.MeshBasicMaterial({
                             map: texture, side: THREE.DoubleSide,
                             transparent: true, opacity: 0.92
                         });
                         const plane = new THREE.Mesh(geo, mat);
-
-                        // Camera position (column 3 of column-major 4×4)
                         const cx = pf[12], cy = pf[13], cz = pf[14];
-                        // Camera forward = −Z (negate column 2)
                         const fx = -pf[8], fy = -pf[9], fz = -pf[10];
                         const fl = Math.sqrt(fx*fx + fy*fy + fz*fz) || 1;
-
-                        // Place plane in front of camera
                         plane.position.set(
                             cx + (fx/fl) * DIST,
                             cy + (fy/fl) * DIST,
                             cz + (fz/fl) * DIST
                         );
-                        // Orient: camera up (column 1), facing back toward camera
                         plane.up.set(pf[4], pf[5], pf[6]);
                         plane.lookAt(cx, cy, cz);
-
                         photoPlaneGroup.add(plane);
                     },
                     undefined,
-                    () => {}   // ignore load errors silently
+                    () => {}
                 );
+            });
+        }
+
+        // ── Point cloud colorization using photo projection ──────────────────────────
+        // Projects each LiDAR point onto each photo using camera intrinsics + extrinsics,
+        // samples the pixel colour, and assigns the best colour to rgbColors[].
+        //
+        // ARKit conventions:
+        //   Pose matrix (column-major, 16 floats): col0=right, col1=up, col2=backward, col3=position
+        //   Camera looks along −Z → visible points have Zc < 0
+        //   Intrinsics [fx, fy, cx, cy] are for the LANDSCAPE image (imgW × imgH)
+        //   JPEG is saved rotated 90° CCW to portrait → portrait size is imgH × imgW
+        //   Landscape→portrait transform: x_p = y_l,  y_p = imgW − 1 − x_l
+        async function colorizePointCloudWithPhotos(sessionId, poses, intrinsics, imgW, imgH) {
+            if (!poses.length || !intrinsics.length || !points.length) return;
+
+            const SCALE = 0.3;                          // downsample factor for canvas
+            const portW = imgH;                         // portrait width  = landscape height
+            const portH = imgW;                         // portrait height = landscape width
+            const canvW = Math.round(portW * SCALE);
+            const canvH = Math.round(portH * SCALE);
+
+            document.getElementById('selection-info').textContent =
+                `Loading ${poses.length} photos for colorization…`;
+
+            // Load every photo into a downsampled ImageData
+            const photoData = [];
+            for (let i = 0; i < poses.length; i++) {
+                const name = 'auto_' + String(i).padStart(4, '0') + '.jpg';
+                photoData.push(await _loadPhotoPixels(`/scans/photos/${sessionId}/${name}`, canvW, canvH));
+            }
+
+            document.getElementById('selection-info').textContent =
+                `Colorizing ${points.length.toLocaleString()} LiDAR points…`;
+
+            // Process in batches of 5 000 to keep the browser responsive
+            const BATCH = 5000;
+            for (let start = 0; start < points.length; start += BATCH) {
+                const end = Math.min(start + BATCH, points.length);
+
+                for (let pi = start; pi < end; pi++) {
+                    const wx = points[pi].x, wy = points[pi].y, wz = points[pi].z;
+                    let bestColor = null, bestScore = -Infinity;
+
+                    for (let ci = 0; ci < poses.length; ci++) {
+                        if (!photoData[ci]) continue;
+                        const m    = poses[ci];
+                        const intr = intrinsics[ci];          // [fx, fy, cx, cy]
+                        if (!intr || intr.length < 4) continue;
+
+                        // ── World → camera space ──────────────────────────────────
+                        const dx = wx - m[12], dy = wy - m[13], dz = wz - m[14];
+                        const Xc = dx*m[0] + dy*m[1]  + dz*m[2];   // right
+                        const Yc = dx*m[4] + dy*m[5]  + dz*m[6];   // up
+                        const Zc = dx*m[8] + dy*m[9]  + dz*m[10];  // backward
+
+                        if (Zc >= 0) continue;          // behind camera
+                        const depth = -Zc;              // positive depth
+
+                        // ── Project to landscape pixels ───────────────────────────
+                        const fx = intr[0], fy = intr[1], cx = intr[2], cy = intr[3];
+                        const x_l =  fx * Xc / depth + cx;   // landscape x (rightward)
+                        const y_l = -fy * Yc / depth + cy;   // landscape y (downward; Yc is up)
+
+                        if (x_l < 0 || x_l >= imgW || y_l < 0 || y_l >= imgH) continue;
+
+                        // ── Landscape → portrait (90° CCW rotation) ───────────────
+                        // portrait width = imgH,  portrait height = imgW
+                        const x_p = y_l;              // landscape y → portrait x
+                        const y_p = imgW - 1 - x_l;  // flipped landscape x → portrait y
+
+                        // ── Scale to downsampled canvas ───────────────────────────
+                        const px = Math.round(x_p * SCALE);
+                        const py = Math.round(y_p * SCALE);
+                        if (px < 0 || px >= canvW || py < 0 || py >= canvH) continue;
+
+                        // Prefer pixels near the image centre and shallower depth
+                        const marginX = Math.min(x_p, portW - 1 - x_p) / portW;
+                        const marginY = Math.min(y_p, portH - 1 - y_p) / portH;
+                        const score   = (marginX + marginY) - depth * 0.1;
+
+                        if (score > bestScore) {
+                            const idx = (py * canvW + px) * 4;
+                            const d = photoData[ci].data;
+                            bestColor = { r: d[idx]/255, g: d[idx+1]/255, b: d[idx+2]/255 };
+                            bestScore = score;
+                        }
+                    }
+                    rgbColors[pi] = bestColor;
+                }
+
+                // Yield so the browser can breathe
+                await new Promise(r => setTimeout(r, 0));
+            }
+
+            // Switch to photo-RGB colour mode
+            colorMode = 'rgb';
+            document.getElementById('color-mode').value = 'rgb';
+            rebuildPointCloud();
+            document.getElementById('selection-info').textContent =
+                `Point cloud colorized from ${poses.length} photos — ${points.length.toLocaleString()} points`;
+        }
+
+        // Loads a JPEG from `url` and returns an ImageData at the given canvas size.
+        function _loadPhotoPixels(url, w, h) {
+            return new Promise(resolve => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = w; canvas.height = h;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, w, h);
+                    try { resolve(ctx.getImageData(0, 0, w, h)); }
+                    catch (e) { resolve(null); }
+                };
+                img.onerror = () => resolve(null);
+                img.src = url;
             });
         }
 
@@ -2127,30 +2237,32 @@
                 `Loading photogrammetry session: ${sessionId}…`;
 
             try {
-                // 1. Load session metadata
-                const sRes     = await fetch(`/scans/photos/${sessionId}/session.json`);
+                // 1. Session metadata
+                const sRes = await fetch(`/scans/photos/${sessionId}/session.json`);
                 if (!sRes.ok) throw new Error(`session.json HTTP ${sRes.status}`);
-                const session  = await sRes.json();
+                const session    = await sRes.json();
                 const photoCount = session.photo_count || 0;
-                const poseCount  = session.pose_count  || 0;
 
-                showPhotogrammetryPanel(sessionId, photoCount, poseCount);
+                showPhotogrammetryPanel(sessionId, photoCount, session.pose_count || 0);
                 buildFilmstrip(sessionId, photoCount);
 
-                // 2. Load camera transforms + photo planes (optional)
-                let poses = [];
+                // 2. Camera transforms (poses + intrinsics)
+                let poses = [], intrinsics = [], imgSize = [0, 0];
                 try {
                     const tRes = await fetch(`/scans/photos/${sessionId}/transforms.json`);
                     if (tRes.ok) {
-                        const tData = await tRes.json();
-                        poses = tData.camera_poses || [];
+                        const tData  = await tRes.json();
+                        poses        = tData.camera_poses || [];
+                        intrinsics   = tData.intrinsics   || [];
+                        imgSize      = tData.image_size   || [0, 0];
                         buildCameraPath(poses);
-                        buildPhotoPlanes(sessionId, poses);
+                        // Show photo planes only when we have no intrinsics for colorization
+                        if (!intrinsics.length) buildPhotoPlanes(sessionId, poses);
                         document.getElementById('photo-pose-stat').textContent = poses.length;
                     }
                 } catch (_) { /* transforms optional */ }
 
-                // 3. Load LiDAR point cloud if captured in same session
+                // 3. LiDAR point cloud
                 try {
                     const pcRes = await fetch(`/scans/photos/${sessionId}/pointcloud.json`);
                     if (pcRes.ok) {
@@ -2158,6 +2270,12 @@
                         loadJSON(pcData);
                         document.getElementById('selection-info').textContent =
                             `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
+
+                        // Colorize if we have intrinsics
+                        if (intrinsics.length && imgSize[0] > 0) {
+                            await colorizePointCloudWithPhotos(
+                                sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
+                        }
                         return;
                     }
                 } catch (_) { /* point cloud optional */ }
@@ -2196,17 +2314,20 @@
                     if (!sRes.ok) throw new Error(`HTTP ${sRes.status}`);
                     const session    = await sRes.json();
                     const photoCount = session.photo_count || 0;
-                    const poseCount  = session.pose_count  || 0;
-                    showPhotogrammetryPanel(scanFile, photoCount, poseCount);
+
+                    showPhotogrammetryPanel(scanFile, photoCount, session.pose_count || 0);
                     buildFilmstrip(scanFile, photoCount);
-                    let poses = [];
+
+                    let poses = [], intrinsics = [], imgSize = [0, 0];
                     try {
                         const tRes = await fetch(`/scans/photos/${scanFile}/transforms.json`);
                         if (tRes.ok) {
-                            const tData = await tRes.json();
-                            poses = tData.camera_poses || [];
+                            const tData  = await tRes.json();
+                            poses        = tData.camera_poses || [];
+                            intrinsics   = tData.intrinsics   || [];
+                            imgSize      = tData.image_size   || [0, 0];
                             buildCameraPath(poses);
-                            buildPhotoPlanes(scanFile, poses);
+                            if (!intrinsics.length) buildPhotoPlanes(scanFile, poses);
                             document.getElementById('photo-pose-stat').textContent = poses.length;
                         }
                     } catch (_) { /* transforms optional */ }
@@ -2218,6 +2339,11 @@
                             loadJSON(pcData);
                             document.getElementById('selection-info').textContent =
                                 `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
+
+                            if (intrinsics.length && imgSize[0] > 0) {
+                                await colorizePointCloudWithPhotos(
+                                    scanFile, poses, intrinsics, imgSize[0], imgSize[1]);
+                            }
                             return;
                         }
                     } catch (_) { /* point cloud optional */ }

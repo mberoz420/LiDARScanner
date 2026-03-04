@@ -76,6 +76,19 @@ if ($savedCount === 0) { respond(500, 'No photos could be saved'); }
 // ── Save transforms.json ──────────────────────────────────────────────────────
 if (!empty($cameraPoses)) {
     $transforms = ['camera_poses' => $cameraPoses];
+
+    // Per-frame camera intrinsics [fx, fy, cx, cy] (landscape pixels)
+    $intrinsics = $decoded['intrinsics'] ?? [];
+    if (!empty($intrinsics)) {
+        $transforms['intrinsics'] = $intrinsics;
+    }
+
+    // Landscape image resolution [W, H] used for the projection math
+    $imageSize = $decoded['image_size'] ?? [];
+    if (!empty($imageSize)) {
+        $transforms['image_size'] = $imageSize;
+    }
+
     file_put_contents($sessionPath . '/transforms.json',
                       json_encode($transforms, JSON_PRETTY_PRINT));
 }

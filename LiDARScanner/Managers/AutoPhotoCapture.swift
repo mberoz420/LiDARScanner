@@ -32,6 +32,12 @@ class AutoPhotoCapture: ObservableObject {
     /// Index N corresponds to auto_000N.jpg.
     private(set) var cameraPoses: [simd_float4x4] = []
 
+    /// Camera intrinsics (fx, fy, cx, cy in landscape pixels) at each capture.
+    private(set) var cameraIntrinsics: [simd_float3x3] = []
+
+    /// Landscape image resolution (width × height) captured by ARKit.
+    private var capturedImageSize: CGSize = .zero
+
     // ── Stillness detection state ─────────────────────────────────────────────
     private var prevFrameTransform: simd_float4x4?
     private var prevFrameTimestamp: TimeInterval = 0   // ARKit hardware clock (frame.timestamp)
@@ -67,6 +73,8 @@ class AutoPhotoCapture: ObservableObject {
         photoCount = 0
         lastCaptureTransform = nil
         cameraPoses = []
+        cameraIntrinsics = []
+        capturedImageSize = .zero
         prevFrameTransform    = nil
         prevFrameTimestamp    = 0
         smoothedSpeedMs       = 0
@@ -140,6 +148,8 @@ class AutoPhotoCapture: ObservableObject {
             photoCount += 1
             lastCaptureTransform = t
             cameraPoses.append(t)
+            cameraIntrinsics.append(frame.camera.intrinsics)
+            capturedImageSize = frame.camera.imageResolution
             stillSinceTimestamp = nil   // require stopping again for the next capture
         } catch {}
     }
@@ -157,6 +167,8 @@ class AutoPhotoCapture: ObservableObject {
             photoCount += 1
             lastCaptureTransform = t
             cameraPoses.append(t)
+            cameraIntrinsics.append(frame.camera.intrinsics)
+            capturedImageSize = frame.camera.imageResolution
             stillSinceTimestamp = nil
             return url
         } catch {
@@ -166,6 +178,7 @@ class AutoPhotoCapture: ObservableObject {
 
     /// Serializes all camera poses as a JSON object for upload.
     /// Each pose is a 16-element column-major Float array (simd_float4x4 layout).
+    /// Also includes per-frame intrinsics [fx, fy, cx, cy] and the landscape image_size [W, H].
     func posesJSON() -> Data? {
         let matrices = cameraPoses.map { m -> [Float] in
             [m.columns.0.x, m.columns.0.y, m.columns.0.z, m.columns.0.w,
@@ -173,10 +186,23 @@ class AutoPhotoCapture: ObservableObject {
              m.columns.2.x, m.columns.2.y, m.columns.2.z, m.columns.2.w,
              m.columns.3.x, m.columns.3.y, m.columns.3.z, m.columns.3.w]
         }
-        return try? JSONSerialization.data(
-            withJSONObject: ["camera_poses": matrices],
-            options: .prettyPrinted
-        )
+        // Intrinsics: column-major simd_float3x3
+        //   col0=(fx,0,0), col1=(0,fy,0), col2=(cx,cy,1)
+        let intrinsicsArray = cameraIntrinsics.map { k -> [Float] in
+            [k.columns.0.x,   // fx
+             k.columns.1.y,   // fy
+             k.columns.2.x,   // cx (principal point x)
+             k.columns.2.y]   // cy (principal point y)
+        }
+        var payload: [String: Any] = ["camera_poses": matrices]
+        if !intrinsicsArray.isEmpty {
+            payload["intrinsics"] = intrinsicsArray
+        }
+        if capturedImageSize != .zero {
+            payload["image_size"] = [Float(capturedImageSize.width),
+                                     Float(capturedImageSize.height)]
+        }
+        return try? JSONSerialization.data(withJSONObject: payload, options: .prettyPrinted)
     }
 
     /// All captured photo URLs, sorted by capture order.
