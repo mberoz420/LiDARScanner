@@ -1862,7 +1862,7 @@
         });
 
         // Build Status Functions
-        const BUILD_STATUS_URL = 'https://raw.githubusercontent.com/mberoz420/LiDARScanner/master/build_status.json';
+        const BUILD_STATUS_URL = '/build_status.php';
 
         async function refreshBuildStatus() {
             const container = document.getElementById('build-status-container');
@@ -1899,8 +1899,10 @@
 
         function displayBuildStatus(data) {
             const container = document.getElementById('build-status-container');
-            const isSuccess = data.status === 'success';
-            const statusClass = isSuccess ? 'success' : 'failed';
+            const isSuccess  = data.status === 'success';
+            const isBuilding = data.status === 'building';
+            const statusClass = isSuccess ? 'success' : (isBuilding ? 'loading' : 'failed');
+            const statusLabel = isBuilding ? (data.cm_status || 'BUILDING').toUpperCase() : data.status.toUpperCase();
             const timestamp = data.timestamp ? new Date(data.timestamp).toLocaleString() : 'Unknown';
             const commitShort = data.commit ? data.commit.substring(0, 7) : 'Unknown';
 
@@ -1917,11 +1919,11 @@
                 <div class="build-status ${statusClass}">
                     <div class="build-status-header">
                         <span><strong>Build #${data.build_number || '?'}</strong></span>
-                        <span class="build-status-badge ${statusClass}">${data.status.toUpperCase()}</span>
+                        <span class="build-status-badge ${statusClass}">${statusLabel}</span>
                     </div>
                     <div class="build-info-row">
-                        <span>Version:</span>
-                        <span>${data.version || 'Unknown'}</span>
+                        <span>Branch:</span>
+                        <span>${data.branch || 'Unknown'}</span>
                     </div>
                     <div class="build-info-row">
                         <span>Commit:</span>
