@@ -2163,10 +2163,11 @@
 
                         if (x_l < 0 || x_l >= imgW || y_l < 0 || y_l >= imgH) continue;
 
-                        // ── Landscape → portrait (90° CCW rotation) ───────────────
-                        // portrait width = imgH,  portrait height = imgW
-                        const x_p = y_l;              // landscape y → portrait x
-                        const y_p = imgW - 1 - x_l;  // flipped landscape x → portrait y
+                        // ── Landscape → portrait (90° CW, matching .oriented(.right)) ──
+                        // Portrait width = imgH, portrait height = imgW
+                        // CW formula: x_p = (imgH-1) - y_l,  y_p = x_l
+                        const x_p = (imgH - 1) - y_l;  // flipped landscape y → portrait x
+                        const y_p = x_l;                // landscape x → portrait y
 
                         // ── Scale to downsampled canvas ───────────────────────────
                         const px = Math.round(x_p * SCALE);
