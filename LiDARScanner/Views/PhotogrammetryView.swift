@@ -2,173 +2,16 @@ import SwiftUI
 import AVFoundation
 import ARKit
 import RealityKit
-import Vision
 import CoreImage
 import CoreMedia
 
 // MARK: - Geometry Analyzer
 
-/// Analyzes captured photos to estimate geometric complexity of the object.
-/// Uses Vision contour + rectangle detection — no custom ML model needed.
-@MainActor
-class GeometryAnalyzer: ObservableObject {
-
-    enum ShapeClass {
-        case unknown
-        case geometric(confidence: Double)   // box, cylinder, prism — few photos needed
-        case mixed(confidence: Double)       // partially regular
-        case organic(confidence: Double)     // freeform — many photos needed
-
-        var label: String {
-            switch self {
-            case .unknown:               return "Analyzing…"
-            case .geometric(let c):      return "Geometric shape (\(Int(c*100))% confidence)"
-            case .mixed(let c):          return "Mixed shape (\(Int(c*100))% confidence)"
-            case .organic(let c):        return "Organic/complex (\(Int(c*100))% confidence)"
-            }
-        }
-
-        var color: Color {
-            switch self {
-            case .unknown:    return .white
-            case .geometric:  return .cyan
-            case .mixed:      return .yellow
-            case .organic:    return .orange
-            }
-        }
-
-        /// Recommended photo target based on shape class
-        var recommendedTarget: Int {
-            switch self {
-            case .unknown:          return 20
-            case .geometric:        return 8
-            case .mixed:            return 15
-            case .organic:          return 28
-            }
-        }
-    }
-
-    @Published var shapeClass: ShapeClass = .unknown
-    @Published var isAnalyzing = false
-
-    private var analysisScores: [Double] = []
-
-    /// Analyze a newly captured photo. Runs Vision off main thread, publishes result on main.
-    func analyze(imageURL: URL) {
-        Task.detached(priority: .background) { [weak self] in
-            guard let self else { return }
-            guard let image = UIImage(contentsOfFile: imageURL.path),
-                  let cgImage = image.cgImage else { return }
-
-            await MainActor.run { self.isAnalyzing = true }
-
-            let score = await Self.geometricScore(for: cgImage)
-
-            await MainActor.run {
-                self.isAnalyzing = false
-                self.analysisScores.append(score)
-
-                // Use median of last 5 scores for stability
-                let recent = self.analysisScores.suffix(5).sorted()
-                let median = recent[recent.count / 2]
-
-                if self.analysisScores.count < 3 {
-                    self.shapeClass = .unknown
-                } else if median >= 0.65 {
-                    self.shapeClass = .geometric(confidence: median)
-                } else if median >= 0.35 {
-                    self.shapeClass = .mixed(confidence: median)
-                } else {
-                    self.shapeClass = .organic(confidence: 1 - median)
-                }
-            }
-        }
-    }
-
-    func reset() {
-        analysisScores = []
-        shapeClass = .unknown
-    }
-
-    /// Returns a score 0→1 where 1 = very geometric, 0 = very organic.
-    /// Combines rectangle detection density and contour straightness.
-    private static func geometricScore(for cgImage: CGImage) async -> Double {
-        async let rectScore   = rectangleScore(cgImage)
-        async let contourScore = contourStraightnessScore(cgImage)
-        let (r, c) = await (rectScore, contourScore)
-        return (r * 0.4 + c * 0.6)
-    }
-
-    /// Score based on how many strong rectangles Vision detects.
-    private static func rectangleScore(_ cgImage: CGImage) async -> Double {
-        return await withCheckedContinuation { continuation in
-            let request = VNDetectRectanglesRequest { req, _ in
-                let results = req.results as? [VNRectangleObservation] ?? []
-                // Normalize: 3+ strong rectangles = fully geometric
-                let score = min(Double(results.count) / 3.0, 1.0)
-                continuation.resume(returning: score)
-            }
-            request.minimumConfidence   = 0.5
-            request.minimumAspectRatio  = 0.2
-            request.maximumObservations = 10
-
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            try? handler.perform([request])
-        }
-    }
-
-    /// Score based on straightness of detected contours.
-    /// Straight, long contours → geometric. Many short curved ones → organic.
-    private static func contourStraightnessScore(_ cgImage: CGImage) async -> Double {
-        return await withCheckedContinuation { continuation in
-            let request = VNDetectContoursRequest { req, _ in
-                guard let result = req.results?.first as? VNContoursObservation else {
-                    continuation.resume(returning: 0.5)
-                    return
-                }
-
-                var totalPoints   = 0
-                var straightPoints = 0
-
-                for i in 0..<result.contourCount {
-                    guard let contour = try? result.contour(at: i) else { continue }
-                    let pts = contour.normalizedPoints
-                    totalPoints += pts.count
-
-                    // Measure straightness: compare actual path length vs chord length
-                    guard pts.count >= 3 else { continue }
-                    var pathLen: Float = 0
-                    for j in 1..<pts.count {
-                        let dx = pts[j].x - pts[j-1].x
-                        let dy = pts[j].y - pts[j-1].y
-                        pathLen += sqrt(dx*dx + dy*dy)
-                    }
-                    let dx = pts.last!.x - pts.first!.x
-                    let dy = pts.last!.y - pts.first!.y
-                    let chord = sqrt(dx*dx + dy*dy)
-                    if pathLen > 0 {
-                        let straightness = Double(chord / pathLen)   // 1.0 = perfectly straight
-                        straightPoints += Int(Double(pts.count) * straightness)
-                    }
-                }
-
-                let score = totalPoints > 0 ? Double(straightPoints) / Double(totalPoints) : 0.5
-                continuation.resume(returning: score)
-            }
-            request.contrastAdjustment = 1.0
-            request.detectsDarkOnLight  = true
-
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            try? handler.perform([request])
-        }
-    }
-}
-
 // MARK: - Quality Preset
 
 enum PhotogrammetryPreset: String, CaseIterable, Identifiable {
-    case auto     = "Auto"
     case quick    = "Quick"
+    case standard = "Standard"
     case detailed = "Detailed"
     case free     = "Free"
 
@@ -176,17 +19,17 @@ enum PhotogrammetryPreset: String, CaseIterable, Identifiable {
 
     var targetCount: Int? {
         switch self {
-        case .auto:     return nil   // set dynamically by GeometryAnalyzer
-        case .quick:    return 8
-        case .detailed: return 40
+        case .quick:    return 10
+        case .standard: return 25
+        case .detailed: return 50
         case .free:     return nil
         }
     }
 
     var minToProcess: Int {
         switch self {
-        case .auto:     return 5
         case .quick:    return 5
+        case .standard: return 10
         case .detailed: return 20
         case .free:     return 5
         }
@@ -545,9 +388,8 @@ struct CameraPreviewView: UIViewRepresentable {
 struct PhotogrammetryView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var meshManager = MeshManager()
-    @StateObject private var analyzer    = GeometryAnalyzer()
 
-    @State private var preset: PhotogrammetryPreset = .auto
+    @State private var preset: PhotogrammetryPreset = .standard
     @State private var phase: Phase
     @State private var processingProgress: Double = 0
     @State private var outputURL: URL?
@@ -592,22 +434,14 @@ struct PhotogrammetryView: View {
         preloadedPhotoDir ?? meshManager.autoCapture.photoDir
     }
 
-    var effectiveTarget: Int? {
-        if preset == .auto {
-            return capturedCount >= 3 ? analyzer.shapeClass.recommendedTarget : nil
-        }
-        return preset.targetCount
-    }
+    var effectiveTarget: Int? { preset.targetCount }
 
     var qualityInfo: (label: String, color: Color) {
-        if preset == .auto && capturedCount >= 3 {
-            return (analyzer.shapeClass.label, analyzer.shapeClass.color)
-        }
         switch capturedCount {
         case 0..<5:   return ("Need at least 5 photos", .red)
-        case 5..<10:  return ("Basic shape", .orange)
-        case 10..<20: return ("Good quality", .yellow)
-        case 20..<40: return ("Detailed", .green)
+        case 5..<15:  return ("Basic shape", .orange)
+        case 15..<30: return ("Good quality", .yellow)
+        case 30..<50: return ("Detailed", .green)
         default:      return ("Maximum detail", .cyan)
         }
     }
@@ -680,11 +514,6 @@ struct PhotogrammetryView: View {
             if let url = meshManager.autoCapture.photoURLs().last,
                let image = UIImage(contentsOfFile: url.path) {
                 lastThumbnail = image
-            }
-            // Analyze every 3rd photo in Auto mode
-            if preset == .auto && count % 3 == 0 && count > 0,
-               let url = meshManager.autoCapture.photoURLs().last {
-                analyzer.analyze(imageURL: url)
             }
             // Flash feedback — briefly white so user sees each capture
             if count > 0 {
@@ -760,12 +589,6 @@ struct PhotogrammetryView: View {
                         .frame(width: 120)
                 }
 
-                if preset == .auto && analyzer.isAnalyzing {
-                    HStack(spacing: 4) {
-                        ProgressView().scaleEffect(0.6).tint(.white)
-                        Text("Analyzing…").font(.caption2).foregroundColor(.white.opacity(0.7))
-                    }
-                }
 
                 if phase == .capturing {
                     Text(meshManager.scanVolume != nil
@@ -812,15 +635,7 @@ struct PhotogrammetryView: View {
             .background(Color.black.opacity(0.01)).colorScheme(.dark)
 
             // Target hint
-            if preset == .auto {
-                if let target = effectiveTarget {
-                    Text("AI target: \(target) photos  •  adjusts as you scan")
-                        .font(.caption2).foregroundColor(analyzer.shapeClass.color.opacity(0.9))
-                } else {
-                    Text("Auto mode — take 3+ photos to detect shape")
-                        .font(.caption2).foregroundColor(.white.opacity(0.7))
-                }
-            } else if let target = effectiveTarget {
+            if let target = effectiveTarget {
                 Text("Target: \(target) photos  •  min \(preset.minToProcess) to start")
                     .font(.caption2).foregroundColor(.white.opacity(0.7))
             } else {
@@ -990,7 +805,6 @@ struct PhotogrammetryView: View {
                     lastThumbnail = nil
                     meshManager.autoCapture.reset()
                     meshManager.autoCapture.isEnabled = true
-                    analyzer.reset()
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 28).padding(.vertical, 14)
