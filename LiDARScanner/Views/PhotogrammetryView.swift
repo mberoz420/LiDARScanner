@@ -552,10 +552,17 @@ struct PhotogrammetryView: View {
                     .clipShape(Circle())
             }
 
-            // Cube reposition button — only shown in cube mode
-            if phase == .capturing && captureMode == .cube {
+            // Box toggle — shown in cube mode AND photo-only mode
+            if phase == .capturing && (captureMode == .cube || captureMode == .photoOnly) {
                 Button(action: {
-                    if meshManager.scanVolume != nil {
+                    if captureMode == .photoOnly {
+                        // Toggle box on/off in photo-only mode
+                        if meshManager.scanVolume != nil {
+                            meshManager.clearScanVolume()
+                        } else {
+                            meshManager.placeScanVolume()
+                        }
+                    } else if meshManager.scanVolume != nil {
                         meshManager.clearScanVolume()
                         meshManager.placeScanVolume()
                     }
@@ -563,7 +570,7 @@ struct PhotogrammetryView: View {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "cube.fill")
                             .font(.title3)
-                            .foregroundColor(.yellow)
+                            .foregroundColor(captureMode == .photoOnly ? .cyan : .yellow)
                             .frame(width: 44, height: 44)
                             .background(Color.black.opacity(0.55))
                             .clipShape(Circle())

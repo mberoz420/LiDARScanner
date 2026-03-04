@@ -102,7 +102,8 @@ class ScanServerManager: ObservableObject {
             // Also forward intrinsics and image_size so the labeler can use real focal lengths
             if let intrinsics  = posesObj["intrinsics"]   { payload["intrinsics"]   = intrinsics }
             if let imgSize     = posesObj["image_size"]   { payload["image_size"]  = imgSize }
-            if let depthSizes  = posesObj["depth_sizes"]  { payload["depth_sizes"] = depthSizes }
+            if let depthSizes  = posesObj["depth_sizes"]  { payload["depth_sizes"]  = depthSizes }
+            if let scanVol     = posesObj["scan_volume"]  { payload["scan_volume"]  = scanVol }
         }
         if let pcData = pointCloudData,
            let pcObj = try? JSONSerialization.jsonObject(with: pcData) {

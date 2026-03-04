@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiDAR Point Cloud Labeler</title>
+    <title>LiDAR Point Cloud Labeler v1.5</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -422,7 +422,7 @@
             </div>
         </div>
         <div id="sidebar">
-            <h1>Point Cloud Labeler</h1>
+            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v1.5</span></h1>
 
             <div id="dropzone" onclick="document.getElementById('file-input').click()">
                 <p>Drop JSON file here</p>
@@ -2420,7 +2420,7 @@
         // Each depth frame (Float32 binary, landscape orientation) is back-projected
         // into world space using the camera pose + intrinsics, then colored from the
         // corresponding portrait JPEG photo.
-        async function reconstructFromDepths(sessionId, poses, intrinsics, imgW, imgH, depthSizes) {
+        async function reconstructFromDepths(sessionId, poses, intrinsics, imgW, imgH, depthSizes, scanVolume) {
             if (!depthSizes || !depthSizes.length || !poses.length) return;
 
             const W = imgW || 1920, H = imgH || 1440;
@@ -2476,6 +2476,13 @@
                         const Xw = m[0]*Xc + m[4]*Yc + m[8] *Zc + m[12];
                         const Yw = m[1]*Xc + m[5]*Yc + m[9] *Zc + m[13];
                         const Zw = m[2]*Xc + m[6]*Yc + m[10]*Zc + m[14];
+
+                        // Filter by scan volume (box constraint) if set
+                        if (scanVolume) {
+                            const [cx, cy, cz] = scanVolume.center;
+                            const h = scanVolume.half_extent;
+                            if (Math.abs(Xw-cx) > h || Math.abs(Yw-cy) > h || Math.abs(Zw-cz) > h) continue;
+                        }
 
                         // Sample color from portrait photo
                         // Landscape pixel: (u_rgb, v_rgb); Portrait (90°CW): x_p=(H-1)-v_rgb, y_p=u_rgb
@@ -2543,8 +2550,8 @@
                 showPhotogrammetryPanel(sessionId, photoCount, session.pose_count || 0);
                 buildFilmstrip(sessionId, photoCount);
 
-                // 2. Camera transforms (poses + intrinsics + depth_sizes)
-                let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [];
+                // 2. Camera transforms (poses + intrinsics + depth_sizes + scan_volume)
+                let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [], scanVolume = null;
                 try {
                     const tRes = await fetch(`/scans/photos/${sessionId}/transforms.json`);
                     if (tRes.ok) {
@@ -2553,6 +2560,7 @@
                         intrinsics   = tData.intrinsics   || [];
                         imgSize      = tData.image_size   || [0, 0];
                         depthSizes   = tData.depth_sizes  || [];
+                        scanVolume   = tData.scan_volume  || null;
                         buildCameraPath(poses);
                         // Show photo planes only when we have no intrinsics for colorization
                         if (!intrinsics.length) buildPhotoPlanes(sessionId, poses);
@@ -2578,7 +2586,7 @@
                 // 4. No LiDAR mesh — reconstruct from per-frame depth maps (Photo Only mode)
                 if (depthSizes.length) {
                     await reconstructFromDepths(
-                        sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes);
+                        sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
                     return;
                 }
 
@@ -2620,7 +2628,7 @@
                     showPhotogrammetryPanel(scanFile, photoCount, session.pose_count || 0);
                     buildFilmstrip(scanFile, photoCount);
 
-                    let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [];
+                    let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [], scanVolume = null;
                     try {
                         const tRes = await fetch(`/scans/photos/${scanFile}/transforms.json`);
                         if (tRes.ok) {
@@ -2629,6 +2637,7 @@
                             intrinsics   = tData.intrinsics   || [];
                             imgSize      = tData.image_size   || [0, 0];
                             depthSizes   = tData.depth_sizes  || [];
+                            scanVolume   = tData.scan_volume  || null;
                             buildCameraPath(poses);
                             if (!intrinsics.length) buildPhotoPlanes(scanFile, poses);
                             document.getElementById('photo-pose-stat').textContent = poses.length;
@@ -2651,7 +2660,7 @@
                     // No LiDAR mesh — reconstruct from depth maps (Photo Only mode)
                     if (depthSizes.length) {
                         await reconstructFromDepths(
-                            scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes);
+                            scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
                         return;
                     }
 

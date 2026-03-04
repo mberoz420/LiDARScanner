@@ -95,6 +95,12 @@ if (!empty($cameraPoses)) {
         $transforms['depth_sizes'] = $depthSizes;
     }
 
+    // Scan volume (box constraint from Photo Only mode)
+    $scanVolume = $decoded['scan_volume'] ?? null;
+    if (!empty($scanVolume)) {
+        $transforms['scan_volume'] = $scanVolume;
+    }
+
     file_put_contents($sessionPath . '/transforms.json',
                       json_encode($transforms, JSON_PRETTY_PRINT));
 }

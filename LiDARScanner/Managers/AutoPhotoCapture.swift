@@ -219,6 +219,12 @@ class AutoPhotoCapture: ObservableObject {
         if !depthSizes.isEmpty {
             payload["depth_sizes"] = depthSizes
         }
+        if let vol = scanVolume {
+            payload["scan_volume"] = [
+                "center":      [vol.center.x, vol.center.y, vol.center.z],
+                "half_extent": vol.halfExtent
+            ]
+        }
         return try? JSONSerialization.data(withJSONObject: payload, options: .prettyPrinted)
     }
 
