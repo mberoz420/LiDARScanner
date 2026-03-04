@@ -145,7 +145,7 @@ extension PhotogrammetryController: AVCapturePhotoCaptureDelegate {
 // MARK: - Camera Preview (UIViewRepresentable)
 
 /// UIView subclass that keeps the preview layer filling its bounds on every layout pass.
-private class CameraPreviewContainer: UIView {
+class CameraPreviewContainer: UIView {
     var previewLayer: AVCaptureVideoPreviewLayer?
 
     override func layoutSubviews() {
