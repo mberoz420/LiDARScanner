@@ -2770,36 +2770,39 @@
             if (!points.length) return;
 
             // ── Algorithm ─────────────────────────────────────────────────────
-            // The farthest visible surface in any direction IS the room boundary.
-            // From any azimuth, the wall is always the farthest surface horizontally —
-            // visible at whichever height is unoccluded (top, bottom, anywhere).
+            // In any direction there is exactly ONE farthest plane — the wall.
+            // Anything closer than that plane is an object (furniture, cabinets).
             //
-            // 1. Bin all points by azimuth (36 × 10° bins).
-            //    Collect horizontal distance from centroid for ALL points
-            //    at each azimuth, regardless of elevation.
-            //    Skip AI-labeled door/window points — they look through the wall.
+            // 1. Bin by azimuth (36 × 10°). Per bin, take the 95th-percentile
+            //    horizontal distance — the farthest visible surface, robust to
+            //    1–2 stray points beyond the room. Skip door/window points
+            //    (they look through the wall to the outside).
             //
-            // 2. Per-bin wall distance: farthest dense cluster of horizontal
-            //    distances (far-zone = 80% so only the outermost 20% of range
-            //    is searched — cabinet at 1.5 m is ignored, wall at 3 m found).
+            // 2. Smooth wall distances with max over ±9 bins (90°).
+            //    Bins occluded by tall cabinets inherit the true wall distance
+            //    from adjacent visible directions. Walls are flat planes — the
+            //    same wall distance must hold across the full cabinet span.
             //
-            // 3. Smooth wall distances across ±6 azimuth bins (~60°).
-            //    Bins fully occluded by tall cabinets inherit the wall distance
-            //    seen in adjacent directions (walls are flat continuous planes).
+            // 3. Floor = 5th-percentile Y; ceiling = 95th-percentile Y.
             //
-            // 4. Floor = lowest dense Y; ceiling = highest dense Y (from all pts).
-            //
-            // 5. Classify: wall check first (any Y), then floor, then ceiling.
-            //    Wall-first prevents lower wall sections from becoming floor,
-            //    and upper wall sections from becoming ceiling.
+            // 4. Classify — wall check first (tight 15 cm tolerance):
+            //    a. hd ≥ wallDist − 0.15 → WALL
+            //    b. Y ≤ floorY + 0.20    → FLOOR
+            //    c. Y ≥ ceilingY − 0.20  → CEILING
+            //    d. else                 → OBJECT (cabinet, furniture, …)
 
             const ANGULAR_BINS = 36;
-            const DIST_BIN     = 0.15;   // 15 cm horizontal distance bins
-            const Y_BIN        = 0.05;   //  5 cm Y bins
-            const WALL_TOL     = 0.30;   // 30 cm wall-plane tolerance
-            const FLOOR_TOL    = 0.20;   // 20 cm above floor plane
-            const CEIL_TOL     = 0.20;   // 20 cm below ceiling plane
-            const SMOOTH_BINS  = 6;      // propagate wall dist ±6 bins (~60°)
+            const Y_BIN        = 0.05;   // 5 cm Y bins for floor/ceiling
+            const WALL_TOL     = 0.15;   // 15 cm: only true wall-surface points
+            const FLOOR_TOL    = 0.20;
+            const CEIL_TOL     = 0.20;
+            const SMOOTH_BINS  = 9;      // ±9 bins = ±90°, covers large cabinets
+
+            // helper: kth percentile of a numeric array
+            const pct = (arr, k) => {
+                const s = arr.slice().sort((a, b) => a - b);
+                return s[Math.min(Math.floor(s.length * k), s.length - 1)];
+            };
 
             // XZ centroid (azimuth origin)
             let cx = 0, cz = 0;
@@ -2812,7 +2815,7 @@
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
-                if (labels[i] === 7 || labels[i] === 8) continue; // door/window: looks through wall
+                if (labels[i] === 7 || labels[i] === 8) continue; // door/window: skip
                 const p  = points[i];
                 const dx = p.x - cx, dz = p.z - cz;
                 const hd = Math.sqrt(dx * dx + dz * dz);
@@ -2823,21 +2826,20 @@
                 allY.push(p.y);
             }
 
-            // ── Pass 2: wall distance per azimuth — farthest dense cluster ───
-            // 80% far-zone: only the outermost 20% of the distance range is
-            // considered, so furniture at medium distance is always ignored.
-            // The wall — the farthest visible surface — dominates this zone.
+            // ── Pass 2: wall distance per bin = 95th percentile ───────────────
+            // One farthest plane per direction. 95th pct is robust to a few
+            // outlier returns beyond the wall (reflections, windows, etc.).
             const wallDist = projsByBin.map(dists =>
-                dists.length >= 3 ? farthestDensePeak(dists, DIST_BIN, false, 0.80) : null
+                dists.length >= 3 ? pct(dists, 0.95) : null
             );
 
-            // Floor / ceiling from all Y values
-            const floorY   = farthestDensePeak(allY, Y_BIN, true);
-            const ceilingY = farthestDensePeak(allY, Y_BIN, false);
+            // Floor = 5th pct Y (robust lowest),  ceiling = 95th pct Y
+            const floorY   = allY.length ? pct(allY, 0.05) : null;
+            const ceilingY = allY.length ? pct(allY, 0.95) : null;
 
-            // ── Pass 3: smooth wall distances across azimuth ──────────────────
-            // Max-of-window: the largest (= true) wall distance propagates into
-            // bins where the wall was fully hidden behind tall furniture.
+            // ── Pass 3: smooth wall distances ─────────────────────────────────
+            // Max-of-window propagates the true (larger) wall distance from
+            // visible directions into directions fully occluded by cabinets.
             const smoothedWall = wallDist.slice();
             for (let bin = 0; bin < ANGULAR_BINS; bin++) {
                 for (let off = -SMOOTH_BINS; off <= SMOOTH_BINS; off++) {
@@ -2862,7 +2864,7 @@
                 const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
                               % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
 
-                // 1. Wall: horizontal distance near the farthest visible plane
+                // 1. Wall: at or very near the single farthest plane
                 const wdist = smoothedWall[bin];
                 if (wdist !== null && hd >= wdist - WALL_TOL) {
                     labels[i] = 2; nWall++; continue;
@@ -2878,7 +2880,7 @@
                     labels[i] = 1; nCeil++; continue;
                 }
 
-                // 4. Object
+                // 4. Object — closer than the farthest plane in its direction
                 labels[i] = 3; nObj++;
             }
 
