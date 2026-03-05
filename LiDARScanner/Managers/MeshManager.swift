@@ -65,6 +65,12 @@ class MeshManager: NSObject, ObservableObject {
     // User-confirmed corners (high confidence from pause gesture)
     private(set) var userConfirmedCorners: [SIMD3<Float>] = []
 
+    // ── Plane anchor collection ────────────────────────────────────────────
+    // ARKit detects architectural planes (wall, ceiling, floor, window, door)
+    // in real-time. We collect them here so they can be exported with the scan
+    // as authoritative room geometry — far more accurate than post-processing.
+    private var collectedPlaneAnchors: [UUID: ARPlaneAnchor] = [:]
+
     // Movement tracking for pause detection
     private var lastCameraPosition: SIMD3<Float>?
     private var lastCameraUpdateTime: Date = .distantPast
@@ -352,7 +358,58 @@ class MeshManager: NSObject, ObservableObject {
             data["faces"]     = allFaces
             data["num_faces"] = allFaces.count
         }
+        // Include ARKit plane anchors — gives the labeler ceiling-wall junction lines
+        // and window/door positions without needing any heuristic detection.
+        let planes = roomPlanesData()
+        if !planes.isEmpty {
+            data["room_planes"] = planes
+        }
         return try? JSONSerialization.data(withJSONObject: data)
+    }
+
+    /// Export all collected ARPlaneAnchor data as an array of plane descriptors.
+    /// Each plane carries its world-space center, normal, extent and ARKit classification.
+    /// The labeler uses wall planes + ceiling planes to compute the precise ceiling-wall
+    /// junction lines that form the authoritative room perimeter.
+    func roomPlanesData() -> [[String: Any]] {
+        collectedPlaneAnchors.values.map { anchor in
+            let t = anchor.transform
+
+            // World-space center of the detected plane
+            let lc = anchor.center
+            let wc = t * SIMD4<Float>(lc.x, lc.y, lc.z, 1)
+
+            // World-space axes extracted from the 4×4 transform columns
+            // Local Y = plane normal (outward from surface)
+            // Local X, Z = the two in-plane directions
+            let axX = SIMD3<Float>(t.columns.0.x, t.columns.0.y, t.columns.0.z)
+            let axY = SIMD3<Float>(t.columns.1.x, t.columns.1.y, t.columns.1.z)
+            let axZ = SIMD3<Float>(t.columns.2.x, t.columns.2.y, t.columns.2.z)
+
+            // extent.x = first dimension, extent.z = second dimension
+            let ext = anchor.extent
+
+            let typeStr: String
+            switch anchor.classification {
+            case .wall:    typeStr = "wall"
+            case .ceiling: typeStr = "ceiling"
+            case .floor:   typeStr = "floor"
+            case .window:  typeStr = "window"
+            case .door:    typeStr = "door"
+            case .table:   typeStr = "table"
+            case .seat:    typeStr = "seat"
+            default:       typeStr = "unknown"
+            }
+
+            return [
+                "type":    typeStr,
+                "center":  [wc.x,  wc.y,  wc.z],
+                "normal":  [axY.x, axY.y, axY.z],  // local Y = plane normal
+                "axis_x":  [axX.x, axX.y, axX.z],  // first in-plane direction
+                "axis_z":  [axZ.x, axZ.y, axZ.z],  // second in-plane direction
+                "extent":  [ext.x, ext.z]           // [width, depth/height]
+            ] as [String: Any]
+        }
     }
 
     /// Active scan volume — filters LiDAR mesh to this cube. nil = capture everything.
@@ -2716,6 +2773,8 @@ extension MeshManager: ARSessionDelegate {
                     processMeshAnchor(meshAnchor)
                 } else if let faceAnchor = anchor as? ARFaceAnchor {
                     processFaceAnchor(faceAnchor)
+                } else if let planeAnchor = anchor as? ARPlaneAnchor {
+                    collectedPlaneAnchors[planeAnchor.identifier] = planeAnchor
                 }
             }
         }
@@ -2728,6 +2787,9 @@ extension MeshManager: ARSessionDelegate {
                     processMeshAnchor(meshAnchor)
                 } else if let faceAnchor = anchor as? ARFaceAnchor {
                     processFaceAnchor(faceAnchor)
+                } else if let planeAnchor = anchor as? ARPlaneAnchor {
+                    // Always keep the latest version of each plane anchor
+                    collectedPlaneAnchors[planeAnchor.identifier] = planeAnchor
                 }
             }
         }
@@ -2738,6 +2800,7 @@ extension MeshManager: ARSessionDelegate {
             for anchor in anchors {
                 removeMeshVisualization(for: anchor.identifier)
                 capturedScan?.meshes.removeAll { $0.identifier == anchor.identifier }
+                collectedPlaneAnchors.removeValue(forKey: anchor.identifier)
             }
         }
     }

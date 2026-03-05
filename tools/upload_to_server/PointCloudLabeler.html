@@ -2798,7 +2798,92 @@
             return bestBin ?? hi;
         }
 
-        function classifyByFarthestPlanes() {
+        // ── classifyByRoomPlanes ──────────────────────────────────────────────
+        // When the scan JSON includes ARKit plane anchors (room_planes), use
+        // the ceiling-wall junction lines as the authoritative boundary instead
+        // of computing it from the point cloud. Falls back to classifyByFarthestPlanes
+        // if there aren't enough wall planes (< 2) or junction coverage (< 30 bins).
+        function classifyByRoomPlanes(roomPlanes) {
+            if (!roomPlanes || !roomPlanes.length || !points.length) {
+                classifyByFarthestPlanes();
+                return;
+            }
+
+            const wallPlanes    = roomPlanes.filter(p => p.type === 'wall');
+            const ceilingPlanes = roomPlanes.filter(p => p.type === 'ceiling');
+            const floorPlanes   = roomPlanes.filter(p => p.type === 'floor');
+
+            if (wallPlanes.length < 2) {
+                console.log('[RoomPlanes] < 2 wall planes — falling back to farthest-planes');
+                classifyByFarthestPlanes();
+                return;
+            }
+
+            // Centroid from point cloud
+            let cx = 0, cz = 0;
+            points.forEach(p => { cx += p.x; cz += p.z; });
+            cx /= points.length; cz /= points.length;
+
+            // Ceiling / floor Y from plane anchors (or estimate from point cloud)
+            const ceilY = ceilingPlanes.length > 0
+                ? ceilingPlanes.reduce((s, p) => s + p.center[1], 0) / ceilingPlanes.length
+                : Math.max(...points.map(p => p.y));
+            const floorY = floorPlanes.length > 0
+                ? floorPlanes.reduce((s, p) => s + p.center[1], 0) / floorPlanes.length
+                : Math.min(...points.map(p => p.y));
+
+            const ABINS = 360;
+            const junctionBoundary = new Float32Array(ABINS);
+
+            // For each wall plane, sample the ceiling-wall junction line into bins
+            for (const plane of wallPlanes) {
+                const [cpx, cpy, cpz] = plane.center;
+                const [ax, ay, az]    = plane.axis_x;
+                const [zx, zy, zz]    = plane.axis_z;
+                const [extW, extD]    = plane.extent;
+
+                // Determine which in-plane axis is more vertical (height direction)
+                const axIsVert  = Math.abs(ay) > Math.abs(zy);
+                const heightDir = axIsVert ? [ax, ay, az] : [zx, zy, zz];
+                const horizDir  = axIsVert ? [zx, zy, zz] : [ax, ay, az];
+                const halfWidth = axIsVert ? extD / 2 : extW / 2;
+
+                // Skip if the height direction isn't really vertical
+                if (Math.abs(heightDir[1]) < 0.30) continue;
+
+                // Compute junction point: where the wall plane crosses ceiling_Y
+                const t  = (ceilY - cpy) / heightDir[1];
+                const jx = cpx + t * heightDir[0];
+                const jz = cpz + t * heightDir[2];
+
+                // Sample along the horizontal junction line at 5 cm steps
+                const steps = Math.max(4, Math.ceil(halfWidth * 2 / 0.05));
+                for (let s = 0; s <= steps; s++) {
+                    const frac = (s / steps) - 0.5;          // -0.5 → +0.5
+                    const wx   = jx + frac * halfWidth * 2 * horizDir[0];
+                    const wz   = jz + frac * halfWidth * 2 * horizDir[2];
+                    const dx   = wx - cx, dz = wz - cz;
+                    const hd   = Math.sqrt(dx * dx + dz * dz);
+                    const bin  = ((Math.round(Math.atan2(dz, dx) * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
+                    if (hd > junctionBoundary[bin]) junctionBoundary[bin] = hd;
+                }
+            }
+
+            const filledBins = Array.from(junctionBoundary).filter(v => v > 0).length;
+            console.log(`[RoomPlanes] ${wallPlanes.length} wall planes → ${filledBins} boundary bins`);
+
+            if (filledBins < 30) {
+                console.log('[RoomPlanes] Sparse junction, falling back');
+                classifyByFarthestPlanes();
+                return;
+            }
+
+            // Hand off to classifyByFarthestPlanes with the ARKit-derived boundary
+            classifyByFarthestPlanes(junctionBoundary);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        function classifyByFarthestPlanes(arkitBoundary = null) {
             if (!points.length) return;
 
             // ── Algorithm ─────────────────────────────────────────────────────
@@ -2878,17 +2963,25 @@
             }
 
             // ── Boundary source priority ──────────────────────────────────────
-            // 1st choice: ceiling-wall junction band (unobstructed, most accurate)
-            // 2nd choice: upper 30% of room (above appliances)
-            // 3rd choice: all heights (fallback for rooms with low ceilings / sparse scans)
+            // If ARKit plane anchors provided the boundary, use those directly —
+            // they come from the ceiling-wall junction and are architecturally exact.
+            // Otherwise compute from the point cloud (3-tier priority as before).
             const PROJ_BIN = 0.10;
-            const rawBoundary = new Float32Array(ABINS);
-            for (let b = 0; b < ABINS; b++) {
-                const src = hdPerBinJunction[b].length >= 2 ? hdPerBinJunction[b]
-                          : hdPerBinUpper[b].length    >= 2 ? hdPerBinUpper[b]
-                          :                                    hdPerBin[b];
-                if (src.length >= 2) {
-                    rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
+            let rawBoundary;
+            if (arkitBoundary) {
+                // ARKit plane anchor junction — most accurate source
+                rawBoundary = arkitBoundary;
+                console.log('[classify] Using ARKit plane-anchor boundary');
+            } else {
+                // 1st: ceiling-wall junction band | 2nd: upper 30% | 3rd: all heights
+                rawBoundary = new Float32Array(ABINS);
+                for (let b = 0; b < ABINS; b++) {
+                    const src = hdPerBinJunction[b].length >= 2 ? hdPerBinJunction[b]
+                              : hdPerBinUpper[b].length    >= 2 ? hdPerBinUpper[b]
+                              :                                    hdPerBin[b];
+                    if (src.length >= 2) {
+                        rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
+                    }
                 }
             }
 
@@ -3966,7 +4059,12 @@
                 loadJSON(data);
                 document.getElementById('selection-info').textContent =
                     `Loaded: ${scanFile} — ${points.length.toLocaleString()} points`;
-                classifyByFarthestPlanes();
+                // Use ARKit plane anchors for boundary if available (ceiling-wall junction)
+                if (data.room_planes && data.room_planes.length >= 2) {
+                    classifyByRoomPlanes(data.room_planes);
+                } else {
+                    classifyByFarthestPlanes();
+                }
             } catch (e) {
                 document.getElementById('selection-info').textContent =
                     `Failed to auto-load ${scanFile}: ${e.message}`;
