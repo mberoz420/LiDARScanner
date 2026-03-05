@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiDAR Point Cloud Labeler v1.7</title>
+    <title>LiDAR Point Cloud Labeler v1.8</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -422,7 +422,7 @@
             </div>
         </div>
         <div id="sidebar">
-            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v1.7</span></h1>
+            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v1.8</span></h1>
 
             <div id="dropzone" onclick="document.getElementById('file-input').click()">
                 <p>Drop JSON file here</p>
@@ -620,6 +620,18 @@
                 <button class="btn btn-action btn-small" onclick="clearPhotoLayer()" style="margin-top:6px">
                     ✕ Clear Photo Layer
                 </button>
+
+                <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
+                    <div style="font-size:10px;color:#aaa;margin-bottom:5px">Door &amp; Window Detection</div>
+                    <button class="btn btn-action btn-small" id="btn-detect-depth"
+                            onclick="runDepthDetection()" style="margin-bottom:4px;width:100%">
+                        📐 Depth: Detect Openings
+                    </button>
+                    <button class="btn btn-action btn-small" id="btn-detect-ai"
+                            onclick="runAIDetection()" style="width:100%">
+                        🤖 AI: Detect Doors &amp; Windows
+                    </button>
+                </div>
             </div>
 
             <h2>Build Status</h2>
@@ -671,7 +683,9 @@
             '3': 0xe74c3c,   // Object - red
             '4': 0x9b59b6,   // Noise - purple
             '5': 0xe68080,   // Object Top - light red
-            '6': 0xff00ff    // Back Reflection - magenta
+            '6': 0xff00ff,   // Back Reflection - magenta
+            '7': 0xA0522D,   // Door - brown
+            '8': 0x00BCD4    // Window - cyan
         };
 
         // Label names for export
@@ -681,9 +695,11 @@
             '1': 'ceiling',
             '2': 'wall',
             '3': 'object',
+            '4': 'noise',
             '5': 'objecttop',
             '6': 'backreflection',
-            '4': 'noise'
+            '7': 'door',
+            '8': 'window'
         };
 
         const SELECTION_COLOR = 0xffffff;
@@ -2076,6 +2092,25 @@
         let cameraPathGroup = null;   // THREE.Group holding path + cones
         let activePhotoIdx  = -1;
 
+        // Stored session context so detection buttons can use it
+        let _detectionCtx = null;
+
+        function runDepthDetection() {
+            if (!_detectionCtx) { alert('No photogrammetry session loaded'); return; }
+            const {sessionId, poses, intrinsics, imgW, imgH, depthSizes} = _detectionCtx;
+            document.getElementById('btn-detect-depth').disabled = true;
+            detectOpeningsFromDepth(sessionId, poses, intrinsics, imgW, imgH, depthSizes)
+                .finally(() => { document.getElementById('btn-detect-depth').disabled = false; });
+        }
+
+        function runAIDetection() {
+            if (!_detectionCtx) { alert('No photogrammetry session loaded'); return; }
+            const {sessionId, poses, intrinsics, imgW, imgH, depthSizes} = _detectionCtx;
+            document.getElementById('btn-detect-ai').disabled = true;
+            aiDetectDoorsWindows(sessionId, poses, intrinsics, imgW, imgH, depthSizes)
+                .finally(() => { document.getElementById('btn-detect-ai').disabled = false; });
+        }
+
         function showPhotogrammetryPanel(sessionId, photoCount, poseCount) {
             document.getElementById('photo-panel-header').style.display = '';
             document.getElementById('photo-panel').style.display = '';
@@ -2532,6 +2567,206 @@
         }
 
         // ── Auto-load from ?photos=SESSION_ID URL param ───────────────────────
+        // ── Door / Window detection ────────────────────────────────────────────
+
+        // Option A: depth-map hole detection
+        // Finds pixels significantly farther than the room's dominant surface distance
+        // and classifies them as door (7) or window (8) based on world-space Y height.
+        async function detectOpeningsFromDepth(sessionId, poses, intrinsics, imgW, imgH, depthSizes) {
+            if (!depthSizes.length || !poses.length) return;
+
+            // Estimate floor Y from labeled floor points (label 0)
+            let floorY = null;
+            const floorYs = [];
+            for (let i = 0; i < points.length; i++) {
+                if (labels[i] === 0) floorYs.push(points[i].y);
+            }
+            if (floorYs.length > 10) {
+                floorYs.sort((a, b) => a - b);
+                floorY = floorYs[Math.floor(floorYs.length * 0.1)];  // 10th percentile = floor level
+            }
+
+            let doorsAdded = 0, windowsAdded = 0;
+
+            for (let ci = 0; ci < poses.length; ci++) {
+                const [W_d, H_d] = depthSizes[ci] || [256, 192];
+                const intr  = (intrinsics && intrinsics[ci]) || [imgW*0.75, imgW*0.75, imgW/2, imgH/2];
+                const [fx, fy, cx, cy] = intr;
+                const sx = W_d / imgW, sy = H_d / imgH;
+                const fx_d = fx*sx, fy_d = fy*sy, cx_d = cx*sx, cy_d = cy*sy;
+                const m = poses[ci];
+
+                const depthRes = await fetch(`/scans/photos/${sessionId}/auto_${String(ci).padStart(4,'0')}_depth.bin`);
+                if (!depthRes.ok) continue;
+                const depths = new Float32Array(await depthRes.arrayBuffer());
+
+                // Find dominant wall distance via histogram (0.3m–4m range, 40 bins)
+                const BINS = 40, D_MAX = 4.0;
+                const hist = new Int32Array(BINS);
+                for (let k = 0; k < depths.length; k++) {
+                    const d = depths[k];
+                    if (!isFinite(d) || d < 0.3 || d > D_MAX) continue;
+                    hist[Math.min(Math.floor(d / D_MAX * BINS), BINS-1)]++;
+                }
+                let peakBin = 0, peakCount = 0;
+                for (let b = 0; b < BINS; b++) {
+                    if (hist[b] > peakCount) { peakCount = hist[b]; peakBin = b; }
+                }
+                const wallDist = (peakBin + 0.5) / BINS * D_MAX;
+                if (wallDist < 0.3 || wallDist > 3.5) continue;
+
+                const openThresh = wallDist * 1.35;  // 35% farther than dominant surface
+
+                // Sample opening pixels (every 3rd pixel to limit point count)
+                for (let v = 1; v < H_d - 1; v += 3) {
+                    for (let u = 1; u < W_d - 1; u += 3) {
+                        const d = depths[v * W_d + u];
+                        if (isFinite(d) && d < openThresh) continue;  // not an opening
+
+                        // Require at least 2 neighbours to also be openings (noise filter)
+                        let openNeighbours = 0;
+                        for (const [du, dv] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+                            const nd = depths[(v+dv) * W_d + (u+du)];
+                            if (!isFinite(nd) || nd >= openThresh) openNeighbours++;
+                        }
+                        if (openNeighbours < 2) continue;
+
+                        // Back-project using wallDist (opening has no reliable depth)
+                        const Xc =  (u - cx_d) * wallDist / fx_d;
+                        const Yc = -(v - cy_d) * wallDist / fy_d;
+                        const Zc = -wallDist;
+                        const Xw = m[0]*Xc + m[4]*Yc + m[8]*Zc + m[12];
+                        const Yw = m[1]*Xc + m[5]*Yc + m[9]*Zc + m[13];
+                        const Zw = m[2]*Xc + m[6]*Yc + m[10]*Zc + m[14];
+
+                        // Classify by world-space Y height relative to floor
+                        let label;
+                        if (floorY !== null) {
+                            const ht = Yw - floorY;
+                            label = (ht < 0.3 || ht > 2.5) ? -1 :   // skip if out of range
+                                    (ht < 0.5) ? 7 :                  // door: bottom near floor
+                                                 8;                    // window: mid-wall height
+                        } else {
+                            // Fallback: use vertical pixel position in frame
+                            label = (v > H_d * 0.6) ? 7 : 8;
+                        }
+                        if (label < 0) continue;
+
+                        points.push({x: Xw, y: Yw, z: Zw});
+                        normals.push({x: 0, y: 0, z: 0});
+                        labels.push(label);
+                        rgbColors.push(label === 7 ? {r:0.63,g:0.32,b:0.18} : {r:0,g:0.74,b:0.83});
+                        if (label === 7) doorsAdded++; else windowsAdded++;
+                    }
+                }
+                await new Promise(r => setTimeout(r, 0));  // yield to UI
+            }
+
+            if (doorsAdded + windowsAdded > 0) {
+                rebuildPointCloud();
+                const prev = document.getElementById('selection-info').textContent;
+                document.getElementById('selection-info').textContent =
+                    prev + ` | Depth: ${doorsAdded} door px, ${windowsAdded} window px`;
+            }
+        }
+
+        // Option B: AI (Claude) detection via server
+        // Sends each photo to detect_features.php, back-projects bounding boxes using depth maps.
+        async function aiDetectDoorsWindows(sessionId, poses, intrinsics, imgW, imgH, depthSizes) {
+            const statusEl = document.getElementById('selection-info');
+            const photoCount = poses.length;
+            if (!photoCount) { statusEl.textContent = 'No camera poses — cannot run AI detection'; return; }
+
+            statusEl.textContent = `AI detecting doors & windows in ${photoCount} photos…`;
+            let total = 0;
+
+            for (let ci = 0; ci < photoCount; ci++) {
+                statusEl.textContent = `AI detecting… photo ${ci+1}/${photoCount}`;
+
+                let detections = null;
+                try {
+                    const r = await fetch('detect_features.php', {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json', 'X-API-Key': 'ScanWizard2025Secret'},
+                        body: JSON.stringify({session_id: sessionId, photo_index: ci})
+                    });
+                    const d = await r.json();
+                    if (d.success) detections = d;
+                } catch (e) { console.warn(`[AI] photo ${ci} error: ${e.message}`); continue; }
+
+                if (!detections) continue;
+
+                const [W_d, H_d] = depthSizes[ci] || [256, 192];
+                const intr  = (intrinsics && intrinsics[ci]) || [imgW*0.75, imgW*0.75, imgW/2, imgH/2];
+                const [fx, fy, cx, cy] = intr;
+                const sx = W_d / imgW, sy = H_d / imgH;
+                const fx_d = fx*sx, fy_d = fy*sy, cx_d = cx*sx, cy_d = cy*sy;
+                const m = poses[ci];
+
+                let depths = null;
+                if (depthSizes.length) {
+                    try {
+                        const dr = await fetch(`/scans/photos/${sessionId}/auto_${String(ci).padStart(4,'0')}_depth.bin`);
+                        if (dr.ok) depths = new Float32Array(await dr.arrayBuffer());
+                    } catch (_) {}
+                }
+
+                // photos are portrait: portrait width = imgH, portrait height = imgW
+                const portW = imgH, portH = imgW;
+
+                function backprojectBox(boxes, label) {
+                    for (const [x1n, y1n, x2n, y2n] of boxes) {
+                        // Sample a grid of points within the bounding box
+                        const STEPS = 6;
+                        for (let si = 0; si <= STEPS; si++) {
+                            for (let sj = 0; sj <= STEPS; sj++) {
+                                const xn = x1n + (x2n - x1n) * si / STEPS;
+                                const yn = y1n + (y2n - y1n) * sj / STEPS;
+
+                                // Portrait pixel coords
+                                const px = xn * portW;
+                                const py = yn * portH;
+
+                                // Map portrait → landscape → depth map coords
+                                // landscape: u=py, v=portW-1-px  (portrait 90°CW)
+                                const u_l = py;
+                                const v_l = portW - 1 - px;
+                                const u_d = Math.round(u_l * W_d / imgW);
+                                const v_d = Math.round(v_l * H_d / imgH);
+
+                                let d = 2.0;  // default if no depth map
+                                if (depths && u_d >= 0 && u_d < W_d && v_d >= 0 && v_d < H_d) {
+                                    const dv = depths[v_d * W_d + u_d];
+                                    if (isFinite(dv) && dv > 0.1 && dv < 8.0) d = dv;
+                                }
+
+                                const Xc =  (u_d - cx_d) * d / fx_d;
+                                const Yc = -(v_d - cy_d) * d / fy_d;
+                                const Zc = -d;
+                                const Xw = m[0]*Xc + m[4]*Yc + m[8]*Zc + m[12];
+                                const Yw = m[1]*Xc + m[5]*Yc + m[9]*Zc + m[13];
+                                const Zw = m[2]*Xc + m[6]*Yc + m[10]*Zc + m[14];
+
+                                points.push({x: Xw, y: Yw, z: Zw});
+                                normals.push({x: 0, y: 0, z: 0});
+                                labels.push(label);
+                                rgbColors.push(label === 7 ? {r:0.63,g:0.32,b:0.18} : {r:0,g:0.74,b:0.83});
+                                total++;
+                            }
+                        }
+                    }
+                }
+
+                backprojectBox(detections.doors   || [], 7);
+                backprojectBox(detections.windows || [], 8);
+
+                await new Promise(r => setTimeout(r, 0));
+            }
+
+            rebuildPointCloud();
+            statusEl.textContent = `AI detection done — ${total} door/window points added from ${photoCount} photos`;
+        }
+
         // ── Combined-mode helpers: LiDAR spatial grid → depth label transfer ────
         function buildLidarGrid(ptArray, labelArray, cellSize) {
             const grid = new Map();
@@ -2605,6 +2840,8 @@
                         document.getElementById('photo-pose-stat').textContent = poses.length;
                     }
                 } catch (_) { /* transforms optional */ }
+                _detectionCtx = {sessionId, poses, intrinsics,
+                                 imgW: imgSize[0], imgH: imgSize[1], depthSizes};
 
                 // 3. LiDAR point cloud (present in normal scan mode)
                 try {
@@ -2698,6 +2935,8 @@
                             document.getElementById('photo-pose-stat').textContent = poses.length;
                         }
                     } catch (_) { /* transforms optional */ }
+                    _detectionCtx = {sessionId: scanFile, poses, intrinsics,
+                                     imgW: imgSize[0], imgH: imgSize[1], depthSizes};
 
                     try {
                         const pcRes = await fetch(`/scans/photos/${scanFile}/pointcloud.json`);

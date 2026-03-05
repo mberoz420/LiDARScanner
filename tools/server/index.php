@@ -146,7 +146,7 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
             <?php endif; ?>
 
             <div class="scan-actions">
-                <a href="PointCloudLabeler.html?v=1.7&scan=<?= $filename ?>" class="btn-view">
+                <a href="PointCloudLabeler.html?v=1.8&scan=<?= $filename ?>" class="btn-view">
                     Open in Labeler
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
