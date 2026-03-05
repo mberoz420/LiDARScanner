@@ -2622,78 +2622,98 @@
         function classifyByFarthestPlanes() {
             if (!points.length) return;
 
-            const ANGULAR_BINS = 36;          // 10° per sector
-            const DIST_BIN     = 0.15;        // 15 cm horizontal bins
-            const Y_BIN        = 0.05;        // 5 cm vertical bins
-            const WALL_TOL     = 0.30;        // 30 cm: how close to wall plane = "wall"
-            const FLOOR_TOL    = 0.20;        // 20 cm above floor plane
-            const CEIL_TOL     = 0.20;        // 20 cm below ceiling plane
+            // ── Key insight (user-defined) ────────────────────────────────────
+            // From the room centroid, cast 3D rays to every point.
+            // The direction of the ray tells us what surface type it hits:
+            //   Near-horizontal ray  (|elev| ≤ WALL_ELEV)  → wall candidate
+            //   Strongly downward    (elev  < -VERT_ELEV)  → floor candidate
+            //   Strongly upward      (elev  >  VERT_ELEV)  → ceiling candidate
+            // Within each category find the farthest/dominant dense plane.
+            // Only points NEAR those boundary planes are room surfaces; the
+            // rest are interior objects.
 
-            // ── Centroid (XZ only) ────────────────────────────────────────────
-            let cx = 0, cz = 0;
-            points.forEach(p => { cx += p.x; cz += p.z; });
-            cx /= points.length;
-            cz /= points.length;
+            const ANGULAR_BINS = 36;   // 10° azimuth bins for wall sectors
+            const DIST_BIN     = 0.15; // 15 cm  — wall distance histogram
+            const Y_BIN        = 0.05; //  5 cm  — floor/ceiling Y histogram
+            const WALL_TOL     = 0.30; // 30 cm tolerance: near wall plane = wall
+            const FLOOR_TOL    = 0.25; // 25 cm tolerance above floor plane
+            const CEIL_TOL     = 0.25; // 25 cm tolerance below ceiling plane
+            const WALL_ELEV    = 45;   // rays within ±45° of horizontal → wall
+            const VERT_ELEV    = 45;   // rays beyond ±45° from horizontal → floor/ceiling
 
-            // ── Collect Y values and XZ angular projections ───────────────────
-            const yVals       = points.map(p => p.y);
-            const projsByBin  = Array.from({length: ANGULAR_BINS}, () => []);
+            // ── 3D centroid ───────────────────────────────────────────────────
+            let cx = 0, cy = 0, cz = 0;
+            points.forEach(p => { cx += p.x; cy += p.y; cz += p.z; });
+            cx /= points.length; cy /= points.length; cz /= points.length;
 
-            points.forEach(p => {
-                const dx  = p.x - cx;
-                const dz  = p.z - cz;
-                const ang = Math.atan2(dz, dx);  // -π .. +π
-                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
-                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
-                projsByBin[bin].push(Math.sqrt(dx * dx + dz * dz));
-            });
+            // ── Pass 1: bucket points by 3D ray direction ─────────────────────
+            const wallProjsByBin = Array.from({length: ANGULAR_BINS}, () => []);
+            const floorYVals     = [];
+            const ceilYVals      = [];
 
-            // ── Farthest dense Y planes (floor / ceiling) ─────────────────────
-            const floorY   = farthestDensePeak(yVals, Y_BIN, true);   // lowest dense
-            const ceilingY = farthestDensePeak(yVals, Y_BIN, false);  // highest dense
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                const p   = points[i];
+                const dx  = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+                const hd  = Math.sqrt(dx * dx + dz * dz);   // horizontal distance
+                const elevDeg = Math.atan2(dy, hd) * 180 / Math.PI; // +up / -down
 
-            // ── Dominant wall plane per angular bin ───────────────────────────
-            // Use dominantWallPeak (mode beyond clutter), NOT farthestDensePeak.
-            // Reason: doors/windows let depth rays go farther than the wall, so the
-            // absolute-farthest peak in those sectors is the exterior — not the wall.
-            // The wall surface has far more returns and wins the density contest.
-            const wallDist = projsByBin.map(dists =>
+                if (Math.abs(elevDeg) <= WALL_ELEV) {
+                    // Near-horizontal ray → wall bucket (azimuth)
+                    const ang = Math.atan2(dz, dx);
+                    const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                                  % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                    wallProjsByBin[bin].push(hd);
+                } else if (elevDeg < -VERT_ELEV) {
+                    // Downward ray → floor candidate (use Y)
+                    floorYVals.push(p.y);
+                } else {
+                    // Upward ray → ceiling candidate (use Y)
+                    ceilYVals.push(p.y);
+                }
+            }
+
+            // ── Pass 2: find boundary planes ──────────────────────────────────
+            // Walls: dominant (densest) distance per azimuth bin
+            const wallDist = wallProjsByBin.map(dists =>
                 dists.length >= 5 ? dominantWallPeak(dists, DIST_BIN) : null
             );
+            // Floor: farthest dense Y among downward rays (lowest Y = farthest down)
+            const floorY   = floorYVals.length  >= 10 ? farthestDensePeak(floorYVals,  Y_BIN, true)  : null;
+            // Ceiling: farthest dense Y among upward rays (highest Y = farthest up)
+            const ceilingY = ceilYVals.length   >= 10 ? farthestDensePeak(ceilYVals,   Y_BIN, false) : null;
 
-            // ── Classify every point ──────────────────────────────────────────
+            // ── Pass 3: classify ──────────────────────────────────────────────
             let nFloor = 0, nCeil = 0, nWall = 0, nObj = 0;
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
-                const p = points[i];
+                const p   = points[i];
+                const dx  = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+                const hd  = Math.sqrt(dx * dx + dz * dz);
+                const elevDeg = Math.atan2(dy, hd) * 180 / Math.PI;
 
-                // Floor / ceiling by Y
-                if (floorY !== null && p.y <= floorY + FLOOR_TOL) {
-                    labels[i] = 0; nFloor++; continue;
-                }
-                if (ceilingY !== null && p.y >= ceilingY - CEIL_TOL) {
-                    labels[i] = 1; nCeil++; continue;
-                }
+                if (Math.abs(elevDeg) <= WALL_ELEV) {
+                    // Wall direction — check proximity to dominant wall plane
+                    const ang = Math.atan2(dz, dx);
+                    const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                                  % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                    let maxWall = -Infinity;
+                    for (let off = -1; off <= 1; off++) {
+                        const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
+                        if (wallDist[nb] !== null) maxWall = Math.max(maxWall, wallDist[nb]);
+                    }
+                    labels[i] = (isFinite(maxWall) && hd >= maxWall - WALL_TOL) ? 2 : 3;
+                    labels[i] === 2 ? nWall++ : nObj++;
 
-                // Wall: close to the farthest plane in this angular sector
-                const dx  = p.x - cx;
-                const dz  = p.z - cz;
-                const ang = Math.atan2(dz, dx);
-                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
-                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
-                const dist = Math.sqrt(dx * dx + dz * dz);
+                } else if (elevDeg < -VERT_ELEV) {
+                    // Floor direction — check proximity to floor plane
+                    labels[i] = (floorY !== null && p.y <= floorY + FLOOR_TOL) ? 0 : 3;
+                    labels[i] === 0 ? nFloor++ : nObj++;
 
-                // Check ±1 neighbouring sectors for curved / diagonal walls
-                let maxWall = -Infinity;
-                for (let off = -1; off <= 1; off++) {
-                    const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
-                    if (wallDist[nb] !== null) maxWall = Math.max(maxWall, wallDist[nb]);
-                }
-
-                if (isFinite(maxWall) && dist >= maxWall - WALL_TOL) {
-                    labels[i] = 2; nWall++;
                 } else {
-                    labels[i] = 3; nObj++;
+                    // Ceiling direction — check proximity to ceiling plane
+                    labels[i] = (ceilingY !== null && p.y >= ceilingY - CEIL_TOL) ? 1 : 3;
+                    labels[i] === 1 ? nCeil++ : nObj++;
                 }
             }
 
