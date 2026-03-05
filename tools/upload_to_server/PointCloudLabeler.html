@@ -581,6 +581,10 @@
                     <input type="checkbox" id="show-windows" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#00BCD4"></span> Windows
                 </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="show-covings" onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#FF8C42"></span> Covings
+                </label>
             </div>
 
             <h2>Statistics</h2>
@@ -596,6 +600,7 @@
                 <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
                 <div><span><span class="color-dot" style="background:#A0522D"></span>Door:</span><span id="stat-door">0</span></div>
                 <div><span><span class="color-dot" style="background:#00BCD4"></span>Window:</span><span id="stat-window">0</span></div>
+                <div><span><span class="color-dot" style="background:#FF8C42"></span>Coving:</span><span id="stat-coving">0</span></div>
                 <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
             </div>
 
@@ -702,7 +707,8 @@
             '5': 0xe68080,   // Object Top - light red
             '6': 0xff00ff,   // Back Reflection - magenta
             '7': 0xA0522D,   // Door - brown
-            '8': 0x00BCD4    // Window - cyan
+            '8': 0x00BCD4,   // Window - cyan
+            '9': 0xFF8C42    // Coving - orange
         };
 
         // Label names for export
@@ -716,7 +722,8 @@
             '5': 'objecttop',
             '6': 'backreflection',
             '7': 'door',
-            '8': 'window'
+            '8': 'window',
+            '9': 'coving'
         };
 
         const SELECTION_COLOR = 0xffffff;
@@ -970,7 +977,7 @@
         // Visibility filters
         let showFloors = false, showCeilings = false, showWalls = true, showObjects = false;
         let showObjectTops = false, showBackReflections = false;
-        let showDoors = false, showWindows = false;
+        let showDoors = false, showWindows = false, showCovings = false;
 
         function updateVisibility() {
             showFloors = document.getElementById('show-floors').checked;
@@ -981,6 +988,7 @@
             showBackReflections = document.getElementById('show-backreflections').checked;
             showDoors = document.getElementById('show-doors').checked;
             showWindows = document.getElementById('show-windows').checked;
+            showCovings = document.getElementById('show-covings').checked;
             rebuildPointCloud();
         }
 
@@ -997,6 +1005,7 @@
                 if (lowerLabel === 'objecttop') return 'objecttop';
                 if (lowerLabel === 'object') return 'object';
                 if (lowerLabel === 'backreflection') return 'backreflection';
+                if (lowerLabel === 'coving') return 'coving';
                 // Unknown string label - treat as object
                 return 'object';
             }
@@ -1006,6 +1015,7 @@
             if (label === 6) return 'backreflection';
             if (label === 7) return 'door';
             if (label === 8) return 'window';
+            if (label === 9) return 'coving';
             if (label === 0) return 'floor';
             if (label === 1) return 'ceiling';
             if (label === 2) return 'wall';
@@ -1038,6 +1048,7 @@
                 case 'backreflection': return showBackReflections;
                 case 'door': return showDoors;
                 case 'window': return showWindows;
+                case 'coving': return showCovings;
                 default: return true;
             }
         }
@@ -1113,6 +1124,7 @@
                         case 'wall': return new THREE.Color(0x3498db);       // Wall - blue
                         case 'objecttop': return new THREE.Color(0xe68080);  // Object Top - light red
                         case 'backreflection': return new THREE.Color(0xff00ff); // Back Reflection - magenta
+                        case 'coving': return new THREE.Color(0xFF8C42);     // Coving - orange
                         case 'object':
                         default: return new THREE.Color(0xe74c3c);           // Object - red
                     }
@@ -1728,7 +1740,7 @@
         function updateStats() {
             const counts = {
                 floor: 0, ceiling: 0, wall: 0, object: 0,
-                objecttop: 0, backreflection: 0, door: 0, window: 0, unlabeled: 0
+                objecttop: 0, backreflection: 0, door: 0, window: 0, coving: 0, unlabeled: 0
             };
             let activeCount = 0;
 
@@ -1754,7 +1766,8 @@
             document.getElementById('stat-backreflection').textContent = counts.backreflection.toLocaleString();
             document.getElementById('stat-door').textContent = counts.door.toLocaleString();
             document.getElementById('stat-window').textContent = counts.window.toLocaleString();
-            document.getElementById('stat-noise').textContent = '0';  // Noise counted separately if needed
+            document.getElementById('stat-coving').textContent = counts.coving.toLocaleString();
+            document.getElementById('stat-noise').textContent = '0';
             document.getElementById('stat-unlabeled').textContent = counts.unlabeled.toLocaleString();
         }
 
@@ -2789,10 +2802,11 @@
             const ABINS     = 360;    // 1° azimuth resolution
             // Old houses have rough walls (concavities/convexities up to ±10 cm).
             // Keep a generous inward tolerance so those points still get wall label.
-            const WALL_TOL  = 0.15;   // 15 cm inward from boundary plane
-            const Y_BIN     = 0.05;
-            const FLOOR_TOL = 0.20;
-            const CEIL_TOL  = 0.20;
+            const WALL_TOL     = 0.15;   // 15 cm inward from boundary plane
+            const COVING_H     = 0.40;   // coving zone = top 40 cm below ceiling
+            const Y_BIN        = 0.05;
+            const FLOOR_TOL    = 0.20;
+            const CEIL_TOL     = 0.20;
 
             // Centroid
             let cx = 0, cz = 0;
@@ -2870,7 +2884,7 @@
             const ceilingY = farthestDensePeak(allY, Y_BIN, false);
 
             // ── Pass 2: classify ──────────────────────────────────────────────
-            let nFloor = 0, nCeil = 0, nWall = 0, nObj = 0;
+            let nFloor = 0, nCeil = 0, nWall = 0, nCov = 0, nObj = 0;
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
@@ -2881,24 +2895,30 @@
                 const ang = Math.atan2(dz, dx);
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                 const wb  = boundary[bin];
+                const nearWall = wb > 0 && hd >= wb - WALL_TOL;
 
-                // 1. Wall: within WALL_TOL of the boundary in this direction.
-                // One-sided (inward) so rough/concave wall patches still pass.
-                if (wb > 0 && hd >= wb - WALL_TOL) {
+                // 1. Coving: near the wall boundary AND in the top zone below ceiling.
+                // Checked before wall so the coving strip gets its own label.
+                if (nearWall && ceilingY !== null && p.y >= ceilingY - COVING_H) {
+                    labels[i] = 9; nCov++; continue;
+                }
+
+                // 2. Wall: within WALL_TOL of the boundary (one-sided inward).
+                if (nearWall) {
                     labels[i] = 2; nWall++; continue;
                 }
 
-                // 2. Floor
+                // 3. Floor
                 if (floorY !== null && p.y <= floorY + FLOOR_TOL) {
                     labels[i] = 0; nFloor++; continue;
                 }
 
-                // 3. Ceiling
+                // 4. Ceiling
                 if (ceilingY !== null && p.y >= ceilingY - CEIL_TOL) {
                     labels[i] = 1; nCeil++; continue;
                 }
 
-                // 4. Object — inside the boundary
+                // 5. Object — inside the boundary
                 labels[i] = 3; nObj++;
             }
 
@@ -2957,26 +2977,29 @@
                         if (fillHash.has(fk)) continue;
                         fillHash.add(fk);
 
+                        const isCov = y >= ceilingY - COVING_H;
                         points.push({x: wx, y, z: wz});
-                        labels.push(2);
+                        labels.push(isCov ? 9 : 2);
                         normals.push({x: nx, y: 0, z: nz});
-                        rgbColors.push({r: 0.65, g: 0.65, b: 0.70});
+                        rgbColors.push(isCov
+                            ? {r: 1.0, g: 0.55, b: 0.26}   // orange coving fill
+                            : {r: 0.65, g: 0.65, b: 0.70}); // grey wall fill
                         nFill++;
                     }
                 }
                 nWall += nFill;
-                console.log(`[classify] filled ${nFill} synthetic wall points`);
+                console.log(`[classify] filled ${nFill} synthetic wall/coving points`);
             }
 
             console.log(`[classify] floor=${floorY?.toFixed(2)} ceiling=${ceilingY?.toFixed(2)}`);
-            console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} obj:${nObj}`);
+            console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} cov:${nCov} obj:${nObj}`);
 
             rebuildPointCloud();
             updateStats();
             document.getElementById('selection-info').textContent +=
                 ` | floor=${floorY?.toFixed(2)}m ceil=${ceilingY?.toFixed(2)}m` +
                 ` | ${nFloor.toLocaleString()} floor, ${nCeil.toLocaleString()} ceil,` +
-                ` ${nWall.toLocaleString()} wall, ${nObj.toLocaleString()} obj`;
+                ` ${nWall.toLocaleString()} wall, ${nCov.toLocaleString()} cov, ${nObj.toLocaleString()} obj`;
         }
 
         // ── Surface hole filling ──────────────────────────────────────────────
