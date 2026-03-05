@@ -2835,6 +2835,9 @@
             const hdPerBin         = Array.from({length: ABINS}, () => []);  // all heights
             const hdPerBinUpper    = Array.from({length: ABINS}, () => []);  // top 30% (above appliances)
             const hdPerBinJunction = Array.from({length: ABINS}, () => []);  // ceiling-wall junction band
+            // Opening detection: mid band (window height) and low band (door sill zone)
+            const hdPerBinMid      = Array.from({length: ABINS}, () => []);  // 0.8–2.2m above floor
+            const hdPerBinLow      = Array.from({length: ABINS}, () => []);  // 0.0–0.6m above floor
             const allY = [];
 
             // Quick floor/ceiling estimate — one pass over points
@@ -2845,12 +2848,18 @@
                 if (y < qFloor) qFloor = y;
                 if (y > qCeil)  qCeil  = y;
             }
+            const roomH = qCeil - qFloor;
             // Upper zone  = top 30% of room height (above most appliances)
-            const upperCutY = qFloor + 0.70 * (qCeil - qFloor);
-            // Junction band = 20 cm below ceiling. This is where walls meet the ceiling —
-            // the single most reliable zone: no furniture ever reaches it, and it traces
-            // the exact room perimeter unobstructed. Used as primary boundary source.
+            const upperCutY = qFloor + 0.70 * roomH;
+            // Junction band = 20 cm below ceiling — walls meet ceiling here.
+            // Most reliable zone: no furniture, traces exact room perimeter.
             const junctionCutY = qCeil - 0.20;
+            // Opening detection bands (relative to floor):
+            // Mid band: window/transom zone — typically 0.8 m to 2.2 m above floor
+            const midBandLo = qFloor + 0.80;
+            const midBandHi = qFloor + 2.20;
+            // Low band: near floor — if open here AND mid, it's a door (no sill)
+            const lowBandHi = qFloor + 0.40;
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
@@ -2864,6 +2873,8 @@
                 allY.push(p.y);
                 if (p.y >= upperCutY)    hdPerBinUpper[bin].push(hd);
                 if (p.y >= junctionCutY) hdPerBinJunction[bin].push(hd);
+                if (p.y >= midBandLo && p.y <= midBandHi) hdPerBinMid[bin].push(hd);
+                if (p.y <= lowBandHi)                      hdPerBinLow[bin].push(hd);
             }
 
             // ── Boundary source priority ──────────────────────────────────────
@@ -2973,6 +2984,84 @@
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
             const ceilingY = farthestDensePeak(allY, Y_BIN, false);
 
+            // ── Opening detection (windows & doors) ───────────────────────────
+            // Per azimuth bin, compare mid-wall boundary vs ceiling-wall junction
+            // boundary. If mid is substantially farther → the wall has an opening
+            // (window or door) at that direction. Low-band check distinguishes:
+            //   low also open → door (opening reaches the floor)
+            //   low has wall  → window (sill present above floor)
+            //
+            // openingInfo[b] = null | { type: 'window'|'door', headerY, sillY }
+            //
+            // Header/sill heights come from the Y distribution of mid-band points
+            // in the local azimuth neighborhood: the wall scan points bracket the
+            // opening top (header) and bottom (sill).
+            const OPEN_THRESH = 0.35;   // mid boundary > junction + 35 cm = opening
+            const openingInfo = new Array(ABINS).fill(null);
+
+            if (floorY !== null && ceilingY !== null) {
+                // Per-bin mid and low boundaries (farthest dense peak, same method)
+                const midBoundary = new Float32Array(ABINS);
+                const lowBoundary = new Float32Array(ABINS);
+                for (let b = 0; b < ABINS; b++) {
+                    if (hdPerBinMid[b].length >= 2)
+                        midBoundary[b] = farthestDensePeak(hdPerBinMid[b], PROJ_BIN, false, 0.20) ?? 0;
+                    if (hdPerBinLow[b].length >= 2)
+                        lowBoundary[b] = farthestDensePeak(hdPerBinLow[b], PROJ_BIN, false, 0.20) ?? 0;
+                }
+
+                // For each bin: is mid boundary significantly beyond the junction wall?
+                for (let b = 0; b < ABINS; b++) {
+                    const wallDist = filled[b];   // established room boundary
+                    if (wallDist <= 0) continue;
+                    const midDist  = midBoundary[b];
+                    if (midDist <= 0) continue;
+                    if (midDist <= wallDist + OPEN_THRESH) continue;  // no opening
+
+                    // Opening detected at this azimuth
+                    const lowDist = lowBoundary[b];
+                    const lowOpen = lowDist > wallDist + OPEN_THRESH || lowDist === 0;
+                    const type = lowOpen ? 'door' : 'window';
+
+                    // Estimate header and sill heights from the Y span of scan points
+                    // that are NEAR the wall in this azimuth direction.
+                    // Points within 20 cm of wallDist at mid-band heights bracket the opening.
+                    // We look in a ±5° neighborhood for enough data.
+                    const nearY = [];
+                    for (let i = 0; i < points.length; i++) {
+                        if (deletedIndices.has(i)) continue;
+                        const p  = points[i];
+                        if (p.y < midBandLo || p.y > midBandHi) continue;
+                        const dx2 = p.x - cx, dz2 = p.z - cz;
+                        const hd2 = Math.sqrt(dx2*dx2 + dz2*dz2);
+                        const a2  = ((Math.round(Math.atan2(dz2, dx2) * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
+                        const angDiff = Math.min(Math.abs(a2 - b), ABINS - Math.abs(a2 - b));
+                        if (angDiff <= 5 && Math.abs(hd2 - wallDist) < 0.20) nearY.push(p.y);
+                    }
+
+                    let headerY = floorY + 2.10;  // default door/window header
+                    let sillY   = type === 'window' ? floorY + 0.85 : floorY;
+                    if (nearY.length >= 3) {
+                        nearY.sort((a, b) => a - b);
+                        headerY = nearY[nearY.length - 1];          // top of opening
+                        sillY   = type === 'window' ? nearY[0] : floorY;
+                    }
+
+                    openingInfo[b] = { type, headerY, sillY };
+                }
+
+                // Smooth: propagate to ±2° neighbors so the opening spans uniformly
+                const openSmoothed = new Array(ABINS).fill(null);
+                for (let b = 0; b < ABINS; b++) {
+                    if (!openingInfo[b]) continue;
+                    for (let d = -2; d <= 2; d++) {
+                        const nb = (b + d + ABINS) % ABINS;
+                        if (!openSmoothed[nb]) openSmoothed[nb] = openingInfo[b];
+                    }
+                }
+                for (let b = 0; b < ABINS; b++) if (openSmoothed[b]) openingInfo[b] = openSmoothed[b];
+            }
+
             // ── Pass 2: classify ──────────────────────────────────────────────
             let nFloor = 0, nCeil = 0, nWall = 0, nCov = 0, nObj = 0;
 
@@ -3065,6 +3154,14 @@
                 const fillHash = new Set();
                 let nFill = 0;
 
+                // Opening label constants
+                const LBL_WINDOW = 10;  // window opening
+                const LBL_DOOR   = 11;  // door opening
+                // Opening frame color (will show as distinct color in viewer)
+                const winColor  = {r: 0.53, g: 0.81, b: 0.98};  // sky blue = window
+                const doorColor = {r: 0.98, g: 0.74, b: 0.44};  // warm amber = door
+                let nOpen = 0;
+
                 for (let a = 0; a < 360; a += FILL_ANG) {
                     const wb = wallPlane[a];  // wall-plane-enforced boundary for correct 90° corners
                     if (wb <= 0) continue;
@@ -3072,11 +3169,28 @@
                     const wx = cx + wb * Math.cos(θ);
                     const wz = cz + wb * Math.sin(θ);
                     const nx = -Math.cos(θ), nz = -Math.sin(θ);
+                    const opening = openingInfo[a];
 
                     for (let y = floorY; y <= ceilingY + 0.01; y += FILL_Y) {
                         const fk = `${Math.round(wx/CELL_FILL)},${Math.round(y/CELL_FILL)},${Math.round(wz/CELL_FILL)}`;
                         if (fillHash.has(fk)) continue;
                         fillHash.add(fk);
+
+                        // Check if this cell is inside a detected window or door opening
+                        if (opening && y >= opening.sillY - 0.05 && y <= opening.headerY + 0.05) {
+                            // Generate opening border points (visible frame) instead of solid wall
+                            const isFrame = y < opening.sillY + 0.05 || y > opening.headerY - 0.05;
+                            if (isFrame) {
+                                const lbl = opening.type === 'window' ? LBL_WINDOW : LBL_DOOR;
+                                points.push({x: wx, y, z: wz});
+                                labels.push(lbl);
+                                normals.push({x: nx, y: 0, z: nz});
+                                rgbColors.push(opening.type === 'window' ? winColor : doorColor);
+                                nOpen++;
+                            }
+                            // Interior of opening: skip (leave empty = the actual void)
+                            continue;
+                        }
 
                         const isCov = y >= ceilingY - COVING_H;
                         points.push({x: wx, y, z: wz});
@@ -3086,6 +3200,7 @@
                         nFill++;
                     }
                 }
+                console.log(`[classify] shell: ${nFill} wall + ${nOpen} opening frame points`);
                 nWall += nFill;
                 console.log(`[classify] shell: ${nFill} wall points generated`);
             }
