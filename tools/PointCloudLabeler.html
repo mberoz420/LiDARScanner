@@ -1551,29 +1551,34 @@
         // that extend the range with a few far exterior returns.
         function farthestDensePeak(values, binSize, pickLowest, farZonePct = 0.30) {
             if (!values.length) return null;
-            values.sort((a, b) => a - b);
-            const lo = values[0], hi = values[values.length - 1], range = hi - lo;
-            if (range < binSize) return pickLowest ? lo : hi;  // all points at same level
+            const sorted = values.slice().sort((a, b) => a - b);
+            const lo = sorted[0], hi = sorted[sorted.length - 1];
+            if (hi - lo < binSize) return pickLowest ? lo : hi;
 
-            // Build histogram
+            // Percentile-based threshold — robust to outlier stray points.
+            // e.g. farZonePct=0.30 → look at values above the 70th percentile.
+            // Using range % (old approach) breaks when one window-view point
+            // is at 8 m: range becomes 8 m, far zone starts at 5.6 m, and the
+            // wall at 3 m falls outside the search window entirely.
+            const cutIdx = pickLowest
+                ? Math.floor(sorted.length * farZonePct)
+                : Math.floor(sorted.length * (1 - farZonePct));
+            const threshold = sorted[Math.min(cutIdx, sorted.length - 1)];
+
+            // Build histogram and find the densest bin inside the far zone
             const bins = {};
-            values.forEach(v => {
+            sorted.forEach(v => {
                 const key = Math.round(v / binSize) * binSize;
                 bins[key] = (bins[key] ?? 0) + 1;
             });
 
-            // Search in the farthest farZonePct of the range for the densest bin
-            const farZone = range * farZonePct;
-            const threshold = pickLowest ? lo + farZone : hi - farZone;
-
             let bestBin = null, bestCount = 0;
             Object.entries(bins).forEach(([key, cnt]) => {
                 const kv = parseFloat(key);
-                const inFarZone = pickLowest ? kv <= threshold : kv >= threshold;
-                if (inFarZone && cnt > bestCount) { bestCount = cnt; bestBin = kv; }
+                const inZone = pickLowest ? kv <= threshold : kv >= threshold;
+                if (inZone && cnt > bestCount) { bestCount = cnt; bestBin = kv; }
             });
 
-            // Fall back to the absolute extreme if far zone had no points
             return bestBin ?? (pickLowest ? lo : hi);
         }
 
