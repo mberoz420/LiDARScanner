@@ -2787,7 +2787,7 @@
             // Works for any room shape — no assumptions.
 
             const ABINS     = 360;    // 1° azimuth resolution
-            const WALL_TOL  = 0.25;   // 25 cm inside the outermost boundary = wall
+            const WALL_TOL  = 0.15;   // 15 cm — tight now that boundary is filtered
             const Y_BIN     = 0.05;
             const FLOOR_TOL = 0.20;
             const CEIL_TOL  = 0.20;
@@ -2817,17 +2817,33 @@
                 allY.push(p.y);
             }
 
-            // Dense farthest cluster per bin = wall distance.
-            // farZonePct = 0.05 → threshold at 95th percentile of hd values.
-            // Only the farthest 5% of distances are searched for the dense peak.
-            // This ensures furniture (70th–90th pct) is excluded entirely and
-            // only the actual wall surface (very far) registers as the boundary.
+            // Dense farthest cluster per bin = raw wall distance estimate.
             const PROJ_BIN = 0.10;
-            const boundary = new Float32Array(ABINS);
+            const rawBoundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
                 if (hdPerBin[b].length >= 5) {
-                    boundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.05) ?? 0;
+                    rawBoundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.05) ?? 0;
                 }
+            }
+
+            // ── Continuity filter: walls span many degrees; objects don't ────
+            // A true wall segment is consistent (same distance ± tolerance)
+            // across at least MIN_SPAN consecutive azimuth bins.
+            // Gas pipes (~1–2°), coffee makers (~5°), fridges (~10°) are removed.
+            // Actual walls (0.5 m wide at 3 m = 9°, 1 m wide = 19°) are kept.
+            const MIN_SPAN  = 12;       // minimum 12° of consistent boundary
+            const CONT_TOL  = 0.20;     // bins within 20 cm = same wall plane
+
+            const boundary = new Float32Array(ABINS);
+            for (let b = 0; b < ABINS; b++) {
+                const wb = rawBoundary[b];
+                if (wb <= 0) continue;
+                let span = 0;
+                for (let off = -MIN_SPAN; off <= MIN_SPAN; off++) {
+                    const nb = (b + off + ABINS) % ABINS;
+                    if (rawBoundary[nb] > 0 && Math.abs(rawBoundary[nb] - wb) <= CONT_TOL) span++;
+                }
+                if (span >= MIN_SPAN) boundary[b] = wb;
             }
 
             // Floor / ceiling
