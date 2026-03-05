@@ -466,7 +466,9 @@ struct PhotogrammetryView: View {
     /// For photo modes: need at least one photo.
     /// For scan-only (LiDAR) mode: always enabled while scanning.
     var canStopScan: Bool {
-        capturedCount > 0 || (captureMode != .photoOnly && meshManager.isScanning)
+        captureMode == .lidarOnly ||
+        capturedCount > 0 ||
+        (captureMode != .photoOnly && meshManager.isScanning)
     }
 
     // MARK: - Body
