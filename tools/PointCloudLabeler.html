@@ -2883,24 +2883,33 @@
             }
 
             // ── Pass 3: extend walls from floor to ceiling ────────────────────
-            // The wall boundary is a complete plane from floorY to ceilingY.
-            // Add synthetic fill points for any (azimuth, Y) slot that has no
-            // real wall point — this fills gaps where furniture hides the wall.
+            // Add synthetic fill points at every (azimuth, Y) cell that has no
+            // real scan wall point nearby. Two separate hashes:
+            //   realWallHash (20 cm cells) — checks against real scan points only,
+            //     so synthetic fill points don't block adjacent fill slots.
+            //   fillHash (5 cm cells) — deduplicates the fill points themselves.
+            // This gives dense coverage (5 cm Y-steps) in areas the scan missed
+            // (near floor, near ceiling, behind furniture) while not duplicating
+            // where real wall points already exist.
             if (floorY !== null && ceilingY !== null) {
-                const FILL_ANG  = 2;     // every 2° azimuth
-                const FILL_Y    = 0.05;  // 5 cm vertical step
-                const FILL_RAD  = 0.20;  // don't fill if real wall point within 20 cm
+                const FILL_ANG   = 2;     // every 2° azimuth
+                const FILL_Y     = 0.05;  // 5 cm vertical step
+                const CELL_REAL  = 0.20;  // 20 cm — real wall point proximity check
+                const CELL_FILL  = 0.05;  // 5 cm — fill dedup (matches FILL_Y)
 
-                // Spatial hash of existing wall points
-                const CELL = 0.20;
-                const wallHash = new Set();
+                // Hash real wall points only
+                const realWallHash = new Set();
                 for (let i = 0; i < points.length; i++) {
                     if (labels[i] !== 2) continue;
                     const p = points[i];
-                    wallHash.add(`${Math.round(p.x/CELL)},${Math.round(p.y/CELL)},${Math.round(p.z/CELL)}`);
+                    realWallHash.add(
+                        `${Math.round(p.x/CELL_REAL)},${Math.round(p.y/CELL_REAL)},${Math.round(p.z/CELL_REAL)}`
+                    );
                 }
 
+                const fillHash = new Set();
                 let nFill = 0;
+
                 for (let a = 0; a < 360; a += FILL_ANG) {
                     const wb = boundary[a];
                     if (wb <= 0) continue;
@@ -2908,26 +2917,31 @@
                     const wx  = cx + wb * Math.cos(θ);
                     const wz  = cz + wb * Math.sin(θ);
                     const nx  = -Math.cos(θ), nz = -Math.sin(θ);  // inward normal
+                    const rx  = Math.round(wx / CELL_REAL);
+                    const rz  = Math.round(wz / CELL_REAL);
 
                     for (let y = floorY; y <= ceilingY + 0.01; y += FILL_Y) {
-                        const ky = `${Math.round(wx/CELL)},${Math.round(y/CELL)},${Math.round(wz/CELL)}`;
-                        // Check ±1 cell in each axis
-                        let near = false;
+                        // Skip if a real scan wall point is within 20 cm
+                        const ry = Math.round(y / CELL_REAL);
+                        let nearReal = false;
                         outer: for (let da = -1; da <= 1; da++)
                             for (let db = -1; db <= 1; db++)
-                                for (let dc = -1; dc <= 1; dc++) {
-                                    if (wallHash.has(`${Math.round(wx/CELL)+da},${Math.round(y/CELL)+db},${Math.round(wz/CELL)+dc}`)) {
-                                        near = true; break outer;
+                                for (let dc = -1; dc <= 1; dc++)
+                                    if (realWallHash.has(`${rx+da},${ry+db},${rz+dc}`)) {
+                                        nearReal = true; break outer;
                                     }
-                                }
-                        if (!near) {
-                            points.push({x: wx, y, z: wz});
-                            labels.push(2);
-                            normals.push({x: nx, y: 0, z: nz});
-                            rgbColors.push({r: 0.65, g: 0.65, b: 0.70});
-                            wallHash.add(ky);
-                            nFill++;
-                        }
+                        if (nearReal) continue;
+
+                        // Dedup fill cells at 5 cm resolution
+                        const fk = `${Math.round(wx/CELL_FILL)},${Math.round(y/CELL_FILL)},${Math.round(wz/CELL_FILL)}`;
+                        if (fillHash.has(fk)) continue;
+                        fillHash.add(fk);
+
+                        points.push({x: wx, y, z: wz});
+                        labels.push(2);
+                        normals.push({x: nx, y: 0, z: nz});
+                        rgbColors.push({r: 0.65, g: 0.65, b: 0.70});
+                        nFill++;
                     }
                 }
                 nWall += nFill;
