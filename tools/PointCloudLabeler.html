@@ -2770,28 +2770,38 @@
             if (!points.length) return;
 
             // ── Algorithm ─────────────────────────────────────────────────────
-            // 1. Find wall planes: for each azimuth (10° bins), find the dominant
-            //    horizontal distance from centroid using ALL points at that angle.
-            //    (No elevation filter — walls exist at all heights.)
-            // 2. Find floor Y: lowest dense Y peak in all points.
-            //    Find ceiling Y: highest dense Y peak in all points.
-            // 3. Classify — WALL CHECK FIRST:
-            //    a. If horizontal distance ≈ wall plane → WALL  (regardless of Y)
-            //    b. Else if Y near floorY  → FLOOR
-            //    c. Else if Y near ceilY   → CEILING
-            //    d. Else                   → OBJECT
+            // The farthest visible surface in any direction IS the room boundary.
+            // From any azimuth, the wall is always the farthest surface horizontally —
+            // visible at whichever height is unoccluded (top, bottom, anywhere).
             //
-            // Key: wall check before Y check prevents lower wall points from
-            // being mislabeled as floor, and upper wall points as ceiling.
+            // 1. Bin all points by azimuth (36 × 10° bins).
+            //    Collect horizontal distance from centroid for ALL points
+            //    at each azimuth, regardless of elevation.
+            //    Skip AI-labeled door/window points — they look through the wall.
+            //
+            // 2. Per-bin wall distance: farthest dense cluster of horizontal
+            //    distances (far-zone = 80% so only the outermost 20% of range
+            //    is searched — cabinet at 1.5 m is ignored, wall at 3 m found).
+            //
+            // 3. Smooth wall distances across ±6 azimuth bins (~60°).
+            //    Bins fully occluded by tall cabinets inherit the wall distance
+            //    seen in adjacent directions (walls are flat continuous planes).
+            //
+            // 4. Floor = lowest dense Y; ceiling = highest dense Y (from all pts).
+            //
+            // 5. Classify: wall check first (any Y), then floor, then ceiling.
+            //    Wall-first prevents lower wall sections from becoming floor,
+            //    and upper wall sections from becoming ceiling.
 
             const ANGULAR_BINS = 36;
-            const DIST_BIN     = 0.15;  // 15 cm wall distance bins
-            const Y_BIN        = 0.05;  //  5 cm Y bins
-            const WALL_TOL     = 0.30;  // 30 cm: point within this of wall plane = wall
-            const FLOOR_TOL    = 0.20;  // 20 cm above floor plane
-            const CEIL_TOL     = 0.20;  // 20 cm below ceiling plane
+            const DIST_BIN     = 0.15;   // 15 cm horizontal distance bins
+            const Y_BIN        = 0.05;   //  5 cm Y bins
+            const WALL_TOL     = 0.30;   // 30 cm wall-plane tolerance
+            const FLOOR_TOL    = 0.20;   // 20 cm above floor plane
+            const CEIL_TOL     = 0.20;   // 20 cm below ceiling plane
+            const SMOOTH_BINS  = 6;      // propagate wall dist ±6 bins (~60°)
 
-            // XZ centroid (for azimuth reference only)
+            // XZ centroid (azimuth origin)
             let cx = 0, cz = 0;
             points.forEach(p => { cx += p.x; cz += p.z; });
             cx /= points.length; cz /= points.length;
@@ -2802,6 +2812,7 @@
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
+                if (labels[i] === 7 || labels[i] === 8) continue; // door/window: looks through wall
                 const p  = points[i];
                 const dx = p.x - cx, dz = p.z - cz;
                 const hd = Math.sqrt(dx * dx + dz * dz);
@@ -2812,23 +2823,38 @@
                 allY.push(p.y);
             }
 
-            // ── Pass 2: boundary planes ────────────────────────────────────────
-            // Wall: FARTHEST dense distance per azimuth.
-            // The wall is always the farthest surface — furniture/cabinets are closer.
-            // We use a wider far-zone (50% not 30%) so that a door opening which
-            // adds a few far exterior returns doesn't push the wall out of the window.
+            // ── Pass 2: wall distance per azimuth — farthest dense cluster ───
+            // 80% far-zone: only the outermost 20% of the distance range is
+            // considered, so furniture at medium distance is always ignored.
+            // The wall — the farthest visible surface — dominates this zone.
             const wallDist = projsByBin.map(dists =>
-                dists.length >= 5 ? farthestDensePeak(dists, DIST_BIN, false, 0.50) : null
+                dists.length >= 3 ? farthestDensePeak(dists, DIST_BIN, false, 0.80) : null
             );
-            // Floor: lowest dense Y peak
+
+            // Floor / ceiling from all Y values
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
-            // Ceiling: highest dense Y peak
             const ceilingY = farthestDensePeak(allY, Y_BIN, false);
 
-            // ── Pass 3: classify — wall first, then floor/ceiling ─────────────
+            // ── Pass 3: smooth wall distances across azimuth ──────────────────
+            // Max-of-window: the largest (= true) wall distance propagates into
+            // bins where the wall was fully hidden behind tall furniture.
+            const smoothedWall = wallDist.slice();
+            for (let bin = 0; bin < ANGULAR_BINS; bin++) {
+                for (let off = -SMOOTH_BINS; off <= SMOOTH_BINS; off++) {
+                    const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
+                    if (wallDist[nb] !== null) {
+                        smoothedWall[bin] = smoothedWall[bin] === null
+                            ? wallDist[nb]
+                            : Math.max(smoothedWall[bin], wallDist[nb]);
+                    }
+                }
+            }
+
+            // ── Pass 4: classify — wall first, then floor / ceiling ───────────
             let nFloor = 0, nCeil = 0, nWall = 0, nObj = 0;
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
+                if (labels[i] === 7 || labels[i] === 8) continue;
                 const p  = points[i];
                 const dx = p.x - cx, dz = p.z - cz;
                 const hd = Math.sqrt(dx * dx + dz * dz);
@@ -2836,29 +2862,30 @@
                 const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
                               % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
 
-                // ── 1. Wall check (horizontal distance, any height) ───────────
-                let maxWall = -Infinity;
-                for (let off = -1; off <= 1; off++) {
-                    const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
-                    if (wallDist[nb] !== null) maxWall = Math.max(maxWall, wallDist[nb]);
-                }
-                if (isFinite(maxWall) && hd >= maxWall - WALL_TOL) {
+                // 1. Wall: horizontal distance near the farthest visible plane
+                const wdist = smoothedWall[bin];
+                if (wdist !== null && hd >= wdist - WALL_TOL) {
                     labels[i] = 2; nWall++; continue;
                 }
 
-                // ── 2. Floor check ────────────────────────────────────────────
+                // 2. Floor
                 if (floorY !== null && p.y <= floorY + FLOOR_TOL) {
                     labels[i] = 0; nFloor++; continue;
                 }
 
-                // ── 3. Ceiling check ──────────────────────────────────────────
+                // 3. Ceiling
                 if (ceilingY !== null && p.y >= ceilingY - CEIL_TOL) {
                     labels[i] = 1; nCeil++; continue;
                 }
 
-                // ── 4. Object ─────────────────────────────────────────────────
+                // 4. Object
                 labels[i] = 3; nObj++;
             }
+
+            console.log(`[classify] floor=${floorY?.toFixed(2)} ceiling=${ceilingY?.toFixed(2)}`);
+            console.log(`[classify] wallDist raw:     ${wallDist.map(d => d?.toFixed(1) ?? '_').join(' ')}`);
+            console.log(`[classify] wallDist smoothed:${smoothedWall.map(d => d?.toFixed(1) ?? '_').join(' ')}`);
+            console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} obj:${nObj}`);
 
             rebuildPointCloud();
             updateStats();
