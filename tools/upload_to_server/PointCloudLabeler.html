@@ -2937,7 +2937,7 @@
                 const CELL_REAL  = 0.20;  // 20 cm — real wall point proximity check
                 const CELL_FILL  = 0.05;  // 5 cm — fill dedup (matches FILL_Y)
 
-                // Hash real wall points only
+                // Hash real wall points only (for proximity check)
                 const realWallHash = new Set();
                 for (let i = 0; i < points.length; i++) {
                     if (labels[i] !== 2) continue;
@@ -2945,6 +2945,40 @@
                     realWallHash.add(
                         `${Math.round(p.x/CELL_REAL)},${Math.round(p.y/CELL_REAL)},${Math.round(p.z/CELL_REAL)}`
                     );
+                }
+
+                // Per-azimuth average RGB — used to colorize fill points so that
+                // the 30 cm uncolored band (LiDAR minimum-range blind spot) inherits
+                // the wall color captured at other heights in the same direction.
+                // Only non-grey pixels (r+g+b > 0.6 away from mid-grey) are included
+                // so the grey default from depth reconstruction doesn't dilute real colors.
+                const colorSum = Array.from({length: 360}, () => ({r: 0, g: 0, b: 0, n: 0}));
+                for (let i = 0; i < points.length; i++) {
+                    if (labels[i] !== 2 && labels[i] !== 9) continue;
+                    if (deletedIndices.has(i)) continue;
+                    const c = rgbColors[i];
+                    if (!c) continue;
+                    // Skip near-grey default colors
+                    if (Math.abs(c.r - 0.5) + Math.abs(c.g - 0.5) + Math.abs(c.b - 0.5) < 0.15) continue;
+                    const p = points[i];
+                    const ang = Math.atan2(p.z - cz, p.x - cx);
+                    const bin = ((Math.round(ang * 180 / Math.PI) % 360) + 360) % 360;
+                    colorSum[bin].r += c.r;
+                    colorSum[bin].g += c.g;
+                    colorSum[bin].b += c.b;
+                    colorSum[bin].n++;
+                }
+                // Resolve fill color per azimuth: expand outward up to ±15° if bin is empty
+                function wallFillColor(a) {
+                    for (let d = 0; d <= 15; d++) {
+                        for (const b of [((a + d) % 360), ((a - d + 360) % 360)]) {
+                            if (colorSum[b].n > 0) {
+                                const cs = colorSum[b];
+                                return {r: cs.r / cs.n, g: cs.g / cs.n, b: cs.b / cs.n};
+                            }
+                        }
+                    }
+                    return {r: 0.65, g: 0.65, b: 0.70};  // fallback grey
                 }
 
                 const fillHash = new Set();
@@ -2981,9 +3015,11 @@
                         points.push({x: wx, y, z: wz});
                         labels.push(isCov ? 9 : 2);
                         normals.push({x: nx, y: 0, z: nz});
+                        // Use the sampled wall color from other heights in this
+                        // direction to cover the 30 cm LiDAR blind-spot band.
                         rgbColors.push(isCov
-                            ? {r: 1.0, g: 0.55, b: 0.26}   // orange coving fill
-                            : {r: 0.65, g: 0.65, b: 0.70}); // grey wall fill
+                            ? {r: 1.0, g: 0.55, b: 0.26}
+                            : wallFillColor(a));
                         nFill++;
                     }
                 }
