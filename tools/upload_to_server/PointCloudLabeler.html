@@ -3649,8 +3649,10 @@
 
                         document.getElementById('selection-info').textContent =
                             `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
-                        await colorizePointCloudWithPhotos(
-                            sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
+                        if (poses.length >= 3) {
+                            await colorizePointCloudWithPhotos(
+                                sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
+                        }
                         return;
                     }
                 } catch (_) { /* point cloud optional */ }
@@ -3752,8 +3754,10 @@
 
                             document.getElementById('selection-info').textContent =
                                 `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
-                            await colorizePointCloudWithPhotos(
-                                scanFile, poses, intrinsics, imgSize[0], imgSize[1]);
+                            if (poses.length >= 3) {
+                                await colorizePointCloudWithPhotos(
+                                    scanFile, poses, intrinsics, imgSize[0], imgSize[1]);
+                            }
                             return;
                         }
                     } catch (e) { console.log(`[Load] pointcloud error: ${e.message}`); }
