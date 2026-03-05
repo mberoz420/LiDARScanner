@@ -1602,6 +1602,13 @@
             const DIST_BIN   = 0.10;   // 10 cm bins
             const Y_BIN      = 0.05;   // 5 cm  bins
 
+            // Centroid — used to detect inward-facing normals (room scans).
+            // In a room scan, surface normals point toward the scanner (inward).
+            // We flip the projection sign so walls are always the "farthest" cluster.
+            let cx = 0, cz = 0, cntC = 0;
+            points.forEach((p, i) => { if (!deletedIndices.has(i)) { cx += p.x; cz += p.z; cntC++; } });
+            if (cntC > 0) { cx /= cntC; cz /= cntC; }
+
             // ── Pass 1: collect projections per normal direction ─────────────
             // Key insight: instead of measuring distance from a biased centroid,
             // project each point onto its OWN wall-normal axis.
@@ -1622,10 +1629,15 @@
                 } else if (ny < -0.7) {
                     ceilingYAll.push(p.y);
                 } else if (hMag > 0.5 && Math.abs(ny) < 0.7) {
-                    // Project point along its (normalised) horizontal normal
+                    // Project point along its (normalised) horizontal normal.
+                    // For room scans, normals face INWARD (toward scanner/centroid).
+                    // Flip sign so that the wall is always the FARTHEST cluster.
                     const nx_n = n.x / hMag;
                     const nz_n = n.z / hMag;
-                    const proj = p.x * nx_n + p.z * nz_n;
+                    const rawProj = p.x * nx_n + p.z * nz_n;
+                    // dot(normal_horiz, point - centroid): negative = inward normal
+                    const dotNC = n.x * (p.x - cx) + n.z * (p.z - cz);
+                    const proj  = dotNC < 0 ? -rawProj : rawProj;
 
                     const normAngle = Math.atan2(n.z, n.x) * 180 / Math.PI;
                     const bucket    = Math.round(normAngle / BUCKET_DEG) * BUCKET_DEG;
@@ -1666,7 +1678,9 @@
                     // Wall: project onto normal axis, compare to farthest plane
                     const nx_n = n.x / hMag;
                     const nz_n = n.z / hMag;
-                    const proj = p.x * nx_n + p.z * nz_n;
+                    const rawProj = p.x * nx_n + p.z * nz_n;
+                    const dotNC = n.x * (p.x - cx) + n.z * (p.z - cz);
+                    const proj  = dotNC < 0 ? -rawProj : rawProj;
 
                     const normAngle = Math.atan2(n.z, n.x) * 180 / Math.PI;
                     const bucket    = Math.round(normAngle / BUCKET_DEG) * BUCKET_DEG;
@@ -2800,9 +2814,7 @@
             // Works for any room shape — no assumptions.
 
             const ABINS     = 360;    // 1° azimuth resolution
-            // Old houses have rough walls (concavities/convexities up to ±10 cm).
-            // Keep a generous inward tolerance so those points still get wall label.
-            const WALL_TOL     = 0.15;   // 15 cm inward from boundary plane
+            const WALL_TOL     = 0.10;   // 10 cm inward — accommodates 0-2° wall slope over 3m height; Pass 3 shell covers the rest
             const COVING_H     = 0.40;   // coving zone = top 40 cm below ceiling
             const Y_BIN        = 0.05;
             const FLOOR_TOL    = 0.20;
@@ -2853,19 +2865,15 @@
             const PROJ_BIN = 0.10;
             const rawBoundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
-                const src = hdPerBinUpper[b].length >= 5 ? hdPerBinUpper[b] : hdPerBin[b];
-                if (src.length >= 5) {
+                const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
+                if (src.length >= 2) {
                     rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
                 }
             }
 
-            // ── Continuity filter: walls span many degrees; objects don't ────
-            // A true wall segment is consistent (same distance ± tolerance)
-            // across at least MIN_SPAN consecutive azimuth bins.
-            // Gas pipes (~1–2°), coffee makers (~5°), fridges (~10°) are removed.
-            // Actual walls (0.5 m wide at 3 m = 9°, 1 m wide = 19°) are kept.
-            const MIN_SPAN  = 12;       // minimum 12° of consistent boundary
-            const CONT_TOL  = 0.20;     // bins within 20 cm = same wall plane
+            // ── Continuity filter ─────────────────────────────────────────────
+            const MIN_SPAN  = 8;
+            const CONT_TOL  = 0.40;
 
             const boundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
@@ -2877,6 +2885,30 @@
                     if (rawBoundary[nb] > 0 && Math.abs(rawBoundary[nb] - wb) <= CONT_TOL) span++;
                 }
                 if (span >= MIN_SPAN) boundary[b] = wb;
+            }
+
+            // ── Gap-fill: interpolate zero bins up to 90° wide ───────────────
+            const FILL_SPAN = 90;
+            const filled = boundary.slice();
+            for (let b = 0; b < ABINS; b++) {
+                if (filled[b] > 0) continue;
+                let leftVal = 0, leftDist = FILL_SPAN + 1;
+                let rightVal = 0, rightDist = FILL_SPAN + 1;
+                for (let off = 1; off <= FILL_SPAN; off++) {
+                    if (leftVal  === 0 && boundary[(b - off + ABINS) % ABINS] > 0) { leftVal  = boundary[(b - off + ABINS) % ABINS]; leftDist  = off; }
+                    if (rightVal === 0 && boundary[(b + off) % ABINS]          > 0) { rightVal = boundary[(b + off) % ABINS];         rightDist = off; }
+                    if (leftVal > 0 && rightVal > 0) break;
+                }
+                if      (leftVal > 0 && rightVal > 0) filled[b] = (leftVal * rightDist + rightVal * leftDist) / (leftDist + rightDist);
+                else if (leftVal  > 0) filled[b] = leftVal;
+                else if (rightVal > 0) filled[b] = rightVal;
+            }
+
+            // ── Global fallback: any bin still 0 gets the median wall distance ─
+            const nonZero = Array.from(filled).filter(v => v > 0).sort((a,b) => a-b);
+            if (nonZero.length > 0) {
+                const median = nonZero[Math.floor(nonZero.length / 2)];
+                for (let b = 0; b < ABINS; b++) if (filled[b] === 0) filled[b] = median;
             }
 
             // Floor / ceiling
@@ -2894,7 +2926,7 @@
                 const hd = Math.sqrt(dx * dx + dz * dz);
                 const ang = Math.atan2(dz, dx);
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
-                const wb  = boundary[bin];
+                const wb  = filled[bin];
                 const nearWall = wb > 0 && hd >= wb - WALL_TOL;
 
                 // 1. Coving: near the wall boundary AND in the top zone below ceiling.
@@ -2922,91 +2954,50 @@
                 labels[i] = 3; nObj++;
             }
 
-            // ── Pass 3: extend walls from floor to ceiling ────────────────────
-            // Add synthetic fill points at every (azimuth, Y) cell that has no
-            // real scan wall point nearby. Two separate hashes:
-            //   realWallHash (20 cm cells) — checks against real scan points only,
-            //     so synthetic fill points don't block adjacent fill slots.
-            //   fillHash (5 cm cells) — deduplicates the fill points themselves.
-            // This gives dense coverage (5 cm Y-steps) in areas the scan missed
-            // (near floor, near ceiling, behind furniture) while not duplicating
-            // where real wall points already exist.
+            // ── Pass 3: reconstruct complete wall shell from outer boundary ──────
+            // Instead of classifying individual scan points, we generate a
+            // COMPLETE wall surface by projecting the outer boundary shell from
+            // floor to ceiling. Every 1° × 5cm cell on the wall is filled —
+            // no skip-if-nearby-real check. This closes all walls regardless of
+            // where the scanner could see. Existing scan points are kept for
+            // object/furniture detail; the shell gives the complete room structure.
             if (floorY !== null && ceilingY !== null) {
-                const FILL_ANG   = 2;     // every 2° azimuth
-                const FILL_Y     = 0.05;  // 5 cm vertical step
-                const CELL_REAL  = 0.20;  // 20 cm — real wall point proximity check
-                const CELL_FILL  = 0.05;  // 5 cm — fill dedup (matches FILL_Y)
+                const FILL_ANG  = 1;     // every 1° azimuth — tight enough to close gaps
+                const FILL_Y    = 0.05;  // 5 cm vertical step
+                const CELL_FILL = 0.05;  // 5 cm dedup cell
 
-                // Hash real wall points only (for proximity check)
-                const realWallHash = new Set();
-                for (let i = 0; i < points.length; i++) {
-                    if (labels[i] !== 2) continue;
-                    const p = points[i];
-                    realWallHash.add(
-                        `${Math.round(p.x/CELL_REAL)},${Math.round(p.y/CELL_REAL)},${Math.round(p.z/CELL_REAL)}`
-                    );
-                }
-
-                // Per-azimuth average RGB — used to colorize fill points so that
-                // the 30 cm uncolored band (LiDAR minimum-range blind spot) inherits
-                // the wall color captured at other heights in the same direction.
-                // Only non-grey pixels (r+g+b > 0.6 away from mid-grey) are included
-                // so the grey default from depth reconstruction doesn't dilute real colors.
+                // Per-azimuth average RGB from existing colored scan points
                 const colorSum = Array.from({length: 360}, () => ({r: 0, g: 0, b: 0, n: 0}));
                 for (let i = 0; i < points.length; i++) {
                     if (labels[i] !== 2 && labels[i] !== 9) continue;
                     if (deletedIndices.has(i)) continue;
                     const c = rgbColors[i];
                     if (!c) continue;
-                    // Skip near-grey default colors
                     if (Math.abs(c.r - 0.5) + Math.abs(c.g - 0.5) + Math.abs(c.b - 0.5) < 0.15) continue;
-                    const p = points[i];
-                    const ang = Math.atan2(p.z - cz, p.x - cx);
+                    const ang = Math.atan2(points[i].z - cz, points[i].x - cx);
                     const bin = ((Math.round(ang * 180 / Math.PI) % 360) + 360) % 360;
-                    colorSum[bin].r += c.r;
-                    colorSum[bin].g += c.g;
-                    colorSum[bin].b += c.b;
-                    colorSum[bin].n++;
+                    colorSum[bin].r += c.r; colorSum[bin].g += c.g;
+                    colorSum[bin].b += c.b; colorSum[bin].n++;
                 }
-                // Resolve fill color per azimuth: expand outward up to ±15° if bin is empty
                 function wallFillColor(a) {
-                    for (let d = 0; d <= 15; d++) {
-                        for (const b of [((a + d) % 360), ((a - d + 360) % 360)]) {
-                            if (colorSum[b].n > 0) {
-                                const cs = colorSum[b];
-                                return {r: cs.r / cs.n, g: cs.g / cs.n, b: cs.b / cs.n};
-                            }
-                        }
-                    }
-                    return {r: 0.65, g: 0.65, b: 0.70};  // fallback grey
+                    for (let d = 0; d <= 15; d++)
+                        for (const b of [((a+d)%360), ((a-d+360)%360)])
+                            if (colorSum[b].n > 0) { const s = colorSum[b]; return {r:s.r/s.n, g:s.g/s.n, b:s.b/s.n}; }
+                    return {r: 0.65, g: 0.65, b: 0.70};
                 }
 
                 const fillHash = new Set();
                 let nFill = 0;
 
                 for (let a = 0; a < 360; a += FILL_ANG) {
-                    const wb = boundary[a];
+                    const wb = filled[a];
                     if (wb <= 0) continue;
-                    const θ   = a * Math.PI / 180;
-                    const wx  = cx + wb * Math.cos(θ);
-                    const wz  = cz + wb * Math.sin(θ);
-                    const nx  = -Math.cos(θ), nz = -Math.sin(θ);  // inward normal
-                    const rx  = Math.round(wx / CELL_REAL);
-                    const rz  = Math.round(wz / CELL_REAL);
+                    const θ  = a * Math.PI / 180;
+                    const wx = cx + wb * Math.cos(θ);
+                    const wz = cz + wb * Math.sin(θ);
+                    const nx = -Math.cos(θ), nz = -Math.sin(θ);
 
                     for (let y = floorY; y <= ceilingY + 0.01; y += FILL_Y) {
-                        // Skip if a real scan wall point is within 20 cm
-                        const ry = Math.round(y / CELL_REAL);
-                        let nearReal = false;
-                        outer: for (let da = -1; da <= 1; da++)
-                            for (let db = -1; db <= 1; db++)
-                                for (let dc = -1; dc <= 1; dc++)
-                                    if (realWallHash.has(`${rx+da},${ry+db},${rz+dc}`)) {
-                                        nearReal = true; break outer;
-                                    }
-                        if (nearReal) continue;
-
-                        // Dedup fill cells at 5 cm resolution
                         const fk = `${Math.round(wx/CELL_FILL)},${Math.round(y/CELL_FILL)},${Math.round(wz/CELL_FILL)}`;
                         if (fillHash.has(fk)) continue;
                         fillHash.add(fk);
@@ -3015,16 +3006,12 @@
                         points.push({x: wx, y, z: wz});
                         labels.push(isCov ? 9 : 2);
                         normals.push({x: nx, y: 0, z: nz});
-                        // Use the sampled wall color from other heights in this
-                        // direction to cover the 30 cm LiDAR blind-spot band.
-                        rgbColors.push(isCov
-                            ? {r: 1.0, g: 0.55, b: 0.26}
-                            : wallFillColor(a));
+                        rgbColors.push(isCov ? {r:1.0, g:0.55, b:0.26} : wallFillColor(a));
                         nFill++;
                     }
                 }
                 nWall += nFill;
-                console.log(`[classify] filled ${nFill} synthetic wall/coving points`);
+                console.log(`[classify] shell: ${nFill} wall points generated`);
             }
 
             // ── Pass 4: fill floor and ceiling to close the room ─────────────────
@@ -3038,7 +3025,7 @@
 
                 // Max boundary extent
                 let maxBound = 0;
-                for (let b = 0; b < ABINS; b++) if (boundary[b] > maxBound) maxBound = boundary[b];
+                for (let b = 0; b < ABINS; b++) if (filled[b] > maxBound) maxBound = filled[b];
                 maxBound += 0.15;
 
                 // Hash existing real floor / ceiling points so we don't duplicate
@@ -3058,7 +3045,7 @@
                         const hd = Math.sqrt(dx*dx + dz*dz);
                         const ang = Math.atan2(dz, dx);
                         const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
-                        if (boundary[bin] <= 0 || hd >= boundary[bin]) continue;
+                        if (filled[bin] <= 0 || hd >= filled[bin]) continue;
 
                         const hk = `${Math.round(gx/CELL_H)},${Math.round(gz/CELL_H)}`;
 
@@ -3649,8 +3636,10 @@
 
                         document.getElementById('selection-info').textContent =
                             `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
-                        await colorizePointCloudWithPhotos(
-                            sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
+                        if (poses.length >= 3) {
+                            await colorizePointCloudWithPhotos(
+                                sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
+                        }
                         return;
                     }
                 } catch (_) { /* point cloud optional */ }
@@ -3752,8 +3741,10 @@
 
                             document.getElementById('selection-info').textContent =
                                 `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
-                            await colorizePointCloudWithPhotos(
-                                scanFile, poses, intrinsics, imgSize[0], imgSize[1]);
+                            if (poses.length >= 3) {
+                                await colorizePointCloudWithPhotos(
+                                    scanFile, poses, intrinsics, imgSize[0], imgSize[1]);
+                            }
                             return;
                         }
                     } catch (e) { console.log(`[Load] pointcloud error: ${e.message}`); }
@@ -3784,7 +3775,7 @@
                 loadJSON(data);
                 document.getElementById('selection-info').textContent =
                     `Loaded: ${scanFile} — ${points.length.toLocaleString()} points`;
-                smartAutoClassify(false);
+                classifyByFarthestPlanes();
             } catch (e) {
                 document.getElementById('selection-info').textContent =
                     `Failed to auto-load ${scanFile}: ${e.message}`;
