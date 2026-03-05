@@ -529,7 +529,11 @@ struct PhotogrammetryView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { showFlash = false }
             }
         }
+        .onAppear {
+            meshManager.lightweightScanMode = true   // skip per-frame color sampling + classification
+        }
         .onDisappear {
+            meshManager.lightweightScanMode = false  // restore for regular scan modes
             meshManager.autoCapture.isEnabled = false
             isCapturing = false
             if meshManager.isScanning { _ = meshManager.stopScanning() }

@@ -48,6 +48,9 @@ class MeshManager: NSObject, ObservableObject {
     @Published var currentMode: ScanMode = .largeObjects
     @Published var usingFrontCamera = false
     @Published var surfaceClassificationEnabled = true
+    /// When true, skips color sampling and surface classification during mesh extraction.
+    /// Set by PhotogrammetryView — the labeler handles both via photos and smartAutoClassify.
+    @Published var lightweightScanMode = false
     @Published var deviceOrientation: DeviceOrientation = .lookingHorizontal
 
     // MARK: - Guided Room Scanning
@@ -322,27 +325,13 @@ class MeshManager: NSObject, ObservableObject {
             let count = min(mesh.vertices.count, mesh.normals.count)
             let uCount = UInt32(count)
 
-            // Start with -1 for all vertices; we'll overwrite using per-face classifications
-            var vertexLabels = [Int](repeating: -1, count: count)
-
-            // Propagate face classifications to vertices (last face wins per vertex)
-            if let faceClasses = mesh.faceClassifications {
-                for (fi, face) in mesh.faces.enumerated() {
-                    guard fi < faceClasses.count, face.count == 3 else { continue }
-                    let labelIdx = faceClasses[fi].labelIndex
-                    for vi in face {
-                        if Int(vi) < count { vertexLabels[Int(vi)] = labelIdx }
-                    }
-                }
-            }
-
             for i in 0..<count {
                 let v = mesh.vertices[i]
                 let n = mesh.normals[i]
                 let vw = t * SIMD4<Float>(v.x, v.y, v.z, 1)
                 let nw = t * SIMD4<Float>(n.x, n.y, n.z, 0)
                 points.append([vw.x, vw.y, vw.z, nw.x, nw.y, nw.z])
-                labels.append(vertexLabels[i])
+                labels.append(-1)  // labeler's smartAutoClassify handles classification
             }
             // Collect face indices with vertex offset, skip any out-of-range
             for face in mesh.faces {
@@ -1897,9 +1886,9 @@ class MeshManager: NSObject, ObservableObject {
             (vertices, normals, faces) = (rawVertices, rawNormals, rawFaces)
         }
 
-        // Sample colors from camera frame (skip for Walls mode - geometry only)
+        // Sample colors from camera frame (skip in lightweight or Walls mode — labeler handles coloring)
         var colors: [VertexColor] = []
-        if currentMode != .walls, let frame = currentFrame {
+        if !lightweightScanMode, currentMode != .walls, let frame = currentFrame {
             colors = TextureProjector.sampleColors(
                 for: vertices,
                 meshTransform: transform,
@@ -1910,9 +1899,9 @@ class MeshManager: NSObject, ObservableObject {
         // Get surface classification
         let surfaceType = surfaceTypes[anchor.identifier]
 
-        // Get per-face classifications if enabled (or if using edge visualization)
+        // Skip per-face classification in lightweight mode — labeler's smartAutoClassify handles it
         var faceClassifications: [SurfaceType]? = nil
-        if surfaceClassificationEnabled || useEdgeVisualization {
+        if !lightweightScanMode, (surfaceClassificationEnabled || useEdgeVisualization) {
             faceClassifications = surfaceClassifier.classifyMesh(
                 vertices: vertices,
                 normals: normals,
