@@ -2793,7 +2793,7 @@
 
             const ANGULAR_BINS = 36;
             const Y_BIN        = 0.05;   // 5 cm Y bins for floor/ceiling
-            const WALL_TOL     = 0.15;   // 15 cm: only true wall-surface points
+            const WALL_TOL     = 0.30;   // 30 cm: captures noisy wall surface
             const FLOOR_TOL    = 0.20;
             const CEIL_TOL     = 0.20;
             const SMOOTH_BINS  = 9;      // ±9 bins = ±90°, covers large cabinets
@@ -2826,11 +2826,12 @@
                 allY.push(p.y);
             }
 
-            // ── Pass 2: wall distance per bin = 95th percentile ───────────────
-            // One farthest plane per direction. 95th pct is robust to a few
-            // outlier returns beyond the wall (reflections, windows, etc.).
+            // ── Pass 2: wall distance per bin = 90th percentile ───────────────
+            // One farthest plane per direction. 90th pct is more robust than
+            // 95th to outlier stray points (reflections, window views) that
+            // would inflate the wall estimate and kill the wall check via smoothing.
             const wallDist = projsByBin.map(dists =>
-                dists.length >= 3 ? pct(dists, 0.95) : null
+                dists.length >= 3 ? pct(dists, 0.90) : null
             );
 
             // Floor = 5th pct Y (robust lowest),  ceiling = 95th pct Y
