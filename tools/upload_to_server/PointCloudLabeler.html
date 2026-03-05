@@ -2865,15 +2865,15 @@
             const PROJ_BIN = 0.10;
             const rawBoundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
-                const src = hdPerBinUpper[b].length >= 5 ? hdPerBinUpper[b] : hdPerBin[b];
-                if (src.length >= 5) {
+                const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
+                if (src.length >= 2) {
                     rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
                 }
             }
 
-            // ── Continuity filter: walls span many degrees; objects don't ────
-            const MIN_SPAN  = 8;        // minimum 8° of consistent boundary
-            const CONT_TOL  = 0.40;     // bins within 40 cm = same wall plane
+            // ── Continuity filter ─────────────────────────────────────────────
+            const MIN_SPAN  = 8;
+            const CONT_TOL  = 0.40;
 
             const boundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
@@ -2887,9 +2887,8 @@
                 if (span >= MIN_SPAN) boundary[b] = wb;
             }
 
-            // ── Gap-fill boundary: interpolate zero bins from nearest nonzero neighbours ──
-            // Handles directions occluded by furniture or with sparse upper-zone data.
-            const FILL_SPAN = 25;   // fill gaps up to 25° wide
+            // ── Gap-fill: interpolate zero bins up to 90° wide ───────────────
+            const FILL_SPAN = 90;
             const filled = boundary.slice();
             for (let b = 0; b < ABINS; b++) {
                 if (filled[b] > 0) continue;
@@ -2903,6 +2902,13 @@
                 if      (leftVal > 0 && rightVal > 0) filled[b] = (leftVal * rightDist + rightVal * leftDist) / (leftDist + rightDist);
                 else if (leftVal  > 0) filled[b] = leftVal;
                 else if (rightVal > 0) filled[b] = rightVal;
+            }
+
+            // ── Global fallback: any bin still 0 gets the median wall distance ─
+            const nonZero = Array.from(filled).filter(v => v > 0).sort((a,b) => a-b);
+            if (nonZero.length > 0) {
+                const median = nonZero[Math.floor(nonZero.length / 2)];
+                for (let b = 0; b < ABINS; b++) if (filled[b] === 0) filled[b] = median;
             }
 
             // Floor / ceiling
