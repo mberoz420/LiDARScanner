@@ -2880,10 +2880,20 @@
                 return;
             }
 
-            // Centroid from point cloud
+            // Centroid and bounding box from point cloud
             let cx = 0, cz = 0;
-            points.forEach(p => { cx += p.x; cz += p.z; });
+            let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+            points.forEach(p => {
+                cx += p.x; cz += p.z;
+                if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+                if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+            });
             cx /= points.length; cz /= points.length;
+            // Allow 30 cm beyond scan extent — no junction point from an
+            // adjacent room (through doorway) should lie this far outside
+            const BB_MARGIN = 0.30;
+            const bbMinX = minX - BB_MARGIN, bbMaxX = maxX + BB_MARGIN;
+            const bbMinZ = minZ - BB_MARGIN, bbMaxZ = maxZ + BB_MARGIN;
 
             // Ceiling / floor Y from plane anchors (or estimate from point cloud)
             const ceilY = ceilingPlanes.length > 0
@@ -2895,6 +2905,7 @@
 
             const ABINS = 360;
             const junctionBoundary = new Float32Array(ABINS);
+            let skippedPlanes = 0;
 
             // For each wall plane, sample the ceiling-wall junction line into bins
             for (const plane of wallPlanes) {
@@ -2917,16 +2928,46 @@
                 const jx = cpx + t * heightDir[0];
                 const jz = cpz + t * heightDir[2];
 
+                // ── Bounding-box guard ────────────────────────────────────────
+                // Skip planes whose junction midpoint falls outside the scan.
+                // Adjacent-room walls detected through doorways end up far
+                // outside the LiDAR point cloud bounding box.
+                if (jx < bbMinX || jx > bbMaxX || jz < bbMinZ || jz > bbMaxZ) {
+                    skippedPlanes++;
+                    continue;
+                }
+
                 // Sample along the horizontal junction line at 5 cm steps
                 const steps = Math.max(4, Math.ceil(halfWidth * 2 / 0.05));
                 for (let s = 0; s <= steps; s++) {
                     const frac = (s / steps) - 0.5;          // -0.5 → +0.5
                     const wx   = jx + frac * halfWidth * 2 * horizDir[0];
                     const wz   = jz + frac * halfWidth * 2 * horizDir[2];
+                    // Also skip individual sample points outside scan bounds
+                    if (wx < bbMinX || wx > bbMaxX || wz < bbMinZ || wz > bbMaxZ) continue;
                     const dx   = wx - cx, dz = wz - cz;
                     const hd   = Math.sqrt(dx * dx + dz * dz);
                     const bin  = ((Math.round(Math.atan2(dz, dx) * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                     if (hd > junctionBoundary[bin]) junctionBoundary[bin] = hd;
+                }
+            }
+            if (skippedPlanes > 0)
+                console.log(`[RoomPlanes] Skipped ${skippedPlanes} out-of-bounds planes (adjacent room)`);
+
+            // ── Outlier clip: remove far-away planes (yard fence, exterior walls seen
+            // through windows). Room walls cluster at similar distances; outdoor
+            // surfaces are typically 2× or more farther. Use same P75 × 1.8 clip
+            // that's applied to the scan-point boundary.
+            {
+                const jVals = Array.from(junctionBoundary).filter(v => v > 0).sort((a, b) => a - b);
+                if (jVals.length > 0) {
+                    const p75  = jVals[Math.floor(jVals.length * 0.75)];
+                    const CLIP = p75 * 1.8;
+                    let clipped = 0;
+                    for (let b = 0; b < ABINS; b++) {
+                        if (junctionBoundary[b] > CLIP) { junctionBoundary[b] = 0; clipped++; }
+                    }
+                    if (clipped > 0) console.log(`[RoomPlanes] Clipped ${clipped} outdoor-plane bins (>${CLIP.toFixed(1)}m)`);
                 }
             }
 
