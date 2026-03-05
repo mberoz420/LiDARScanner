@@ -2984,26 +2984,10 @@
             cx /= points.length; cz /= points.length;
 
             // ── Pass 1: collect hd values per 1° azimuth bin ─────────────────
-            // KEY INSIGHT: detect the wall boundary using UPPER-ROOM points only
-            // (top 30% of room height). Appliances — coffee makers, fridges,
-            // cabinets — are shorter than the ceiling, so the bare wall IS visible
-            // above them in every direction. A true alcove or room corner spans
-            // the full height and is also correctly detected in the upper zone.
-            // Only if a bin has <5 upper-zone points does it fall back to all heights.
-            const hdPerBin      = Array.from({length: ABINS}, () => []);  // all heights
-            const hdPerBinUpper = Array.from({length: ABINS}, () => []);  // upper zone
+            // Use ALL heights — short objects against the wall are part of the
+            // outer perimeter and should be included in the boundary.
+            const hdPerBin = Array.from({length: ABINS}, () => []);
             const allY = [];
-
-            // Quick floor/ceiling for the height cut — one pass over points
-            let qFloor = Infinity, qCeil = -Infinity;
-            for (let i = 0; i < points.length; i++) {
-                if (deletedIndices.has(i) || labels[i] === 7 || labels[i] === 8) continue;
-                const y = points[i].y;
-                if (y < qFloor) qFloor = y;
-                if (y > qCeil)  qCeil  = y;
-            }
-            // Upper zone = top 30% of room (above most appliances)
-            const upperCutY = qFloor + 0.70 * (qCeil - qFloor);
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
@@ -3015,11 +2999,8 @@
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                 hdPerBin[bin].push(hd);
                 allY.push(p.y);
-                if (p.y >= upperCutY) hdPerBinUpper[bin].push(hd);
             }
 
-            // Dense farthest cluster per bin — prefer upper-zone data (immune to
-            // appliances). Fall back to all-heights if upper zone is sparse (<5 pts).
             // ── Boundary source: ARKit planes (if checked) or point cloud ────────
             const useArkit = scanRoomPlanes &&
                              document.getElementById('use-arkit-planes')?.checked;
@@ -3033,23 +3014,17 @@
                         `ARKit boundary: ${n}/360 bins`;
                     console.log(`[classify] Using ARKit boundary (${n} bins)`);
                 } else {
-                    // ARKit didn't produce enough data — fall back silently
-                    useArkit && console.warn('[classify] ARKit boundary failed, falling back to point cloud');
                     rawBoundary = new Float32Array(ABINS);
-                    const PROJ_BIN2 = 0.10;
                     for (let b = 0; b < ABINS; b++) {
-                        const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
-                        if (src.length >= 2) rawBoundary[b] = farthestDensePeak(src, PROJ_BIN2, false, 0.20) ?? 0;
+                        if (hdPerBin[b].length >= 2)
+                            rawBoundary[b] = farthestDensePeak(hdPerBin[b], 0.10, false, 0.20) ?? 0;
                     }
                 }
             } else {
-                const PROJ_BIN = 0.10;
                 rawBoundary = new Float32Array(ABINS);
                 for (let b = 0; b < ABINS; b++) {
-                    const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
-                    if (src.length >= 2) {
-                        rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
-                    }
+                    if (hdPerBin[b].length >= 2)
+                        rawBoundary[b] = farthestDensePeak(hdPerBin[b], 0.10, false, 0.20) ?? 0;
                 }
             }
 
