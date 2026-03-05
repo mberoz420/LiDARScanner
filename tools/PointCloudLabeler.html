@@ -2787,7 +2787,9 @@
             // Works for any room shape — no assumptions.
 
             const ABINS     = 360;    // 1° azimuth resolution
-            const WALL_TOL  = 0.15;   // 15 cm — tight now that boundary is filtered
+            // Old houses have rough walls (concavities/convexities up to ±10 cm).
+            // Keep a generous inward tolerance so those points still get wall label.
+            const WALL_TOL  = 0.15;   // 15 cm inward from boundary plane
             const Y_BIN     = 0.05;
             const FLOOR_TOL = 0.20;
             const CEIL_TOL  = 0.20;
@@ -2818,11 +2820,15 @@
             }
 
             // Dense farthest cluster per bin = raw wall distance estimate.
+            // farZonePct=0.20: use 80th-percentile as the threshold so that
+            // ceiling coving (typically <15% of points per bin, protruding slightly
+            // beyond the wall) does NOT win over the dominant wall surface.
+            // The continuity filter below still removes furniture clusters.
             const PROJ_BIN = 0.10;
             const rawBoundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
                 if (hdPerBin[b].length >= 5) {
-                    rawBoundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.05) ?? 0;
+                    rawBoundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.20) ?? 0;
                 }
             }
 
@@ -2863,7 +2869,8 @@
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                 const wb  = boundary[bin];
 
-                // 1. Wall: within WALL_TOL of the outermost boundary in this direction
+                // 1. Wall: within WALL_TOL of the boundary in this direction.
+                // One-sided (inward) so rough/concave wall patches still pass.
                 if (wb > 0 && hd >= wb - WALL_TOL) {
                     labels[i] = 2; nWall++; continue;
                 }
