@@ -2797,10 +2797,12 @@
             points.forEach(p => { cx += p.x; cz += p.z; });
             cx /= points.length; cz /= points.length;
 
-            // ── Pass 1: farthest horizontal distance per 1° bin ───────────────
-            // No smoothing — wall is always visible at some elevation in each
-            // azimuth column (above/below cabinets), so max-hd = wall distance.
-            const boundary = new Float32Array(ABINS);
+            // ── Pass 1: collect hd values per 1° azimuth bin ─────────────────
+            // Use farthestDensePeak per bin — NOT raw max.
+            // The wall has hundreds of points at the same distance (dense cluster).
+            // A bottle / light switch / pipe has 3-10 points — not dense enough
+            // to win the peak, so it doesn't inflate the wall boundary.
+            const hdPerBin = Array.from({length: ABINS}, () => []);
             const allY = [];
 
             for (let i = 0; i < points.length; i++) {
@@ -2811,8 +2813,17 @@
                 const hd = Math.sqrt(dx * dx + dz * dz);
                 const ang = Math.atan2(dz, dx);
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
-                if (hd > boundary[bin]) boundary[bin] = hd;
+                hdPerBin[bin].push(hd);
                 allY.push(p.y);
+            }
+
+            // Dense farthest cluster per bin = wall distance
+            const PROJ_BIN = 0.10;
+            const boundary = new Float32Array(ABINS);
+            for (let b = 0; b < ABINS; b++) {
+                if (hdPerBin[b].length >= 5) {
+                    boundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.30) ?? 0;
+                }
             }
 
             // Floor / ceiling
@@ -2873,7 +2884,7 @@
                 for (let a = 0; a < 360; a += FILL_ANG) {
                     const wb = boundary[a];
                     if (wb <= 0) continue;
-                    const θ   = (a - 180) * Math.PI / 180;
+                    const θ   = a * Math.PI / 180;
                     const wx  = cx + wb * Math.cos(θ);
                     const wz  = cz + wb * Math.sin(θ);
                     const nx  = -Math.cos(θ), nz = -Math.sin(θ);  // inward normal
