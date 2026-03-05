@@ -2873,7 +2873,9 @@
             console.log(`[RoomPlanes] ${wallPlanes.length} wall planes → ${filledBins} boundary bins`);
 
             if (filledBins < 30) {
-                console.log('[RoomPlanes] Sparse junction, falling back');
+                console.log('[RoomPlanes] Sparse junction, falling back to heuristic');
+                document.getElementById('selection-info').textContent +=
+                    ` | ⚠️ ARKit planes sparse (${filledBins} bins) — using heuristic`;
                 classifyByFarthestPlanes();
                 return;
             }
@@ -2971,7 +2973,10 @@
             if (arkitBoundary) {
                 // ARKit plane anchor junction — most accurate source
                 rawBoundary = arkitBoundary;
-                console.log('[classify] Using ARKit plane-anchor boundary');
+                const filledCount = Array.from(arkitBoundary).filter(v => v > 0).length;
+                document.getElementById('selection-info').textContent +=
+                    ` | ✅ ARKit boundary (${filledCount}/360 bins)`;
+                console.log(`[classify] Using ARKit plane-anchor boundary (${filledCount} bins)`);
             } else {
                 // 1st: ceiling-wall junction band | 2nd: upper 30% | 3rd: all heights
                 rawBoundary = new Float32Array(ABINS);
@@ -4061,8 +4066,14 @@
                     `Loaded: ${scanFile} — ${points.length.toLocaleString()} points`;
                 // Use ARKit plane anchors for boundary if available (ceiling-wall junction)
                 if (data.room_planes && data.room_planes.length >= 2) {
+                    console.log(`[Load] room_planes: ${data.room_planes.length} planes`,
+                        data.room_planes.map(p => p.type).join(', '));
                     classifyByRoomPlanes(data.room_planes);
                 } else {
+                    const reason = data.room_planes ? `only ${data.room_planes.length} planes` : 'not present';
+                    console.log(`[Load] room_planes ${reason} — using heuristic`);
+                    document.getElementById('selection-info').textContent +=
+                        ` | ⚠️ No ARKit planes (${reason})`;
                     classifyByFarthestPlanes();
                 }
             } catch (e) {
