@@ -65,12 +65,16 @@ if ($src !== false) {
 
 // ── Call Claude API ───────────────────────────────────────────────────────────
 $prompt = 'This is a photo from a LiDAR room scanner (portrait orientation). '
-        . 'Identify all DOORS and WINDOWS visible. '
-        . 'For each, return a bounding box as [x1, y1, x2, y2] in normalized coordinates (0.0-1.0) '
-        . 'where [0,0] is top-left and [1,1] is bottom-right of the image. '
-        . 'Return ONLY valid JSON in this exact format, nothing else: '
+        . 'Identify ONLY true architectural DOORS (openings in walls with door frames, hinges, or door slabs) '
+        . 'and true architectural WINDOWS (glass openings in walls that let in natural light). '
+        . 'DO NOT label as doors or windows: refrigerators, kitchen cabinets, cabinet doors, '
+        . 'microwaves, ovens, dishwashers, tool cabinets, shelves, drawers, mirrors, or any appliances. '
+        . 'Only label openings that are actual passages through a wall or actual exterior windows. '
+        . 'For each true door or window found, return a bounding box [x1, y1, x2, y2] in normalized '
+        . 'coordinates (0.0-1.0) where [0,0] is top-left and [1,1] is bottom-right. '
+        . 'Return ONLY valid JSON, nothing else: '
         . '{"doors":[[x1,y1,x2,y2],...],"windows":[[x1,y1,x2,y2],...]} '
-        . 'If none found, return {"doors":[],"windows":[]}.';
+        . 'If no true doors or windows are visible, return {"doors":[],"windows":[]}.';
 
 $payload = json_encode([
     'model'      => 'claude-haiku-4-5-20251001',

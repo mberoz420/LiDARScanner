@@ -2817,12 +2817,16 @@
                 allY.push(p.y);
             }
 
-            // Dense farthest cluster per bin = wall distance
+            // Dense farthest cluster per bin = wall distance.
+            // farZonePct = 0.05 → threshold at 95th percentile of hd values.
+            // Only the farthest 5% of distances are searched for the dense peak.
+            // This ensures furniture (70th–90th pct) is excluded entirely and
+            // only the actual wall surface (very far) registers as the boundary.
             const PROJ_BIN = 0.10;
             const boundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
                 if (hdPerBin[b].length >= 5) {
-                    boundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.30) ?? 0;
+                    boundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.05) ?? 0;
                 }
             }
 
