@@ -2832,11 +2832,12 @@
             // above them in every direction. A true alcove or room corner spans
             // the full height and is also correctly detected in the upper zone.
             // Only if a bin has <5 upper-zone points does it fall back to all heights.
-            const hdPerBin      = Array.from({length: ABINS}, () => []);  // all heights
-            const hdPerBinUpper = Array.from({length: ABINS}, () => []);  // upper zone
+            const hdPerBin         = Array.from({length: ABINS}, () => []);  // all heights
+            const hdPerBinUpper    = Array.from({length: ABINS}, () => []);  // top 30% (above appliances)
+            const hdPerBinJunction = Array.from({length: ABINS}, () => []);  // ceiling-wall junction band
             const allY = [];
 
-            // Quick floor/ceiling for the height cut — one pass over points
+            // Quick floor/ceiling estimate — one pass over points
             let qFloor = Infinity, qCeil = -Infinity;
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i) || labels[i] === 7 || labels[i] === 8) continue;
@@ -2844,8 +2845,12 @@
                 if (y < qFloor) qFloor = y;
                 if (y > qCeil)  qCeil  = y;
             }
-            // Upper zone = top 30% of room (above most appliances)
+            // Upper zone  = top 30% of room height (above most appliances)
             const upperCutY = qFloor + 0.70 * (qCeil - qFloor);
+            // Junction band = 20 cm below ceiling. This is where walls meet the ceiling —
+            // the single most reliable zone: no furniture ever reaches it, and it traces
+            // the exact room perimeter unobstructed. Used as primary boundary source.
+            const junctionCutY = qCeil - 0.20;
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
@@ -2857,15 +2862,20 @@
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                 hdPerBin[bin].push(hd);
                 allY.push(p.y);
-                if (p.y >= upperCutY) hdPerBinUpper[bin].push(hd);
+                if (p.y >= upperCutY)    hdPerBinUpper[bin].push(hd);
+                if (p.y >= junctionCutY) hdPerBinJunction[bin].push(hd);
             }
 
-            // Dense farthest cluster per bin — prefer upper-zone data (immune to
-            // appliances). Fall back to all-heights if upper zone is sparse (<5 pts).
+            // ── Boundary source priority ──────────────────────────────────────
+            // 1st choice: ceiling-wall junction band (unobstructed, most accurate)
+            // 2nd choice: upper 30% of room (above appliances)
+            // 3rd choice: all heights (fallback for rooms with low ceilings / sparse scans)
             const PROJ_BIN = 0.10;
             const rawBoundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
-                const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
+                const src = hdPerBinJunction[b].length >= 2 ? hdPerBinJunction[b]
+                          : hdPerBinUpper[b].length    >= 2 ? hdPerBinUpper[b]
+                          :                                    hdPerBin[b];
                 if (src.length >= 2) {
                     rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
                 }
