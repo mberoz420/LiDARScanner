@@ -2553,20 +2553,20 @@
                         }
 
                         // ── Compute surface normal from depth map neighbors ─────────
-                        // Central-difference tangents: horizontal (u) and vertical (v)
-                        // Cross product gives the surface normal in world space.
+                        // Central-difference tangents → cross product → world-space normal.
+                        // Then flip so the normal always faces TOWARD the camera.
+                        // Camera is always inside the room, so inward-facing normals are correct:
+                        //   floor → ny > 0 (up),  ceiling → ny < 0 (down),  walls → horizontal
                         let nx = 0, ny = 0, nz = 0;
                         if (u > 0 && u < W_d-1 && v > 0 && v < H_d-1) {
-                            const pr = bp(u+1, v,   depths[v*W_d + u+1]);
-                            const pl = bp(u-1, v,   depths[v*W_d + u-1]);
-                            const pu = bp(u,   v-1, depths[(v-1)*W_d + u]);
-                            const pd2= bp(u,   v+1, depths[(v+1)*W_d + u]);
-                            if (pr && pl && pu && pd2) {
-                                // Horizontal tangent (right - left)
-                                const tx = pr.x - pl.x, ty = pr.y - pl.y, tz = pr.z - pl.z;
-                                // Vertical tangent (up - down in world, note image v flipped)
-                                const vx = pu.x - pd2.x, vy = pu.y - pd2.y, vz = pu.z - pd2.z;
-                                // Normal = vertical × horizontal (faces toward camera/inward)
+                            const pr  = bp(u+1, v,   depths[v*W_d + u+1]);
+                            const pl  = bp(u-1, v,   depths[v*W_d + u-1]);
+                            const pup = bp(u,   v-1, depths[(v-1)*W_d + u]);
+                            const pdn = bp(u,   v+1, depths[(v+1)*W_d + u]);
+                            if (pr && pl && pup && pdn) {
+                                const tx = pr.x  - pl.x,  ty = pr.y  - pl.y,  tz = pr.z  - pl.z;
+                                const vx = pup.x - pdn.x, vy = pup.y - pdn.y, vz = pup.z - pdn.z;
+                                // tangent_v × tangent_u
                                 nx = vy*tz - vz*ty;
                                 ny = vz*tx - vx*tz;
                                 nz = vx*ty - vy*tx;
@@ -2623,6 +2623,113 @@
         }
 
         // ── Auto-load from ?photos=SESSION_ID URL param ───────────────────────
+        // ── Boundary detection + normal orientation ───────────────────────────────
+        // After depth reconstruction, cross-product normals may point either inward
+        // or outward depending on camera angle. This routine:
+        //   1. Detects the room boundary: floor Y, ceiling Y, and wall plane per azimuth
+        //      using histogram peaks (farthestDensePeak / dominantWallPeak).
+        //   2. For each point, determines which boundary it belongs to and what
+        //      "inward" (toward room interior) means for that surface.
+        //   3. Flips the normal if it points away from the interior.
+        // After this, smartAutoClassify works correctly with no special-casing.
+        function orientNormalsTowardInterior() {
+            if (!points.length) return;
+
+            const ANGULAR_BINS = 36;
+            const DIST_BIN     = 0.15;
+            const Y_BIN        = 0.05;
+
+            // ── Step 1: detect room boundary ─────────────────────────────────
+            // Floor: lowest dense Y cluster
+            // Ceiling: highest dense Y cluster
+            // Walls: dominant horizontal distance per azimuth (36 × 10°)
+
+            // XZ centroid for azimuth reference
+            let cx = 0, cz = 0;
+            points.forEach(p => { cx += p.x; cz += p.z; });
+            cx /= points.length; cz /= points.length;
+
+            const allY      = points.map(p => p.y);
+            const floorY    = farthestDensePeak(allY, Y_BIN, true);
+            const ceilingY  = farthestDensePeak(allY, Y_BIN, false);
+
+            // Collect horizontal distances per azimuth bin
+            const projsByBin = Array.from({length: ANGULAR_BINS}, () => []);
+            points.forEach(p => {
+                const dx = p.x - cx, dz = p.z - cz;
+                const ang = Math.atan2(dz, dx);
+                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                projsByBin[bin].push(Math.sqrt(dx * dx + dz * dz));
+            });
+
+            // Dominant wall distance per azimuth (uses density, not farthest extreme)
+            const wallDist = projsByBin.map(dists =>
+                dists.length >= 5 ? dominantWallPeak(dists, DIST_BIN) : null
+            );
+
+            // Room interior: vertical center between floor and ceiling
+            const roomCenterY = (floorY !== null && ceilingY !== null)
+                ? (floorY + ceilingY) / 2 : null;
+
+            // ── Step 2: orient each normal inward ────────────────────────────
+            const FLOOR_ZONE = 0.40;   // within 40 cm of floor = floor surface
+            const CEIL_ZONE  = 0.40;   // within 40 cm of ceiling
+            const WALL_ZONE  = 0.35;   // within 35 cm of wall plane
+
+            let flipped = 0;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                const n = normals[i];
+                if (!n || (n.x === 0 && n.y === 0 && n.z === 0)) continue;
+
+                const p   = points[i];
+                const dx  = p.x - cx, dz = p.z - cz;
+                const hd  = Math.sqrt(dx * dx + dz * dz);
+                const ang = Math.atan2(dz, dx);
+                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+
+                // Which boundary is this point nearest to?
+                let inwardX = 0, inwardY = 0, inwardZ = 0;
+
+                const nearFloor = floorY !== null && p.y <= floorY + FLOOR_ZONE;
+                const nearCeil  = ceilingY !== null && p.y >= ceilingY - CEIL_ZONE;
+
+                // Check wall proximity in ±1 bins
+                let wallD = -Infinity;
+                for (let off = -1; off <= 1; off++) {
+                    const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
+                    if (wallDist[nb] !== null) wallD = Math.max(wallD, wallDist[nb]);
+                }
+                const nearWall = isFinite(wallD) && hd >= wallD - WALL_ZONE;
+
+                if (nearFloor && !nearWall) {
+                    // Floor surface: inward = up (+Y)
+                    inwardY = 1;
+                } else if (nearCeil && !nearWall) {
+                    // Ceiling surface: inward = down (-Y)
+                    inwardY = -1;
+                } else if (nearWall) {
+                    // Wall surface: inward = toward XZ centroid (horizontal)
+                    const hLen = hd > 0.001 ? hd : 1;
+                    inwardX = -dx / hLen;   // toward centroid
+                    inwardZ = -dz / hLen;
+                } else {
+                    // Interior object — skip, no flip needed
+                    continue;
+                }
+
+                // Flip if normal opposes the inward direction
+                if (n.x * inwardX + n.y * inwardY + n.z * inwardZ < 0) {
+                    normals[i] = {x: -n.x, y: -n.y, z: -n.z};
+                    flipped++;
+                }
+            }
+
+            console.log(`[Boundary] floor=${floorY?.toFixed(2)}m  ceil=${ceilingY?.toFixed(2)}m  flipped=${flipped} normals`);
+        }
+
         // ── Farthest-plane classification for depth-only points (no normals) ──────
         // The room boundary surfaces ARE the farthest dense planes in every direction:
         //   Floor   = farthest dense peak at the lowest Y
@@ -3324,7 +3431,8 @@
                 if (depthSizes.length) {
                     await reconstructFromDepths(
                         sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
-                    smartAutoClassify(true);  // normals now computed from depth map gradients
+                    orientNormalsTowardInterior();  // detect boundary, then flip normals inward
+                    smartAutoClassify(true);
                     return;
                 }
 
@@ -3427,7 +3535,8 @@
                     if (depthSizes.length) {
                         await reconstructFromDepths(
                             scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
-                        smartAutoClassify(true);  // normals now computed from depth map gradients
+                        orientNormalsTowardInterior();  // detect boundary, then flip normals inward
+                    smartAutoClassify(true);
                         return;
                     }
 
