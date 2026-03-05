@@ -3051,9 +3051,31 @@
                 if (span >= MIN_SPAN) boundary[b] = wb;
             }
 
+            // ── Gaussian smoothing ────────────────────────────────────────────
+            // Averages each boundary bin with its neighbours weighted by a Gaussian
+            // (σ ≈ 7°, window ±15°). Only includes bins that have real data AND are
+            // within 30 cm of the centre bin — this keeps wall planes separate so
+            // a far wall doesn't pull a near wall outward at corners.
+            // Result: lines as smooth as ARKit without losing the room shape.
+            const SMOOTH_SPAN = 15;
+            const smoothed = new Float32Array(ABINS);
+            for (let b = 0; b < ABINS; b++) {
+                if (boundary[b] <= 0) continue;
+                let wSum = 0, vSum = 0;
+                for (let off = -SMOOTH_SPAN; off <= SMOOTH_SPAN; off++) {
+                    const nb = (b + off + ABINS) % ABINS;
+                    if (boundary[nb] <= 0) continue;
+                    if (Math.abs(boundary[nb] - boundary[b]) > 0.30) continue; // different plane
+                    const w = Math.exp(-0.5 * (off / 7) ** 2);  // Gaussian σ=7°
+                    vSum += boundary[nb] * w;
+                    wSum += w;
+                }
+                smoothed[b] = wSum > 0 ? vSum / wSum : boundary[b];
+            }
+
             // ── Gap-fill: interpolate zero bins up to 90° wide ───────────────
             const FILL_SPAN = 90;
-            const filled = boundary.slice();
+            const filled = smoothed.slice();
             for (let b = 0; b < ABINS; b++) {
                 if (filled[b] > 0) continue;
                 let leftVal = 0, leftDist = FILL_SPAN + 1;
@@ -3240,7 +3262,8 @@
             console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} cov:${nCov} obj:${nObj}`);
 
             // Draw solid outline at floor (blue) and ceiling (red)
-            drawRoomOutline(cx, cz, boundary, floorY, ceilingY);
+            // Use smoothed[] so the lines reflect the averaged boundary shape
+            drawRoomOutline(cx, cz, smoothed, floorY, ceilingY);
 
             rebuildPointCloud();
             updateStats();
