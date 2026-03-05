@@ -642,6 +642,13 @@
                         🤖 AI: Detect Doors &amp; Windows
                     </button>
                 </div>
+                <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
+                    <div style="font-size:10px;color:#aaa;margin-bottom:5px">Surface Completion</div>
+                    <button class="btn btn-action btn-small" id="btn-fill-holes"
+                            onclick="fillSurfaceHoles()" style="width:100%">
+                        🪣 Fill Surface Holes
+                    </button>
+                </div>
             </div>
 
             <h2>Build Status</h2>
@@ -2722,6 +2729,234 @@
             document.getElementById('selection-info').textContent +=
                 ` | Planes: ${nFloor.toLocaleString()} floor, ${nCeil.toLocaleString()} ceil, ` +
                 `${nWall.toLocaleString()} wall, ${nObj.toLocaleString()} obj`;
+        }
+
+        // ── Surface hole filling ──────────────────────────────────────────────
+        // Fills gaps in walls/floor/ceiling caused by occlusion from objects.
+        // Uses BFS flood-fill from existing labeled surface points on a 2D grid.
+        // Each empty cell inherits the color of its nearest real surface neighbor.
+        // Door/window cells are treated as blocked (real openings stay open).
+        async function fillSurfaceHoles() {
+            if (!points.length) return;
+            const statusEl = document.getElementById('selection-info');
+            const btn = document.getElementById('btn-fill-holes');
+            btn.disabled = true;
+
+            const GRID        = 0.05;  // 5 cm grid resolution
+            const MAX_FILL    = 2.0;   // max BFS fill distance in metres
+            const ANGULAR_BINS = 36;
+            const maxD = Math.ceil(MAX_FILL / GRID);
+            const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
+
+            // 3D centroid
+            let cx = 0, cy = 0, cz = 0, n = 0;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                cx += points[i].x; cy += points[i].y; cz += points[i].z; n++;
+            }
+            cx /= n; cy /= n; cz /= n;
+
+            let totalAdded = 0;
+
+            // ── BFS helper: flood-fills a 2D Map, returns synthetic cells ─────
+            function bfsFill(grid, aMin, aMax, bMin, bMax) {
+                const queue = [];
+                for (const [k, v] of grid) {
+                    if (v.real && !v.blocked) {
+                        const [a, b] = k.split(',').map(Number);
+                        queue.push({a, b, c: v.c, d: 0});
+                    }
+                }
+                let head = 0;
+                while (head < queue.length) {
+                    const {a, b, c, d} = queue[head++];
+                    if (d >= maxD) continue;
+                    for (const [da, db] of DIRS) {
+                        const na = a + da, nb = b + db;
+                        if (na < aMin || na > aMax || nb < bMin || nb > bMax) continue;
+                        const nk = `${na},${nb}`;
+                        if (grid.has(nk)) continue;
+                        grid.set(nk, {c, real: false});
+                        queue.push({a: na, b: nb, c, d: d + 1});
+                    }
+                }
+                return grid;
+            }
+
+            // ── Mark door/window pixels on a 2D grid ──────────────────────────
+            function markOpenings(grid, toA, toB) {
+                for (let i = 0; i < points.length; i++) {
+                    if (deletedIndices.has(i)) continue;
+                    if (labels[i] !== 7 && labels[i] !== 8) continue;
+                    const k = `${toA(points[i])},${toB(points[i])}`;
+                    grid.set(k, {c: null, real: true, blocked: true});
+                }
+            }
+
+            // ════════════════════════════════════════════════════════════════
+            // FLOOR
+            // ════════════════════════════════════════════════════════════════
+            statusEl.textContent = 'Filling floor…';
+            await new Promise(r => setTimeout(r, 0));
+
+            const floorIdxs = [];
+            for (let i = 0; i < points.length; i++)
+                if (!deletedIndices.has(i) && labels[i] === 0) floorIdxs.push(i);
+
+            if (floorIdxs.length > 50) {
+                const floorY = floorIdxs.reduce((s, i) => s + points[i].y, 0) / floorIdxs.length;
+
+                const fg = new Map();
+                let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
+                for (const i of floorIdxs) {
+                    const gx = Math.round(points[i].x / GRID), gz = Math.round(points[i].z / GRID);
+                    fg.set(`${gx},${gz}`, {c: rgbColors[i] || {r:.5,g:.5,b:.5}, real: true});
+                    gxMin = Math.min(gxMin, gx); gxMax = Math.max(gxMax, gx);
+                    gzMin = Math.min(gzMin, gz); gzMax = Math.max(gzMax, gz);
+                }
+                markOpenings(fg,
+                    p => Math.round(p.x / GRID),
+                    p => Math.round(p.z / GRID));
+
+                bfsFill(fg, gxMin, gxMax, gzMin, gzMax);
+
+                for (const [k, v] of fg) {
+                    if (!v.real && v.c) {
+                        const [gx, gz] = k.split(',').map(Number);
+                        points.push({x: gx * GRID, y: floorY, z: gz * GRID});
+                        normals.push({x: 0, y: 1, z: 0});
+                        labels.push(0);
+                        rgbColors.push(v.c);
+                        totalAdded++;
+                    }
+                }
+            }
+
+            // ════════════════════════════════════════════════════════════════
+            // CEILING
+            // ════════════════════════════════════════════════════════════════
+            statusEl.textContent = 'Filling ceiling…';
+            await new Promise(r => setTimeout(r, 0));
+
+            const ceilIdxs = [];
+            for (let i = 0; i < points.length; i++)
+                if (!deletedIndices.has(i) && labels[i] === 1) ceilIdxs.push(i);
+
+            if (ceilIdxs.length > 50) {
+                const ceilY = ceilIdxs.reduce((s, i) => s + points[i].y, 0) / ceilIdxs.length;
+
+                const cg = new Map();
+                let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
+                for (const i of ceilIdxs) {
+                    const gx = Math.round(points[i].x / GRID), gz = Math.round(points[i].z / GRID);
+                    cg.set(`${gx},${gz}`, {c: rgbColors[i] || {r:.5,g:.5,b:.5}, real: true});
+                    gxMin = Math.min(gxMin, gx); gxMax = Math.max(gxMax, gx);
+                    gzMin = Math.min(gzMin, gz); gzMax = Math.max(gzMax, gz);
+                }
+
+                bfsFill(cg, gxMin, gxMax, gzMin, gzMax);
+
+                for (const [k, v] of cg) {
+                    if (!v.real && v.c) {
+                        const [gx, gz] = k.split(',').map(Number);
+                        points.push({x: gx * GRID, y: ceilY, z: gz * GRID});
+                        normals.push({x: 0, y: -1, z: 0});
+                        labels.push(1);
+                        rgbColors.push(v.c);
+                        totalAdded++;
+                    }
+                }
+            }
+
+            // ════════════════════════════════════════════════════════════════
+            // WALLS — one 2D grid per dominant angular sector
+            // ════════════════════════════════════════════════════════════════
+            statusEl.textContent = 'Filling walls…';
+            await new Promise(r => setTimeout(r, 0));
+
+            // Group wall points by azimuth sector
+            const wallByBin = Array.from({length: ANGULAR_BINS}, () => []);
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i) || labels[i] !== 2) continue;
+                const dx = points[i].x - cx, dz = points[i].z - cz;
+                const ang = Math.atan2(dz, dx);
+                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                wallByBin[bin].push(i);
+            }
+
+            // Merge adjacent bins with few points into neighbours (avoids tiny isolated grids)
+            // Process each bin that has enough real wall points
+            const processed = new Set();
+            for (let bin = 0; bin < ANGULAR_BINS; bin++) {
+                if (wallByBin[bin].length < 30 || processed.has(bin)) continue;
+                processed.add(bin);
+
+                const idxs = wallByBin[bin];
+                const theta = bin * (2 * Math.PI / ANGULAR_BINS) - Math.PI;
+                const cosT  = Math.cos(theta), sinT = Math.sin(theta);
+                const tanX  = -sinT, tanZ = cosT;  // tangent along wall surface
+
+                // Average wall-plane distance
+                const wallD = idxs.reduce((s, i) => {
+                    const dx = points[i].x - cx, dz = points[i].z - cz;
+                    return s + dx * cosT + dz * sinT;
+                }, 0) / idxs.length;
+
+                // Wall plane origin
+                const wx = cx + wallD * cosT, wz = cz + wallD * sinT;
+
+                // Project to local (U=along_wall, V=height)
+                const wg = new Map();
+                let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+
+                for (const i of idxs) {
+                    const p = points[i];
+                    const U = Math.round(((p.x - wx) * tanX + (p.z - wz) * tanZ) / GRID);
+                    const V = Math.round(p.y / GRID);
+                    wg.set(`${U},${V}`, {c: rgbColors[i] || {r:.5,g:.5,b:.5}, real: true});
+                    uMin = Math.min(uMin, U); uMax = Math.max(uMax, U);
+                    vMin = Math.min(vMin, V); vMax = Math.max(vMax, V);
+                }
+
+                // Mark door/window cells as blocked
+                for (let i = 0; i < points.length; i++) {
+                    if (deletedIndices.has(i) || (labels[i] !== 7 && labels[i] !== 8)) continue;
+                    const p = points[i];
+                    const dx = p.x - cx, dz = p.z - cz;
+                    const pBin = ((Math.floor((Math.atan2(dz, dx) + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                                   % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                    if (Math.abs(pBin - bin) > 2) continue;
+                    const U = Math.round(((p.x - wx) * tanX + (p.z - wz) * tanZ) / GRID);
+                    const V = Math.round(p.y / GRID);
+                    wg.set(`${U},${V}`, {c: null, real: true, blocked: true});
+                }
+
+                bfsFill(wg, uMin, uMax, vMin, vMax);
+
+                // Back-project synthetic wall points to 3D
+                for (const [k, v] of wg) {
+                    if (!v.real && v.c) {
+                        const [U, V] = k.split(',').map(Number);
+                        points.push({
+                            x: wx + U * GRID * tanX,
+                            y: V  * GRID,
+                            z: wz + U * GRID * tanZ
+                        });
+                        normals.push({x: cosT, y: 0, z: sinT});
+                        labels.push(2);
+                        rgbColors.push(v.c);
+                        totalAdded++;
+                    }
+                }
+
+                await new Promise(r => setTimeout(r, 0));
+            }
+
+            rebuildPointCloud();
+            updateStats();
+            btn.disabled = false;
+            statusEl.textContent = `Filled ${totalAdded.toLocaleString()} surface holes (floor + ceiling + walls)`;
         }
 
         // ── Door / Window detection ────────────────────────────────────────────
