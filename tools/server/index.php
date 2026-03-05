@@ -99,6 +99,19 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
         <span class="section-sub">Click a scan to open it in the labeler</span>
     </div>
 
+    <?php if (!empty($scans)): ?>
+    <div style="display:flex;gap:10px;margin-bottom:14px;align-items:center">
+        <button onclick="toggleSelectAll()" id="btn-select-all"
+                style="padding:6px 14px;background:#2a2a3a;border:1px solid #444;color:#ccc;border-radius:8px;cursor:pointer;font-size:13px">
+            ☑ Select All
+        </button>
+        <button onclick="deleteSelected()" id="btn-delete-selected"
+                style="padding:6px 14px;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;border-radius:8px;cursor:pointer;font-size:13px;display:none">
+            🗑 Delete Selected (<span id="selected-count">0</span>)
+        </button>
+    </div>
+    <?php endif; ?>
+
     <?php if (empty($scans)): ?>
     <div class="empty-state">
         <div class="empty-icon">📡</div>
@@ -116,7 +129,10 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
             $scanNum   = basename($filename, '.json');
             $age       = $ts > 0 ? human_time($ts) : '';
         ?>
-        <div class="scan-card">
+        <div class="scan-card" data-filename="<?= $filename ?>" style="position:relative">
+            <label style="position:absolute;top:8px;left:8px;display:none" class="scan-checkbox-wrap">
+                <input type="checkbox" class="scan-checkbox" value="<?= $filename ?>" onchange="updateSelection()">
+            </label>
             <div class="scan-card-header">
                 <div class="scan-icon">
                     <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -146,7 +162,7 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
             <?php endif; ?>
 
             <div class="scan-actions">
-                <a href="PointCloudLabeler.html?v=1.8&scan=<?= $filename ?>" class="btn-view">
+                <a href="PointCloudLabeler.html?v=2.0&scan=<?= $filename ?>" class="btn-view">
                     Open in Labeler
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
@@ -171,6 +187,56 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
 </footer>
 
 <script>
+let selectMode = false;
+
+function toggleSelectAll() {
+    selectMode = !selectMode;
+    document.querySelectorAll('.scan-checkbox-wrap').forEach(el => {
+        el.style.display = selectMode ? '' : 'none';
+    });
+    document.querySelectorAll('.scan-checkbox').forEach(cb => {
+        cb.checked = selectMode;
+    });
+    document.getElementById('btn-select-all').textContent = selectMode ? '✕ Cancel' : '☑ Select All';
+    updateSelection();
+}
+
+function updateSelection() {
+    const checked = document.querySelectorAll('.scan-checkbox:checked');
+    const btn = document.getElementById('btn-delete-selected');
+    document.getElementById('selected-count').textContent = checked.length;
+    btn.style.display = checked.length > 0 ? '' : 'none';
+}
+
+async function deleteSelected() {
+    const checked = [...document.querySelectorAll('.scan-checkbox:checked')];
+    if (!checked.length) return;
+    if (!confirm(`Delete ${checked.length} scan(s)? This cannot be undone.`)) return;
+
+    const btn = document.getElementById('btn-delete-selected');
+    btn.disabled = true;
+
+    for (const cb of checked) {
+        const filename = cb.value;
+        try {
+            const r = await fetch('api/scans.php', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({action:'delete', filename})
+            });
+            const d = await r.json();
+            if (d.success) cb.closest('.scan-card').remove();
+            else alert('Delete failed for ' + filename + ': ' + (d.error || 'Unknown error'));
+        } catch (e) { alert('Connection error deleting ' + filename + ': ' + e.message); }
+    }
+
+    btn.disabled = false;
+    updateSelection();
+    if (!document.querySelectorAll('.scan-card').length) {
+        document.querySelector('.scan-grid')?.remove();
+    }
+}
+
 function toggleUserMenu() {
     document.getElementById('userDropdown').classList.toggle('open');
 }

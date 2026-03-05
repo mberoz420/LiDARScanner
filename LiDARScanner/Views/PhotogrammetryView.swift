@@ -592,6 +592,8 @@ struct PhotogrammetryView: View {
                     Text("\(capturedCount) photos").fontWeight(.semibold).foregroundColor(.white)
                     Text("/ \(meshManager.autoCapture.depthCount)d")
                         .font(.caption).foregroundColor(meshManager.autoCapture.depthCount > 0 ? .cyan : .orange)
+                    Text("/ \(meshManager.vertexCount)v")
+                        .font(.caption).foregroundColor(meshManager.vertexCount > 0 ? .green : .red)
                 }
 
                 Text(qualityInfo.label).font(.caption).foregroundColor(qualityInfo.color)

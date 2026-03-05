@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiDAR Point Cloud Labeler v1.8</title>
+    <title>LiDAR Point Cloud Labeler v2.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -422,7 +422,7 @@
             </div>
         </div>
         <div id="sidebar">
-            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v1.8</span></h1>
+            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v2.0</span></h1>
 
             <div id="dropzone" onclick="document.getElementById('file-input').click()">
                 <p>Drop JSON file here</p>
@@ -2567,6 +2567,31 @@
         }
 
         // ── Auto-load from ?photos=SESSION_ID URL param ───────────────────────
+        // ── Height-based classification for depth-only points (no normals) ──────
+        // Used when there's no LiDAR mesh to provide normals for smartAutoClassify.
+        function classifyByHeight() {
+            if (!points.length) return;
+            const ys = points.map(p => p.y).sort((a, b) => a - b);
+            const floorY   = ys[Math.floor(ys.length * 0.05)];  // 5th percentile
+            const ceilingY = ys[Math.floor(ys.length * 0.95)];  // 95th percentile
+            const range    = ceilingY - floorY;
+            if (range < 0.3) return;  // degenerate, skip
+
+            const FLOOR_ZONE   = floorY   + range * 0.12;
+            const CEILING_ZONE = ceilingY - range * 0.12;
+
+            let classified = 0;
+            for (let i = 0; i < points.length; i++) {
+                const y = points[i].y;
+                if      (y <= FLOOR_ZONE)   { labels[i] = 0; classified++; }
+                else if (y >= CEILING_ZONE) { labels[i] = 1; classified++; }
+                else                        { labels[i] = 2; classified++; }  // wall/object — walls dominate mid-range
+            }
+            rebuildPointCloud();
+            document.getElementById('selection-info').textContent +=
+                ` | Height-classified ${classified.toLocaleString()} pts`;
+        }
+
         // ── Door / Window detection ────────────────────────────────────────────
 
         // Option A: depth-map hole detection
@@ -2851,19 +2876,30 @@
                         loadJSON(pcData);
 
                         if (depthSizes.length) {
-                            // Combined mode: classify LiDAR mesh in browser, then transfer labels to dense depth geometry
-                            smartAutoClassify(true);  // normal-direction analysis on raw LiDAR geometry
+                            // Combined mode: LiDAR gives labels+structure, depth maps give color+density
+                            smartAutoClassify(true);  // classify LiDAR mesh by normals
                             const lidarPts  = points.slice();
                             const lidarLbls = labels.slice();
+                            const lidarNrms = normals.slice();
+                            const lidarCols = rgbColors.slice();
                             const lidarGrid = buildLidarGrid(lidarPts, lidarLbls, 0.15);
+                            // Reconstruct dense colored points from depth maps (clears arrays internally)
                             await reconstructFromDepths(
                                 sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
+                            // Transfer LiDAR labels to depth points
                             applyLidarLabels(lidarPts, lidarLbls, lidarGrid);
+                            // Re-add LiDAR points so full room boundaries stay visible
+                            for (let i = 0; i < lidarPts.length; i++) {
+                                points.push(lidarPts[i]);
+                                normals.push(lidarNrms[i]);
+                                labels.push(lidarLbls[i]);
+                                rgbColors.push(lidarCols[i] || {r:.5,g:.5,b:.5});
+                            }
                             colorMode = 'label';
                             document.getElementById('color-mode').value = 'label';
                             rebuildPointCloud();
                             document.getElementById('selection-info').textContent =
-                                `Combined: ${points.length.toLocaleString()} depth pts labeled from ${lidarPts.length.toLocaleString()} LiDAR pts`;
+                                `Combined: ${lidarPts.length.toLocaleString()} LiDAR + ${(points.length - lidarPts.length).toLocaleString()} depth pts`;
                             return;
                         }
 
@@ -2875,10 +2911,11 @@
                     }
                 } catch (_) { /* point cloud optional */ }
 
-                // 4. No LiDAR mesh — reconstruct from per-frame depth maps (Photo Only mode)
+                // 4. No LiDAR mesh — reconstruct from depth maps + height-classify
                 if (depthSizes.length) {
                     await reconstructFromDepths(
                         sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
+                    classifyByHeight();
                     return;
                 }
 
@@ -2945,18 +2982,27 @@
                             loadJSON(pcData);
 
                             if (depthSizes.length) {
-                                // Combined mode: depth maps give dense geometry, LiDAR gives labels
+                                // Combined mode: LiDAR gives labels+structure, depth maps give color+density
+                                smartAutoClassify(true);
                                 const lidarPts  = points.slice();
                                 const lidarLbls = labels.slice();
+                                const lidarNrms = normals.slice();
+                                const lidarCols = rgbColors.slice();
                                 const lidarGrid = buildLidarGrid(lidarPts, lidarLbls, 0.15);
                                 await reconstructFromDepths(
                                     scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
                                 applyLidarLabels(lidarPts, lidarLbls, lidarGrid);
+                                for (let i = 0; i < lidarPts.length; i++) {
+                                    points.push(lidarPts[i]);
+                                    normals.push(lidarNrms[i]);
+                                    labels.push(lidarLbls[i]);
+                                    rgbColors.push(lidarCols[i] || {r:.5,g:.5,b:.5});
+                                }
                                 colorMode = 'label';
                                 document.getElementById('color-mode').value = 'label';
                                 rebuildPointCloud();
                                 document.getElementById('selection-info').textContent =
-                                    `Combined: ${points.length.toLocaleString()} depth pts labeled from ${lidarPts.length.toLocaleString()} LiDAR pts`;
+                                    `Combined: ${lidarPts.length.toLocaleString()} LiDAR + ${(points.length - lidarPts.length).toLocaleString()} depth pts`;
                                 return;
                             }
 
@@ -2968,10 +3014,11 @@
                         }
                     } catch (e) { console.log(`[Load] pointcloud error: ${e.message}`); }
 
-                    // No LiDAR mesh — reconstruct from depth maps (Photo Only mode)
+                    // No LiDAR mesh — reconstruct from depth maps + height-classify
                     if (depthSizes.length) {
                         await reconstructFromDepths(
                             scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
+                        classifyByHeight();
                         return;
                     }
 
