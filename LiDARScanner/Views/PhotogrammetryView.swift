@@ -656,15 +656,20 @@ struct PhotogrammetryView: View {
         VStack(spacing: 12) {
             if captureMode != nil && !isCapturing {
                 // ── Mode selected, not yet capturing — show Start ──────────────
-                Picker("Quality", selection: $preset) {
-                    ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
+                if captureMode != .lidarOnly {
+                    Picker("Quality", selection: $preset) {
+                        ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
+                    }
+                    .pickerStyle(.segmented).padding(.horizontal)
+                    .background(Color.black.opacity(0.01)).colorScheme(.dark)
                 }
-                .pickerStyle(.segmented).padding(.horizontal)
-                .background(Color.black.opacity(0.01)).colorScheme(.dark)
 
                 if captureMode == .cube {
                     Text("Aim at your object, then tap Start")
                         .font(.caption).foregroundColor(.yellow.opacity(0.9))
+                } else if captureMode == .lidarOnly {
+                    Text("Walk around the room to build the LiDAR mesh")
+                        .font(.caption).foregroundColor(.purple.opacity(0.9))
                 } else if captureMode == .photoOnly {
                     // Box toggle for Photo Only mode
                     Button(action: {
@@ -694,70 +699,89 @@ struct PhotogrammetryView: View {
                 }
 
                 Button(action: startCapture) {
-                    Label("Start Capture", systemImage: "record.circle.fill")
+                    Label(captureMode == .lidarOnly ? "Start Scan" : "Start Capture",
+                          systemImage: captureMode == .lidarOnly ? "play.fill" : "record.circle.fill")
                         .font(.headline).foregroundColor(.white)
                         .padding(.horizontal, 44).padding(.vertical, 16)
-                        .background(Color.green).cornerRadius(16)
+                        .background(captureMode == .lidarOnly ? Color.purple : Color.green)
+                        .cornerRadius(16)
                 }
 
             } else if isCapturing {
                 // ── Actively capturing ────────────────────────────────────────
-                Picker("Quality", selection: $preset) {
-                    ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
-                }
-                .pickerStyle(.segmented).padding(.horizontal)
-                .background(Color.black.opacity(0.01)).colorScheme(.dark)
-
-                if let target = effectiveTarget {
-                    Text("Target: \(target) photos  •  min \(preset.minToProcess) to start")
-                        .font(.caption2).foregroundColor(.white.opacity(0.7))
-                } else {
-                    Text("Free — min \(preset.minToProcess) photos to build")
-                        .font(.caption2).foregroundColor(.white.opacity(0.7))
-                }
-
-                HStack(spacing: 24) {
-                    // Thumbnail
-                    Group {
-                        if let thumb = lastThumbnail {
-                            Image(uiImage: thumb)
-                                .resizable().scaledToFill()
-                                .frame(width: 52, height: 52)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.4), lineWidth: 1))
-                        } else {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.1)).frame(width: 52, height: 52)
-                        }
-                    }
-
-                    // Shutter — manual capture
-                    Button(action: capturePhoto) {
-                        ZStack {
-                            Circle().fill(Color.white).frame(width: 72, height: 72)
-                            Circle().stroke(Color.white.opacity(0.4), lineWidth: 3)
-                                .frame(width: 84, height: 84)
-                        }
-                    }
-
-                    // Stop & Upload
+                if captureMode == .lidarOnly {
+                    // LiDAR-only — no photo UI, just stop button
                     Button(action: stopAndUpload) {
                         VStack(spacing: 5) {
                             ZStack {
-                                Circle()
-                                    .fill(canStopScan ? Color.orange : Color.white.opacity(0.2))
-                                    .frame(width: 52, height: 52)
+                                Circle().fill(Color.orange).frame(width: 72, height: 72)
                                 Image(systemName: "stop.fill")
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(canStopScan ? .white : .white.opacity(0.4))
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(.white)
                             }
                             Text("Stop & Send")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(canStopScan ? .orange : .white.opacity(0.5))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.orange)
                         }
                     }
-                    .disabled(!canStopScan)
+                } else {
+                    Picker("Quality", selection: $preset) {
+                        ForEach(PhotogrammetryPreset.allCases) { p in Text(p.rawValue).tag(p) }
+                    }
+                    .pickerStyle(.segmented).padding(.horizontal)
+                    .background(Color.black.opacity(0.01)).colorScheme(.dark)
+
+                    if let target = effectiveTarget {
+                        Text("Target: \(target) photos  •  min \(preset.minToProcess) to start")
+                            .font(.caption2).foregroundColor(.white.opacity(0.7))
+                    } else {
+                        Text("Free — min \(preset.minToProcess) photos to build")
+                            .font(.caption2).foregroundColor(.white.opacity(0.7))
+                    }
+
+                    HStack(spacing: 24) {
+                        // Thumbnail
+                        Group {
+                            if let thumb = lastThumbnail {
+                                Image(uiImage: thumb)
+                                    .resizable().scaledToFill()
+                                    .frame(width: 52, height: 52)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay(RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.white.opacity(0.4), lineWidth: 1))
+                            } else {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.1)).frame(width: 52, height: 52)
+                            }
+                        }
+
+                        // Shutter — manual capture
+                        Button(action: capturePhoto) {
+                            ZStack {
+                                Circle().fill(Color.white).frame(width: 72, height: 72)
+                                Circle().stroke(Color.white.opacity(0.4), lineWidth: 3)
+                                    .frame(width: 84, height: 84)
+                            }
+                        }
+
+                        // Stop & Upload
+                        Button(action: stopAndUpload) {
+                            VStack(spacing: 5) {
+                                ZStack {
+                                    Circle()
+                                        .fill(canStopScan ? Color.orange : Color.white.opacity(0.2))
+                                        .frame(width: 52, height: 52)
+                                    Image(systemName: "stop.fill")
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundColor(canStopScan ? .white : .white.opacity(0.4))
+                                }
+                                Text("Stop & Send")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(canStopScan ? .orange : .white.opacity(0.5))
+                            }
+                        }
+                        .disabled(!canStopScan)
+                    }
                 }
             }
         }
