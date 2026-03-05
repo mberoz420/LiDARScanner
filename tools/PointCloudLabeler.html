@@ -2851,6 +2851,58 @@
                 labels[i] = 3; nObj++;
             }
 
+            // ── Pass 3: extend walls from floor to ceiling ────────────────────
+            // The wall boundary is a complete plane from floorY to ceilingY.
+            // Add synthetic fill points for any (azimuth, Y) slot that has no
+            // real wall point — this fills gaps where furniture hides the wall.
+            if (floorY !== null && ceilingY !== null) {
+                const FILL_ANG  = 2;     // every 2° azimuth
+                const FILL_Y    = 0.05;  // 5 cm vertical step
+                const FILL_RAD  = 0.20;  // don't fill if real wall point within 20 cm
+
+                // Spatial hash of existing wall points
+                const CELL = 0.20;
+                const wallHash = new Set();
+                for (let i = 0; i < points.length; i++) {
+                    if (labels[i] !== 2) continue;
+                    const p = points[i];
+                    wallHash.add(`${Math.round(p.x/CELL)},${Math.round(p.y/CELL)},${Math.round(p.z/CELL)}`);
+                }
+
+                let nFill = 0;
+                for (let a = 0; a < 360; a += FILL_ANG) {
+                    const wb = boundary[a];
+                    if (wb <= 0) continue;
+                    const θ   = (a - 180) * Math.PI / 180;
+                    const wx  = cx + wb * Math.cos(θ);
+                    const wz  = cz + wb * Math.sin(θ);
+                    const nx  = -Math.cos(θ), nz = -Math.sin(θ);  // inward normal
+
+                    for (let y = floorY; y <= ceilingY + 0.01; y += FILL_Y) {
+                        const ky = `${Math.round(wx/CELL)},${Math.round(y/CELL)},${Math.round(wz/CELL)}`;
+                        // Check ±1 cell in each axis
+                        let near = false;
+                        outer: for (let da = -1; da <= 1; da++)
+                            for (let db = -1; db <= 1; db++)
+                                for (let dc = -1; dc <= 1; dc++) {
+                                    if (wallHash.has(`${Math.round(wx/CELL)+da},${Math.round(y/CELL)+db},${Math.round(wz/CELL)+dc}`)) {
+                                        near = true; break outer;
+                                    }
+                                }
+                        if (!near) {
+                            points.push({x: wx, y, z: wz});
+                            labels.push(2);
+                            normals.push({x: nx, y: 0, z: nz});
+                            rgbColors.push({r: 0.65, g: 0.65, b: 0.70});
+                            wallHash.add(ky);
+                            nFill++;
+                        }
+                    }
+                }
+                nWall += nFill;
+                console.log(`[classify] filled ${nFill} synthetic wall points`);
+            }
+
             console.log(`[classify] floor=${floorY?.toFixed(2)} ceiling=${ceilingY?.toFixed(2)}`);
             console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} obj:${nObj}`);
 
