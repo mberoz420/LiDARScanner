@@ -2954,20 +2954,18 @@
             if (skippedPlanes > 0)
                 console.log(`[RoomPlanes] Skipped ${skippedPlanes} out-of-bounds planes (adjacent room)`);
 
-            // ── Outlier clip: remove far-away planes (yard fence, exterior walls seen
-            // through windows). Room walls cluster at similar distances; outdoor
-            // surfaces are typically 2× or more farther. Use same P75 × 1.8 clip
-            // that's applied to the scan-point boundary.
+            // ── Outlier clip: remove far-away planes (adjacent rooms, closets, yard)
+            // P50 × 1.5 — same logic as the scan-point outlier clip.
             {
                 const jVals = Array.from(junctionBoundary).filter(v => v > 0).sort((a, b) => a - b);
                 if (jVals.length > 0) {
-                    const p75  = jVals[Math.floor(jVals.length * 0.75)];
-                    const CLIP = p75 * 1.8;
+                    const p50  = jVals[Math.floor(jVals.length * 0.50)];
+                    const CLIP = p50 * 1.5;
                     let clipped = 0;
                     for (let b = 0; b < ABINS; b++) {
                         if (junctionBoundary[b] > CLIP) { junctionBoundary[b] = 0; clipped++; }
                     }
-                    if (clipped > 0) console.log(`[RoomPlanes] Clipped ${clipped} outdoor-plane bins (>${CLIP.toFixed(1)}m)`);
+                    if (clipped > 0) console.log(`[RoomPlanes] Clipped ${clipped} out-of-range bins (>${CLIP.toFixed(1)}m)`);
                 }
             }
 
@@ -3093,17 +3091,18 @@
             }
 
             // ── Outlier clip: zero out bins that see through doorways/openings ──
-            // Directions into adjacent rooms have boundary distances much larger
-            // than the surrounding walls. Clip them before they infect gap-fill
-            // and median. Use 75th-percentile × 1.8 as the cut-off — safe for
-            // rooms up to ~1.5:1 aspect ratio; adjust if scans are very elongated.
+            // Adjacent rooms / closets appear as bins much farther than the real walls.
+            // P50 (median) × 1.5 is a tight cut: for a room with walls at 2m the median
+            // is ~2m and clip is 3m, safely above the 2.83m diagonal of a square room.
+            // Even if a closet inflates a few bins to 4m those stay below P50 (since they
+            // are a minority) and get zeroed, preventing them from inflating gap-fill.
             {
                 const rawVals = [];
                 for (let b = 0; b < ABINS; b++) if (rawBoundary[b] > 0) rawVals.push(rawBoundary[b]);
                 if (rawVals.length > 0) {
                     rawVals.sort((a, b) => a - b);
-                    const p75 = rawVals[Math.floor(rawVals.length * 0.75)];
-                    const CLIP = p75 * 1.8;
+                    const p50  = rawVals[Math.floor(rawVals.length * 0.50)];
+                    const CLIP = p50 * 1.5;
                     for (let b = 0; b < ABINS; b++) if (rawBoundary[b] > CLIP) rawBoundary[b] = 0;
                 }
             }
@@ -3148,40 +3147,13 @@
                 for (let b = 0; b < ABINS; b++) if (filled[b] === 0) filled[b] = median;
             }
 
-            // ── Wall plane corner enforcement ─────────────────────────────────────
-            // A flat wall at neighbor bin b_n with real boundary r_n predicts:
-            //   r(b) = r_n / cos(b - b_n)
-            // Raise corner bins to the max prediction from nearby REAL wall bins.
-            // CRITICAL: use boundary[] (real scan data only), NOT filled[] which
-            // includes gap-fill and median fallback values — those would balloon
-            // the boundary to 2× the median in directions with no scan coverage.
-            // Note: wallPlane is used ONLY for Pass 3 (synthetic shell generation).
-            //       Pass 2 (scan point classification) continues using filled[] with
-            //       the tight WALL_TOL so object scan points are not mislabeled.
-            const PLANE_SPAN = 30;  // look up to 30° each side — covers corner zone without crossing doorways
-            const wallPlane = filled.slice();  // start from gap-filled values
-            for (let b = 0; b < ABINS; b++) {
-                const capDist = filled[b] * 1.3;  // cap relative to THIS bin's gap-filled value
-                // An outlier source bin (adjacent room at 4 m) would predict 4/cos(30°)=4.6 m
-                // for a bin whose gap-filled value is 2 m → cap = 2.6 m → prediction rejected.
-                // A normal corner prediction (2/cos(30°)=2.31 m) from a 2 m neighbor passes fine.
-                let maxPred = wallPlane[b];
-                for (let off = 1; off <= PLANE_SPAN; off++) {
-                    const cosOff = Math.cos(off * Math.PI / 180);
-                    const lb = (b - off + ABINS) % ABINS;
-                    const rb = (b + off) % ABINS;
-                    // Only use bins with confirmed real scan data (boundary[], not fallback)
-                    if (boundary[lb] > 0) {
-                        const pred = boundary[lb] / cosOff;
-                        if (pred > maxPred && pred < capDist) maxPred = pred;
-                    }
-                    if (boundary[rb] > 0) {
-                        const pred = boundary[rb] / cosOff;
-                        if (pred > maxPred && pred < capDist) maxPred = pred;
-                    }
-                }
-                wallPlane[b] = maxPred;
-            }
+            // wallPlane = gap-filled boundary used for Pass 3 shell and outline.
+            // No cosine corner-enforcement — that formula caused phantom walls far
+            // outside the room whenever any bin had a large value (adjacent room,
+            // closet, outdoor surface). Simple gap-fill is safe: missing corner bins
+            // get the interpolated value of their real-wall neighbors, which is
+            // slightly inside the true corner but never outside the room.
+            const wallPlane = filled.slice();
 
             // Floor / ceiling
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
