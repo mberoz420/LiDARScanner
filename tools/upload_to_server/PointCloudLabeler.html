@@ -2590,8 +2590,35 @@
         // The room boundary surfaces ARE the farthest dense planes in every direction:
         //   Floor   = farthest dense peak at the lowest Y
         //   Ceiling = farthest dense peak at the highest Y
-        //   Walls   = farthest dense peak in each horizontal angular direction from centroid
+        //   Walls   = dominant (most populated) peak per angular sector — NOT the absolute
+        //             farthest, because doors/windows let rays go BEYOND the wall plane.
         // Everything closer to the room center = object.
+        //
+        // dominantWallPeak: finds the bin with the highest count, ignoring near clutter
+        // (first 20 % of the range). Door/window exterior returns are sparse and lose
+        // to the dense wall surface.
+        function dominantWallPeak(values, binSize) {
+            if (!values.length) return null;
+            const lo = Math.min(...values), hi = Math.max(...values);
+            const range = hi - lo;
+            if (range < binSize) return hi;
+
+            const nearCutoff = lo + range * 0.20;  // skip very near clutter
+
+            const bins = {};
+            values.forEach(v => {
+                if (v < nearCutoff) return;
+                const key = Math.round(v / binSize) * binSize;
+                bins[key] = (bins[key] ?? 0) + 1;
+            });
+
+            let bestBin = null, bestCount = 0;
+            Object.entries(bins).forEach(([key, cnt]) => {
+                if (cnt > bestCount) { bestCount = cnt; bestBin = parseFloat(key); }
+            });
+            return bestBin ?? hi;
+        }
+
         function classifyByFarthestPlanes() {
             if (!points.length) return;
 
@@ -2625,9 +2652,13 @@
             const floorY   = farthestDensePeak(yVals, Y_BIN, true);   // lowest dense
             const ceilingY = farthestDensePeak(yVals, Y_BIN, false);  // highest dense
 
-            // ── Farthest dense wall plane per angular bin ─────────────────────
+            // ── Dominant wall plane per angular bin ───────────────────────────
+            // Use dominantWallPeak (mode beyond clutter), NOT farthestDensePeak.
+            // Reason: doors/windows let depth rays go farther than the wall, so the
+            // absolute-farthest peak in those sectors is the exterior — not the wall.
+            // The wall surface has far more returns and wins the density contest.
             const wallDist = projsByBin.map(dists =>
-                dists.length >= 5 ? farthestDensePeak(dists, DIST_BIN, false) : null
+                dists.length >= 5 ? dominantWallPeak(dists, DIST_BIN) : null
             );
 
             // ── Classify every point ──────────────────────────────────────────
