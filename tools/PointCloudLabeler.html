@@ -2991,6 +2991,64 @@
                 console.log(`[classify] filled ${nFill} synthetic wall/coving points`);
             }
 
+            // ── Pass 4: fill floor and ceiling to close the room ─────────────────
+            // Generate a complete horizontal plane at floorY and ceilingY, covering
+            // the full room polygon. "Inside" is defined per azimuth bin: a grid
+            // point is inside if its horizontal distance from the centroid is less
+            // than boundary[bin] at that angle. This works for any room shape.
+            if (floorY !== null && ceilingY !== null) {
+                const POLY_GRID = 0.08;  // 8 cm horizontal step
+                const CELL_H    = 0.08;  // dedup cell matches grid
+
+                // Max boundary extent
+                let maxBound = 0;
+                for (let b = 0; b < ABINS; b++) if (boundary[b] > maxBound) maxBound = boundary[b];
+                maxBound += 0.15;
+
+                // Hash existing real floor / ceiling points so we don't duplicate
+                const floorHashH = new Set(), ceilHashH = new Set();
+                for (let i = 0; i < points.length; i++) {
+                    if (deletedIndices.has(i)) continue;
+                    const hk = `${Math.round(points[i].x/CELL_H)},${Math.round(points[i].z/CELL_H)}`;
+                    if (labels[i] === 0) floorHashH.add(hk);
+                    if (labels[i] === 1) ceilHashH.add(hk);
+                }
+
+                let nFloorFill = 0, nCeilFill = 0;
+                for (let gx = cx - maxBound; gx <= cx + maxBound; gx += POLY_GRID) {
+                    for (let gz = cz - maxBound; gz <= cz + maxBound; gz += POLY_GRID) {
+                        // Is this point inside the room polygon?
+                        const dx = gx - cx, dz = gz - cz;
+                        const hd = Math.sqrt(dx*dx + dz*dz);
+                        const ang = Math.atan2(dz, dx);
+                        const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
+                        if (boundary[bin] <= 0 || hd >= boundary[bin]) continue;
+
+                        const hk = `${Math.round(gx/CELL_H)},${Math.round(gz/CELL_H)}`;
+
+                        if (!floorHashH.has(hk)) {
+                            points.push({x: gx, y: floorY, z: gz});
+                            labels.push(0);
+                            normals.push({x: 0, y: 1, z: 0});
+                            rgbColors.push({r: 0.18, g: 0.80, b: 0.44});
+                            floorHashH.add(hk);
+                            nFloorFill++;
+                        }
+                        if (!ceilHashH.has(hk)) {
+                            points.push({x: gx, y: ceilingY, z: gz});
+                            labels.push(1);
+                            normals.push({x: 0, y: -1, z: 0});
+                            rgbColors.push({r: 0.95, g: 0.77, b: 0.06});
+                            ceilHashH.add(hk);
+                            nCeilFill++;
+                        }
+                    }
+                }
+                nFloor += nFloorFill;
+                nCeil  += nCeilFill;
+                console.log(`[classify] floor fill: ${nFloorFill}, ceiling fill: ${nCeilFill}`);
+            }
+
             console.log(`[classify] floor=${floorY?.toFixed(2)} ceiling=${ceilingY?.toFixed(2)}`);
             console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} cov:${nCov} obj:${nObj}`);
 
