@@ -2800,12 +2800,26 @@
             cx /= points.length; cz /= points.length;
 
             // ── Pass 1: collect hd values per 1° azimuth bin ─────────────────
-            // Use farthestDensePeak per bin — NOT raw max.
-            // The wall has hundreds of points at the same distance (dense cluster).
-            // A bottle / light switch / pipe has 3-10 points — not dense enough
-            // to win the peak, so it doesn't inflate the wall boundary.
-            const hdPerBin = Array.from({length: ABINS}, () => []);
+            // KEY INSIGHT: detect the wall boundary using UPPER-ROOM points only
+            // (top 30% of room height). Appliances — coffee makers, fridges,
+            // cabinets — are shorter than the ceiling, so the bare wall IS visible
+            // above them in every direction. A true alcove or room corner spans
+            // the full height and is also correctly detected in the upper zone.
+            // Only if a bin has <5 upper-zone points does it fall back to all heights.
+            const hdPerBin      = Array.from({length: ABINS}, () => []);  // all heights
+            const hdPerBinUpper = Array.from({length: ABINS}, () => []);  // upper zone
             const allY = [];
+
+            // Quick floor/ceiling for the height cut — one pass over points
+            let qFloor = Infinity, qCeil = -Infinity;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i) || labels[i] === 7 || labels[i] === 8) continue;
+                const y = points[i].y;
+                if (y < qFloor) qFloor = y;
+                if (y > qCeil)  qCeil  = y;
+            }
+            // Upper zone = top 30% of room (above most appliances)
+            const upperCutY = qFloor + 0.70 * (qCeil - qFloor);
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
@@ -2817,18 +2831,17 @@
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                 hdPerBin[bin].push(hd);
                 allY.push(p.y);
+                if (p.y >= upperCutY) hdPerBinUpper[bin].push(hd);
             }
 
-            // Dense farthest cluster per bin = raw wall distance estimate.
-            // farZonePct=0.20: use 80th-percentile as the threshold so that
-            // ceiling coving (typically <15% of points per bin, protruding slightly
-            // beyond the wall) does NOT win over the dominant wall surface.
-            // The continuity filter below still removes furniture clusters.
+            // Dense farthest cluster per bin — prefer upper-zone data (immune to
+            // appliances). Fall back to all-heights if upper zone is sparse (<5 pts).
             const PROJ_BIN = 0.10;
             const rawBoundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
-                if (hdPerBin[b].length >= 5) {
-                    rawBoundary[b] = farthestDensePeak(hdPerBin[b], PROJ_BIN, false, 0.20) ?? 0;
+                const src = hdPerBinUpper[b].length >= 5 ? hdPerBinUpper[b] : hdPerBin[b];
+                if (src.length >= 5) {
+                    rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
                 }
             }
 
