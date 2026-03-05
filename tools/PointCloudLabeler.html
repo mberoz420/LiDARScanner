@@ -2911,6 +2911,37 @@
                 for (let b = 0; b < ABINS; b++) if (filled[b] === 0) filled[b] = median;
             }
 
+            // ── Wall plane corner enforcement ─────────────────────────────────────
+            // A flat wall at neighbor bin b_n with boundary r_n predicts:
+            //   r(b) = r_n / cos(b - b_n)
+            // Raise corner bins to the max prediction from nearby wall bins.
+            // This reconstructs correct ~90° corners even when the corner itself
+            // was occluded or blocked by furniture during scanning.
+            // Note: wallPlane is used ONLY for Pass 3 (synthetic shell generation).
+            //       Pass 2 (scan point classification) continues using filled[] with
+            //       the tight WALL_TOL so object scan points are not mislabeled.
+            const PLANE_SPAN = 30;  // look up to 30° each side — covers corner zone without crossing doorways
+            const wallPlane = new Float32Array(ABINS);
+            for (let b = 0; b < ABINS; b++) {
+                let maxPred = filled[b];
+                for (let off = 1; off <= PLANE_SPAN; off++) {
+                    const cosOff = Math.cos(off * Math.PI / 180);
+                    if (cosOff < 0.02) break;
+                    const lb = (b - off + ABINS) % ABINS;
+                    const rb = (b + off) % ABINS;
+                    if (filled[lb] > 0) {
+                        const pred = filled[lb] / cosOff;
+                        // Cap at 2× to avoid extreme predictions across wide openings
+                        if (pred > maxPred && pred < filled[lb] * 2.0) maxPred = pred;
+                    }
+                    if (filled[rb] > 0) {
+                        const pred = filled[rb] / cosOff;
+                        if (pred > maxPred && pred < filled[rb] * 2.0) maxPred = pred;
+                    }
+                }
+                wallPlane[b] = maxPred;
+            }
+
             // Floor / ceiling
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
             const ceilingY = farthestDensePeak(allY, Y_BIN, false);
@@ -3008,7 +3039,7 @@
                 let nFill = 0;
 
                 for (let a = 0; a < 360; a += FILL_ANG) {
-                    const wb = filled[a];
+                    const wb = wallPlane[a];  // wall-plane-enforced boundary for correct 90° corners
                     if (wb <= 0) continue;
                     const θ  = a * Math.PI / 180;
                     const wx = cx + wb * Math.cos(θ);
