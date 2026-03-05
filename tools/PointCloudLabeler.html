@@ -700,6 +700,7 @@
         let currentViewMode = 'perspective';  // 'perspective' | 'ortho'
         let meshFaces = null;               // [[i0,i1,i2], ...] from pointcloud.json
         let scanRoomPlanes = null;          // ARKit plane anchors from room_planes[] in scan JSON
+        let roomOutlineGroup = null;        // THREE.Group for floor/ceiling outline lines
 
         // Custom labels (start from index 10 to avoid conflicts)
         let customLabels = [];
@@ -2812,6 +2813,51 @@
             return bestBin ?? hi;
         }
 
+        // ── Room outline lines ────────────────────────────────────────────────
+        // Draws solid red line at ceiling and blue line at floor using the
+        // boundary array. Uses boundary[] (real data only) so gaps in the scan
+        // appear as actual breaks in the line — no phantom segments.
+        function drawRoomOutline(cx, cz, boundaryArr, floorY, ceilingY) {
+            // Remove previous outline
+            if (roomOutlineGroup) {
+                scene.remove(roomOutlineGroup);
+                roomOutlineGroup.children.forEach(o => {
+                    o.geometry?.dispose();
+                    o.material?.dispose();
+                });
+                roomOutlineGroup = null;
+            }
+            if (!boundaryArr || floorY === null || ceilingY === null) return;
+
+            roomOutlineGroup = new THREE.Group();
+
+            // Build segments — break the line whenever boundary is 0 (no data)
+            const matCeil  = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 });
+            const matFloor = new THREE.LineBasicMaterial({ color: 0x44aaff, linewidth: 2 });
+
+            let ceilSeg = [], floorSeg = [];
+            const flush = () => {
+                if (ceilSeg.length  >= 2) roomOutlineGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(ceilSeg),  matCeil));
+                if (floorSeg.length >= 2) roomOutlineGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(floorSeg), matFloor));
+                ceilSeg = []; floorSeg = [];
+            };
+
+            const ABINS = 360;
+            // Go around 361° so the last segment closes back to 0°
+            for (let a = 0; a <= ABINS; a++) {
+                const r = boundaryArr[a % ABINS];
+                if (r <= 0) { flush(); continue; }
+                const θ = (a % ABINS) * Math.PI / 180;
+                const x = cx + r * Math.cos(θ);
+                const z = cz + r * Math.sin(θ);
+                ceilSeg.push(new THREE.Vector3(x, ceilingY + 0.02, z));
+                floorSeg.push(new THREE.Vector3(x, floorY   - 0.02, z));
+            }
+            flush();
+
+            scene.add(roomOutlineGroup);
+        }
+
         // ── ARKit plane boundary ──────────────────────────────────────────────
         // Given room_planes[] from the scan JSON, sample the ceiling-wall junction
         // lines into 360 azimuth bins. Returns a Float32Array(360) or null.
@@ -3189,6 +3235,9 @@
 
             console.log(`[classify] floor=${floorY?.toFixed(2)} ceiling=${ceilingY?.toFixed(2)}`);
             console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} cov:${nCov} obj:${nObj}`);
+
+            // Draw solid outline at floor (blue) and ceiling (red)
+            drawRoomOutline(cx, cz, boundary, floorY, ceilingY);
 
             rebuildPointCloud();
             updateStats();
