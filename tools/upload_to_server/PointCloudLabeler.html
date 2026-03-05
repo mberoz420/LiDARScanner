@@ -2586,29 +2586,91 @@
         }
 
         // ── Auto-load from ?photos=SESSION_ID URL param ───────────────────────
-        // ── Height-based classification for depth-only points (no normals) ──────
-        // Used when there's no LiDAR mesh to provide normals for smartAutoClassify.
-        function classifyByHeight() {
+        // ── Farthest-plane classification for depth-only points (no normals) ──────
+        // The room boundary surfaces ARE the farthest dense planes in every direction:
+        //   Floor   = farthest dense peak at the lowest Y
+        //   Ceiling = farthest dense peak at the highest Y
+        //   Walls   = farthest dense peak in each horizontal angular direction from centroid
+        // Everything closer to the room center = object.
+        function classifyByFarthestPlanes() {
             if (!points.length) return;
-            const ys = points.map(p => p.y).sort((a, b) => a - b);
-            const floorY   = ys[Math.floor(ys.length * 0.05)];  // 5th percentile
-            const ceilingY = ys[Math.floor(ys.length * 0.95)];  // 95th percentile
-            const range    = ceilingY - floorY;
-            if (range < 0.3) return;  // degenerate, skip
 
-            const FLOOR_ZONE   = floorY   + range * 0.12;
-            const CEILING_ZONE = ceilingY - range * 0.12;
+            const ANGULAR_BINS = 36;          // 10° per sector
+            const DIST_BIN     = 0.15;        // 15 cm horizontal bins
+            const Y_BIN        = 0.05;        // 5 cm vertical bins
+            const WALL_TOL     = 0.30;        // 30 cm: how close to wall plane = "wall"
+            const FLOOR_TOL    = 0.20;        // 20 cm above floor plane
+            const CEIL_TOL     = 0.20;        // 20 cm below ceiling plane
 
-            let classified = 0;
+            // ── Centroid (XZ only) ────────────────────────────────────────────
+            let cx = 0, cz = 0;
+            points.forEach(p => { cx += p.x; cz += p.z; });
+            cx /= points.length;
+            cz /= points.length;
+
+            // ── Collect Y values and XZ angular projections ───────────────────
+            const yVals       = points.map(p => p.y);
+            const projsByBin  = Array.from({length: ANGULAR_BINS}, () => []);
+
+            points.forEach(p => {
+                const dx  = p.x - cx;
+                const dz  = p.z - cz;
+                const ang = Math.atan2(dz, dx);  // -π .. +π
+                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                projsByBin[bin].push(Math.sqrt(dx * dx + dz * dz));
+            });
+
+            // ── Farthest dense Y planes (floor / ceiling) ─────────────────────
+            const floorY   = farthestDensePeak(yVals, Y_BIN, true);   // lowest dense
+            const ceilingY = farthestDensePeak(yVals, Y_BIN, false);  // highest dense
+
+            // ── Farthest dense wall plane per angular bin ─────────────────────
+            const wallDist = projsByBin.map(dists =>
+                dists.length >= 5 ? farthestDensePeak(dists, DIST_BIN, false) : null
+            );
+
+            // ── Classify every point ──────────────────────────────────────────
+            let nFloor = 0, nCeil = 0, nWall = 0, nObj = 0;
             for (let i = 0; i < points.length; i++) {
-                const y = points[i].y;
-                if      (y <= FLOOR_ZONE)   { labels[i] = 0; classified++; }
-                else if (y >= CEILING_ZONE) { labels[i] = 1; classified++; }
-                else                        { labels[i] = 2; classified++; }  // wall/object — walls dominate mid-range
+                if (deletedIndices.has(i)) continue;
+                const p = points[i];
+
+                // Floor / ceiling by Y
+                if (floorY !== null && p.y <= floorY + FLOOR_TOL) {
+                    labels[i] = 0; nFloor++; continue;
+                }
+                if (ceilingY !== null && p.y >= ceilingY - CEIL_TOL) {
+                    labels[i] = 1; nCeil++; continue;
+                }
+
+                // Wall: close to the farthest plane in this angular sector
+                const dx  = p.x - cx;
+                const dz  = p.z - cz;
+                const ang = Math.atan2(dz, dx);
+                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                              % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+
+                // Check ±1 neighbouring sectors for curved / diagonal walls
+                let maxWall = -Infinity;
+                for (let off = -1; off <= 1; off++) {
+                    const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
+                    if (wallDist[nb] !== null) maxWall = Math.max(maxWall, wallDist[nb]);
+                }
+
+                if (isFinite(maxWall) && dist >= maxWall - WALL_TOL) {
+                    labels[i] = 2; nWall++;
+                } else {
+                    labels[i] = 3; nObj++;
+                }
             }
+
             rebuildPointCloud();
+            updateStats();
             document.getElementById('selection-info').textContent +=
-                ` | Height-classified ${classified.toLocaleString()} pts`;
+                ` | Planes: ${nFloor.toLocaleString()} floor, ${nCeil.toLocaleString()} ceil, ` +
+                `${nWall.toLocaleString()} wall, ${nObj.toLocaleString()} obj`;
         }
 
         // ── Door / Window detection ────────────────────────────────────────────
@@ -2946,7 +3008,7 @@
                 if (depthSizes.length) {
                     await reconstructFromDepths(
                         sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
-                    classifyByHeight();
+                    classifyByFarthestPlanes();
                     return;
                 }
 
@@ -3049,7 +3111,7 @@
                     if (depthSizes.length) {
                         await reconstructFromDepths(
                             scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
-                        classifyByHeight();
+                        classifyByFarthestPlanes();
                         return;
                     }
 
