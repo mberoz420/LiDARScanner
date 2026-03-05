@@ -20,38 +20,43 @@ class ScanServerManager: ObservableObject {
     /// Upload a local JSON file to the ScanWizard server.
     /// Returns the remote filename on success, nil on failure.
     func uploadFile(at url: URL) async -> String? {
+        do {
+            let data = try Data(contentsOf: url)
+            return await uploadScan(data: data)
+        } catch {
+            lastError = "Could not read file: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Upload raw scan JSON data (from a LiDAR mesh / point cloud) to the scan endpoint.
+    /// Returns the remote filename (e.g. "scan_1234567890_1234.json") on success, nil on failure.
+    func uploadScan(data: Data) async -> String? {
         isUploading = true
         lastError   = nil
         defer { isUploading = false }
 
+        var request = URLRequest(url: URL(string: serverURL)!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey,             forHTTPHeaderField: "X-API-Key")
+        request.httpBody = data
+        request.timeoutInterval = 120
+
         do {
-            let data = try Data(contentsOf: url)
-
-            var request = URLRequest(url: URL(string: serverURL)!)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(apiKey,             forHTTPHeaderField: "X-API-Key")
-            request.httpBody = data
-
             let (responseData, response) = try await URLSession.shared.data(for: request)
 
             guard let http = response as? HTTPURLResponse else {
-                lastError = "No HTTP response"
-                return nil
+                lastError = "No HTTP response"; return nil
             }
-
             guard http.statusCode == 200 else {
                 let body = String(data: responseData, encoding: .utf8) ?? ""
-                lastError = "Server error \(http.statusCode): \(body)"
-                return nil
+                lastError = "Server error \(http.statusCode): \(body)"; return nil
             }
-
             guard let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
                   let filename = json["filename"] as? String else {
-                lastError = "Unexpected server response"
-                return nil
+                lastError = "Unexpected server response"; return nil
             }
-
             return filename
 
         } catch {

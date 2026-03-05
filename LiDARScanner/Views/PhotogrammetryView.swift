@@ -401,10 +401,14 @@ struct PhotogrammetryView: View {
     @State private var captureCount: Int = 0
     /// Briefly true when a new photo is captured — drives the flash overlay
     @State private var showFlash: Bool = false
-    /// Upload-to-labeler state
+    /// Upload-to-labeler state (photo session)
     @State private var isUploadingToLabeler = false
     @State private var labelerSessionId: String?
     @State private var labelerUploadError: String?
+    /// Upload-to-labeler state (scan only — LiDAR mesh, no photos)
+    @State private var isSendingScanOnly = false
+    @State private var scanOnlyFilename: String?
+    @State private var scanOnlyError: String?
     /// Scan mode chosen by the user before capture starts
     @State private var captureMode: CaptureMode? = nil
     /// True once the user has tapped Start and capture is actively running
@@ -848,7 +852,7 @@ struct PhotogrammetryView: View {
                             .background(Color.blue).cornerRadius(14)
                     }
 
-                    // ── Send to Point Cloud Labeler ──────────────────────────
+                    // ── Send to Point Cloud Labeler (photos + mesh) ──────────
                     Button(action: sendToLabeler) {
                         Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
                               systemImage: "square.and.arrow.up.on.square")
@@ -857,7 +861,20 @@ struct PhotogrammetryView: View {
                             .background(labelerSessionId != nil ? Color.green : Color.orange)
                             .cornerRadius(14)
                     }
-                    .disabled(isUploadingToLabeler)
+                    .disabled(isUploadingToLabeler || isSendingScanOnly)
+
+                    // ── Scan Only — upload LiDAR mesh without photos ──────────
+                    if captureMode != .photoOnly {
+                        Button(action: sendScanOnly) {
+                            Label(isSendingScanOnly ? "Uploading…" : "Scan Only",
+                                  systemImage: "cube.transparent")
+                                .font(.headline).foregroundColor(.white)
+                                .padding(.horizontal, 20).padding(.vertical, 14)
+                                .background(scanOnlyFilename != nil ? Color.green : Color.purple)
+                                .cornerRadius(14)
+                        }
+                        .disabled(isSendingScanOnly || isUploadingToLabeler)
+                    }
 
                     Button(action: { dismiss() }) {
                         Text("Done").font(.headline).foregroundColor(.white)
@@ -878,6 +895,21 @@ struct PhotogrammetryView: View {
                         .foregroundColor(.white.opacity(0.5))
                 } else if let err = labelerUploadError {
                     Text("Upload failed: \(err)")
+                        .font(.caption).foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                }
+
+                if isSendingScanOnly {
+                    ProgressView("Uploading LiDAR scan…")
+                        .foregroundColor(.white).tint(.white)
+                } else if let fn = scanOnlyFilename {
+                    Text("Scan uploaded — open in dashboard")
+                        .font(.caption).foregroundColor(.green)
+                        .multilineTextAlignment(.center)
+                    Text(fn).font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                } else if let err = scanOnlyError {
+                    Text("Scan upload failed: \(err)")
                         .font(.caption).foregroundColor(.red)
                         .multilineTextAlignment(.center)
                 }
@@ -964,6 +996,29 @@ struct PhotogrammetryView: View {
                     labelerSessionId = sid
                 } else {
                     labelerUploadError = ScanServerManager.shared.lastError ?? "Unknown error"
+                }
+            }
+        }
+    }
+
+    /// Upload the LiDAR mesh as a regular scan JSON — no photos.
+    /// Appears in the ScanWizard dashboard as a normal scan entry.
+    func sendScanOnly() {
+        guard let data = meshManager.pointCloudJSON() else {
+            scanOnlyError = "No LiDAR mesh data available yet"
+            return
+        }
+        isSendingScanOnly = true
+        scanOnlyFilename  = nil
+        scanOnlyError     = nil
+        Task {
+            let filename = await ScanServerManager.shared.uploadScan(data: data)
+            await MainActor.run {
+                isSendingScanOnly = false
+                if let filename {
+                    scanOnlyFilename = filename
+                } else {
+                    scanOnlyError = ScanServerManager.shared.lastError ?? "Unknown error"
                 }
             }
         }
