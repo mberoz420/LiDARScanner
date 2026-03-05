@@ -2775,126 +2775,93 @@
             if (!points.length) return;
 
             // ── Algorithm ─────────────────────────────────────────────────────
-            // Parallel normals on the same plane → exactly ONE farthest plane.
-            // No room-shape assumption (works for L-shaped, irregular rooms).
-            //
-            // For every candidate wall-normal direction θ (0°–170°, step 5°):
-            //   Project ALL points: p = dx·cos(θ) + dz·sin(θ)
-            //   The farthest dense peak of p  → one wall plane (positive side)
-            //   The farthest dense peak of -p → opposite wall (negative side)
-            //   Each detected plane is stored as {nx, nz, d} where d is the
-            //   signed projection distance from the centroid.
-            //
-            // A point is WALL if its projection onto any plane's normal is
-            // within WALL_TOL of that plane's d.  Everything closer = object.
-            //
-            // Floor = lowest dense Y peak; ceiling = highest dense Y peak.
+            // From the top view (XZ plane), walls are the outermost boundary.
+            // 1. For each of 360 azimuth directions (1° bins), find the
+            //    farthest horizontal distance from the centroid — that is the
+            //    wall boundary at that angle.
+            // 2. Smooth the boundary with a running-max over ±30 bins so that
+            //    directions fully occluded by a cabinet inherit the true wall
+            //    distance from adjacent visible directions.
+            // 3. A point is WALL if its horizontal distance ≥ boundary − TOL.
+            // 4. Floor = lowest dense Y; ceiling = highest dense Y.
+            // Works for any room shape — no assumptions.
 
-            const NORMAL_STEP  = 5;                     // degrees between candidate normals
-            const PROJ_BIN     = 0.10;                  // 10 cm histogram bins
-            const Y_BIN        = 0.05;
-            const WALL_TOL     = 0.20;                  // 20 cm from plane = wall
-            const FLOOR_TOL    = 0.20;
-            const CEIL_TOL     = 0.20;
-            const MIN_PLANE_PTS = 20;                   // ignore tiny spurious planes
+            const ABINS    = 360;                // 1° azimuth resolution
+            const SMOOTH   = 30;                 // ±30° running-max for occlusion
+            const WALL_TOL = 0.25;               // 25 cm inside boundary = wall
+            const Y_BIN    = 0.05;
+            const FLOOR_TOL = 0.20;
+            const CEIL_TOL  = 0.20;
 
-            // Centroid as projection origin
+            // Centroid
             let cx = 0, cz = 0;
             points.forEach(p => { cx += p.x; cz += p.z; });
             cx /= points.length; cz /= points.length;
 
-            // ── Pass 1: collect dx/dz and Y for all non-door/window points ────
-            const dx_arr = [], dz_arr = [], allY = [];
+            // ── Pass 1: find farthest horizontal distance per 1° azimuth bin ──
+            const boundary = new Float32Array(ABINS);   // max hd per bin
+            const allY = [];
+
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
                 if (labels[i] === 7 || labels[i] === 8) continue;
-                const p = points[i];
-                dx_arr.push(p.x - cx);
-                dz_arr.push(p.z - cz);
+                const p  = points[i];
+                const dx = p.x - cx, dz = p.z - cz;
+                const hd = Math.sqrt(dx * dx + dz * dz);
+                const ang = Math.atan2(dz, dx);                          // -π .. +π
+                const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
+                if (hd > boundary[bin]) boundary[bin] = hd;
                 allY.push(p.y);
             }
-            const N = dx_arr.length;
 
-            // ── Pass 2: detect wall planes ────────────────────────────────────
-            // For each candidate normal direction, project all points and find
-            // the farthest dense clusters on both sides → wall planes.
-            const wallPlanes = [];   // [{nx, nz, d}]
-
-            const STEP_RAD = NORMAL_STEP * Math.PI / 180;
-            const N_DIRS   = Math.round(180 / NORMAL_STEP);  // 36 unique normals
-
-            for (let di = 0; di < N_DIRS; di++) {
-                const θ  = di * STEP_RAD;
-                const nx = Math.cos(θ), nz = Math.sin(θ);
-
-                // Project all points onto this normal
-                const projs = new Float32Array(N);
-                for (let i = 0; i < N; i++) projs[i] = dx_arr[i] * nx + dz_arr[i] * nz;
-
-                // Positive side: farthest wall in +normal direction
-                const posProjs = Array.from(projs).filter(v => v > 0);
-                if (posProjs.length >= MIN_PLANE_PTS) {
-                    const d = farthestDensePeak(posProjs, PROJ_BIN, false, 0.30);
-                    if (d !== null) wallPlanes.push({nx, nz, d});
+            // ── Pass 2: smooth boundary with running-max (±30°) ───────────────
+            // Fills occluded bins (cabinet in the way) with the wall distance
+            // seen in adjacent visible directions.
+            const smoothed = new Float32Array(ABINS);
+            for (let b = 0; b < ABINS; b++) {
+                let mx = 0;
+                for (let off = -SMOOTH; off <= SMOOTH; off++) {
+                    const nb = (b + off + ABINS) % ABINS;
+                    if (boundary[nb] > mx) mx = boundary[nb];
                 }
-
-                // Negative side: farthest wall in -normal direction (opposite wall)
-                const negProjs = Array.from(projs).filter(v => v < 0).map(v => -v);
-                if (negProjs.length >= MIN_PLANE_PTS) {
-                    const d = farthestDensePeak(negProjs, PROJ_BIN, false, 0.30);
-                    if (d !== null) wallPlanes.push({nx, nz, d: -d});
-                }
+                smoothed[b] = mx;
             }
 
-            // Remove duplicate / near-identical planes
-            // Two planes are duplicates if same normal (within NORMAL_STEP) and same d (within 2×WALL_TOL)
-            const uniquePlanes = [];
-            for (const pl of wallPlanes) {
-                const dup = uniquePlanes.some(u => {
-                    const dotN = u.nx * pl.nx + u.nz * pl.nz;
-                    return Math.abs(dotN) > Math.cos(STEP_RAD * 1.5)
-                        && Math.abs(u.d - pl.d) < WALL_TOL * 2;
-                });
-                if (!dup) uniquePlanes.push(pl);
-            }
-
-            // Floor / ceiling from all Y values
+            // Floor / ceiling
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
             const ceilingY = farthestDensePeak(allY, Y_BIN, false);
 
             // ── Pass 3: classify ──────────────────────────────────────────────
             let nFloor = 0, nCeil = 0, nWall = 0, nObj = 0;
-            let idx = 0;
+
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
                 if (labels[i] === 7 || labels[i] === 8) continue;
+                const p  = points[i];
+                const dx = p.x - cx, dz = p.z - cz;
+                const hd = Math.sqrt(dx * dx + dz * dz);
+                const ang = Math.atan2(dz, dx);
+                const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
 
-                const dx = dx_arr[idx], dz = dz_arr[idx], y = allY[idx];
-                idx++;
-
-                // 1. Wall: lies on any detected wall plane
-                let isWall = false;
-                for (const pl of uniquePlanes) {
-                    const proj = dx * pl.nx + dz * pl.nz;
-                    if (Math.abs(proj - pl.d) <= WALL_TOL) { isWall = true; break; }
+                // 1. Wall: at the outermost boundary
+                if (hd >= smoothed[bin] - WALL_TOL) {
+                    labels[i] = 2; nWall++; continue;
                 }
-                if (isWall) { labels[i] = 2; nWall++; continue; }
 
                 // 2. Floor
-                if (floorY !== null && y <= floorY + FLOOR_TOL) {
+                if (floorY !== null && p.y <= floorY + FLOOR_TOL) {
                     labels[i] = 0; nFloor++; continue;
                 }
 
                 // 3. Ceiling
-                if (ceilingY !== null && y >= ceilingY - CEIL_TOL) {
+                if (ceilingY !== null && p.y >= ceilingY - CEIL_TOL) {
                     labels[i] = 1; nCeil++; continue;
                 }
 
-                // 4. Object
+                // 4. Object — inside the boundary
                 labels[i] = 3; nObj++;
             }
 
-            console.log(`[classify] ${uniquePlanes.length} wall planes detected`);
             console.log(`[classify] floor=${floorY?.toFixed(2)} ceiling=${ceilingY?.toFixed(2)}`);
             console.log(`[classify] floor:${nFloor} ceil:${nCeil} wall:${nWall} obj:${nObj}`);
 
