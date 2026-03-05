@@ -2519,38 +2519,68 @@
                 const photoData = await _loadPhotoPixels(
                     `/scans/photos/${sessionId}/${photoName}`, canvW, canvH);
 
+                // Helper: back-project a single depth pixel to world space
+                const bp = (pu, pv, pd) => {
+                    if (!isFinite(pd) || pd < 0.05 || pd > 5.0) return null;
+                    const Xc =  (pu - cx_d) * pd / fx_d;
+                    const Yc = -(pv - cy_d) * pd / fy_d;
+                    const Zc = -pd;
+                    return {
+                        x: m[0]*Xc + m[4]*Yc + m[8] *Zc + m[12],
+                        y: m[1]*Xc + m[5]*Yc + m[9] *Zc + m[13],
+                        z: m[2]*Xc + m[6]*Yc + m[10]*Zc + m[14]
+                    };
+                };
+
                 let added = 0;
                 for (let v = 0; v < H_d; v++) {
                     for (let u = 0; u < W_d; u++) {
                         const d = depths[v * W_d + u];
-                        // Skip invalid, too-near, or too-far pixels
                         if (!isFinite(d) || d < 0.05 || d > 5.0) continue;
 
-                        // Back-project to camera space
-                        // ARKit: X right, Y up, Z backward → in-front points have Z_c < 0
                         const Xc =  (u - cx_d) * d / fx_d;
-                        const Yc = -(v - cy_d) * d / fy_d;  // flip: image v↓, camera Y↑
+                        const Yc = -(v - cy_d) * d / fy_d;
                         const Zc = -d;
 
-                        // Transform to world space: Pw = M * [Xc, Yc, Zc, 1]
-                        // Column-major M: col0=(m[0..3]), col1=(m[4..7]), col2=(m[8..11]), col3=(m[12..15])
                         const Xw = m[0]*Xc + m[4]*Yc + m[8] *Zc + m[12];
                         const Yw = m[1]*Xc + m[5]*Yc + m[9] *Zc + m[13];
                         const Zw = m[2]*Xc + m[6]*Yc + m[10]*Zc + m[14];
 
-                        // Filter by scan volume (box constraint) if set
                         if (scanVolume) {
                             const [cx, cy, cz] = scanVolume.center;
                             const h = scanVolume.half_extent;
                             if (Math.abs(Xw-cx) > h || Math.abs(Yw-cy) > h || Math.abs(Zw-cz) > h) continue;
                         }
 
+                        // ── Compute surface normal from depth map neighbors ─────────
+                        // Central-difference tangents: horizontal (u) and vertical (v)
+                        // Cross product gives the surface normal in world space.
+                        let nx = 0, ny = 0, nz = 0;
+                        if (u > 0 && u < W_d-1 && v > 0 && v < H_d-1) {
+                            const pr = bp(u+1, v,   depths[v*W_d + u+1]);
+                            const pl = bp(u-1, v,   depths[v*W_d + u-1]);
+                            const pu = bp(u,   v-1, depths[(v-1)*W_d + u]);
+                            const pd2= bp(u,   v+1, depths[(v+1)*W_d + u]);
+                            if (pr && pl && pu && pd2) {
+                                // Horizontal tangent (right - left)
+                                const tx = pr.x - pl.x, ty = pr.y - pl.y, tz = pr.z - pl.z;
+                                // Vertical tangent (up - down in world, note image v flipped)
+                                const vx = pu.x - pd2.x, vy = pu.y - pd2.y, vz = pu.z - pd2.z;
+                                // Normal = vertical × horizontal (faces toward camera/inward)
+                                nx = vy*tz - vz*ty;
+                                ny = vz*tx - vx*tz;
+                                nz = vx*ty - vy*tx;
+                                const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+                                if (len > 0.0001) { nx /= len; ny /= len; nz /= len; }
+                                else { nx = 0; ny = 0; nz = 0; }
+                            }
+                        }
+
                         // Sample color from portrait photo
-                        // Landscape pixel: (u_rgb, v_rgb); Portrait (90°CW): x_p=(H-1)-v_rgb, y_p=u_rgb
                         const u_rgb = u * W / W_d;
                         const v_rgb = v * H / H_d;
-                        const x_p = (H - 1) - v_rgb;  // portrait x
-                        const y_p = u_rgb;              // portrait y
+                        const x_p = (H - 1) - v_rgb;
+                        const y_p = u_rgb;
                         let color = {r:.5, g:.5, b:.5};
                         if (photoData) {
                             const px = Math.round(x_p * SCALE);
@@ -2563,7 +2593,7 @@
                         }
 
                         points.push({x: Xw, y: Yw, z: Zw});
-                        normals.push({x: 0, y: 0, z: 0});
+                        normals.push({x: nx, y: ny, z: nz});
                         labels.push(-1);
                         rgbColors.push(color);
                         added++;
@@ -3294,7 +3324,7 @@
                 if (depthSizes.length) {
                     await reconstructFromDepths(
                         sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
-                    classifyByFarthestPlanes();
+                    smartAutoClassify(true);  // normals now computed from depth map gradients
                     return;
                 }
 
@@ -3397,7 +3427,7 @@
                     if (depthSizes.length) {
                         await reconstructFromDepths(
                             scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
-                        classifyByFarthestPlanes();
+                        smartAutoClassify(true);  // normals now computed from depth map gradients
                         return;
                     }
 
