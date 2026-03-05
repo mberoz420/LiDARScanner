@@ -1109,6 +1109,66 @@
             document.getElementById('stat-visible').textContent = visibleIndices.length.toLocaleString();
         }
 
+        // ── Room outline overlay ──────────────────────────────────────────────
+        // Draws the room perimeter as solid closed lines at floor and ceiling
+        // height, plus vertical corner lines. Called after classifyByFarthestPlanes.
+        function drawRoomOutline(cx, cz, wallPlaneBoundary, floorY, ceilingY) {
+            // Remove previous outline
+            if (roomOutlineGroup) {
+                scene.remove(roomOutlineGroup);
+                roomOutlineGroup.children.forEach(o => {
+                    o.geometry?.dispose();
+                    o.material?.dispose();
+                });
+            }
+            if (!wallPlaneBoundary || floorY === null || ceilingY === null) return;
+
+            roomOutlineGroup = new THREE.Group();
+
+            const ceilPts  = [];
+            const floorPts = [];
+
+            for (let a = 0; a < 360; a++) {
+                const r = wallPlaneBoundary[a];
+                if (r <= 0) continue;
+                const θ = a * Math.PI / 180;
+                const x = cx + r * Math.cos(θ);
+                const z = cz + r * Math.sin(θ);
+                ceilPts.push(new THREE.Vector3(x, ceilingY + 0.01, z));
+                floorPts.push(new THREE.Vector3(x, floorY   - 0.01, z));
+            }
+            if (ceilPts.length < 3) return;
+
+            // Close the loops
+            ceilPts.push(ceilPts[0].clone());
+            floorPts.push(floorPts[0].clone());
+
+            const matCeil  = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 });
+            const matFloor = new THREE.LineBasicMaterial({ color: 0x44aaff, linewidth: 2 });
+            const matVert  = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 1, transparent: true, opacity: 0.5 });
+
+            roomOutlineGroup.add(new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(ceilPts), matCeil));
+            roomOutlineGroup.add(new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(floorPts), matFloor));
+
+            // Vertical lines every 10° to show wall extent
+            for (let a = 0; a < 360; a += 10) {
+                const r = wallPlaneBoundary[a];
+                if (r <= 0) continue;
+                const θ = a * Math.PI / 180;
+                const x = cx + r * Math.cos(θ);
+                const z = cz + r * Math.sin(θ);
+                roomOutlineGroup.add(new THREE.Line(
+                    new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(x, floorY,   z),
+                        new THREE.Vector3(x, ceilingY, z)
+                    ]), matVert));
+            }
+
+            scene.add(roomOutlineGroup);
+        }
+
         function getPointColor(index) {
             if (selectedIndices.has(index)) {
                 return new THREE.Color(SELECTION_COLOR);
@@ -2151,6 +2211,7 @@
         // ══════════════════════════════════════════════════════════════════════
 
         let cameraPathGroup = null;   // THREE.Group holding path + cones
+        let roomOutlineGroup = null;  // THREE.Group holding room boundary lines
         let activePhotoIdx  = -1;
 
         // Stored session context so detection buttons can use it
@@ -3300,7 +3361,9 @@
                 }
                 console.log(`[classify] shell: ${nFill} wall + ${nOpen} opening frame points`);
                 nWall += nFill;
-                console.log(`[classify] shell: ${nFill} wall points generated`);
+
+                // Draw solid outline lines at floor and ceiling
+                drawRoomOutline(cx, cz, wallPlane, floorY, ceilingY);
             }
 
             // ── Pass 4: fill floor and ceiling to close the room ─────────────────
