@@ -415,7 +415,7 @@ struct PhotogrammetryView: View {
     @State private var isCapturing = false
 
     enum Phase { case capturing, processing, done, failed }
-    enum CaptureMode { case cube, free, photoOnly }
+    enum CaptureMode { case cube, free, photoOnly, lidarOnly }
 
     /// Standard init — launches with ARKit scanning + auto-capture.
     init() {
@@ -427,6 +427,12 @@ struct PhotogrammetryView: View {
     init(preloadedDir: URL) {
         _phase = State(initialValue: .processing)
         _preloadedPhotoDir = State(initialValue: preloadedDir)
+    }
+
+    /// No-photos init — skips mode selection and starts LiDAR-only scanning immediately.
+    init(lidarOnly: Bool) {
+        _phase = State(initialValue: .capturing)
+        _captureMode = State(initialValue: .lidarOnly)
     }
 
     // MARK: - Helpers
@@ -542,6 +548,7 @@ struct PhotogrammetryView: View {
         }
         .onAppear {
             meshManager.lightweightScanMode = true   // skip per-frame color sampling + classification
+            if captureMode == .lidarOnly { isCapturing = true }  // skip mode selection screen
         }
         .onDisappear {
             meshManager.lightweightScanMode = false  // restore for regular scan modes
@@ -617,9 +624,10 @@ struct PhotogrammetryView: View {
 
 
                 if phase == .capturing && isCapturing {
-                    Text(captureMode == .cube    ? "Cube active — walk around object" :
-                         captureMode == .free    ? "Free — walk around object" :
-                                                   "Photo only — walk around object")
+                    Text(captureMode == .cube      ? "Cube active — walk around object" :
+                         captureMode == .free      ? "Free — walk around object" :
+                         captureMode == .lidarOnly ? "LiDAR scan — walk around room" :
+                                                     "Photo only — walk around object")
                         .font(.caption2).foregroundColor(.white.opacity(0.6))
                 }
             }
@@ -963,12 +971,16 @@ struct PhotogrammetryView: View {
             meshManager.startDepthSession()  // ensure .sceneDepth is enabled for depth maps
         case .free:
             break
+        case .lidarOnly:
+            break
         }
     }
 
     func startCapture() {
         isCapturing = true
-        meshManager.autoCapture.isEnabled = true
+        if captureMode != .lidarOnly {
+            meshManager.autoCapture.isEnabled = true
+        }
     }
 
     /// Manual shutter — force-captures the current ARFrame.

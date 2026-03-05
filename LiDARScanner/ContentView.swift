@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var resumeSessionId: UUID?
     @State private var resumeRepairMode = false
     @State private var showPhotogrammetry = false
+    @State private var showNoPhotos = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -133,6 +134,14 @@ struct ContentView: View {
                         color: .cyan,
                         action: { showPhotogrammetry = true }
                     )
+
+                    // No Photos (LiDAR only)
+                    MainMenuSquare(
+                        title: "No Photos",
+                        icon: "cube.transparent",
+                        color: .purple,
+                        action: { showNoPhotos = true }
+                    )
                 }
                 .padding(.horizontal)
                 }
@@ -180,6 +189,9 @@ struct ContentView: View {
         }
         .fullScreenCover(isPresented: $showPhotogrammetry) {
             PhotogrammetryView()
+        }
+        .fullScreenCover(isPresented: $showNoPhotos) {
+            PhotogrammetryView(lidarOnly: true)
         }
         .sheet(isPresented: $updateChecker.showUpdateProgress) {
             UpdateProgressView(updateChecker: updateChecker)
