@@ -3161,6 +3161,10 @@
             const PLANE_SPAN = 30;  // look up to 30° each side — covers corner zone without crossing doorways
             const wallPlane = filled.slice();  // start from gap-filled values
             for (let b = 0; b < ABINS; b++) {
+                const capDist = filled[b] * 1.3;  // cap relative to THIS bin's gap-filled value
+                // An outlier source bin (adjacent room at 4 m) would predict 4/cos(30°)=4.6 m
+                // for a bin whose gap-filled value is 2 m → cap = 2.6 m → prediction rejected.
+                // A normal corner prediction (2/cos(30°)=2.31 m) from a 2 m neighbor passes fine.
                 let maxPred = wallPlane[b];
                 for (let off = 1; off <= PLANE_SPAN; off++) {
                     const cosOff = Math.cos(off * Math.PI / 180);
@@ -3169,12 +3173,11 @@
                     // Only use bins with confirmed real scan data (boundary[], not fallback)
                     if (boundary[lb] > 0) {
                         const pred = boundary[lb] / cosOff;
-                        // Cap at 1.5× of the real boundary to prevent extreme overshoot
-                        if (pred > maxPred && pred < boundary[lb] * 1.5) maxPred = pred;
+                        if (pred > maxPred && pred < capDist) maxPred = pred;
                     }
                     if (boundary[rb] > 0) {
                         const pred = boundary[rb] / cosOff;
-                        if (pred > maxPred && pred < boundary[rb] * 1.5) maxPred = pred;
+                        if (pred > maxPred && pred < capDist) maxPred = pred;
                     }
                 }
                 wallPlane[b] = maxPred;
