@@ -2871,6 +2871,22 @@
                 }
             }
 
+            // ── Outlier clip: zero out bins that see through doorways/openings ──
+            // Directions into adjacent rooms have boundary distances much larger
+            // than the surrounding walls. Clip them before they infect gap-fill
+            // and median. Use 75th-percentile × 1.8 as the cut-off — safe for
+            // rooms up to ~1.5:1 aspect ratio; adjust if scans are very elongated.
+            {
+                const rawVals = [];
+                for (let b = 0; b < ABINS; b++) if (rawBoundary[b] > 0) rawVals.push(rawBoundary[b]);
+                if (rawVals.length > 0) {
+                    rawVals.sort((a, b) => a - b);
+                    const p75 = rawVals[Math.floor(rawVals.length * 0.75)];
+                    const CLIP = p75 * 1.8;
+                    for (let b = 0; b < ABINS; b++) if (rawBoundary[b] > CLIP) rawBoundary[b] = 0;
+                }
+            }
+
             // ── Continuity filter ─────────────────────────────────────────────
             const MIN_SPAN  = 8;
             const CONT_TOL  = 0.40;
@@ -2912,31 +2928,32 @@
             }
 
             // ── Wall plane corner enforcement ─────────────────────────────────────
-            // A flat wall at neighbor bin b_n with boundary r_n predicts:
+            // A flat wall at neighbor bin b_n with real boundary r_n predicts:
             //   r(b) = r_n / cos(b - b_n)
-            // Raise corner bins to the max prediction from nearby wall bins.
-            // This reconstructs correct ~90° corners even when the corner itself
-            // was occluded or blocked by furniture during scanning.
+            // Raise corner bins to the max prediction from nearby REAL wall bins.
+            // CRITICAL: use boundary[] (real scan data only), NOT filled[] which
+            // includes gap-fill and median fallback values — those would balloon
+            // the boundary to 2× the median in directions with no scan coverage.
             // Note: wallPlane is used ONLY for Pass 3 (synthetic shell generation).
             //       Pass 2 (scan point classification) continues using filled[] with
             //       the tight WALL_TOL so object scan points are not mislabeled.
             const PLANE_SPAN = 30;  // look up to 30° each side — covers corner zone without crossing doorways
-            const wallPlane = new Float32Array(ABINS);
+            const wallPlane = filled.slice();  // start from gap-filled values
             for (let b = 0; b < ABINS; b++) {
-                let maxPred = filled[b];
+                let maxPred = wallPlane[b];
                 for (let off = 1; off <= PLANE_SPAN; off++) {
                     const cosOff = Math.cos(off * Math.PI / 180);
-                    if (cosOff < 0.02) break;
                     const lb = (b - off + ABINS) % ABINS;
                     const rb = (b + off) % ABINS;
-                    if (filled[lb] > 0) {
-                        const pred = filled[lb] / cosOff;
-                        // Cap at 2× to avoid extreme predictions across wide openings
-                        if (pred > maxPred && pred < filled[lb] * 2.0) maxPred = pred;
+                    // Only use bins with confirmed real scan data (boundary[], not fallback)
+                    if (boundary[lb] > 0) {
+                        const pred = boundary[lb] / cosOff;
+                        // Cap at 1.5× of the real boundary to prevent extreme overshoot
+                        if (pred > maxPred && pred < boundary[lb] * 1.5) maxPred = pred;
                     }
-                    if (filled[rb] > 0) {
-                        const pred = filled[rb] / cosOff;
-                        if (pred > maxPred && pred < filled[rb] * 2.0) maxPred = pred;
+                    if (boundary[rb] > 0) {
+                        const pred = boundary[rb] / cosOff;
+                        if (pred > maxPred && pred < boundary[rb] * 1.5) maxPred = pred;
                     }
                 }
                 wallPlane[b] = maxPred;
