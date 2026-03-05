@@ -462,6 +462,13 @@ struct PhotogrammetryView: View {
 
     var canProcess: Bool { capturedCount >= preset.minToProcess }
 
+    /// True when the stop button should be enabled.
+    /// For photo modes: need at least one photo.
+    /// For scan-only (LiDAR) mode: always enabled while scanning.
+    var canStopScan: Bool {
+        capturedCount > 0 || (captureMode != .photoOnly && meshManager.isScanning)
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -738,18 +745,18 @@ struct PhotogrammetryView: View {
                         VStack(spacing: 5) {
                             ZStack {
                                 Circle()
-                                    .fill(capturedCount > 0 ? Color.orange : Color.white.opacity(0.2))
+                                    .fill(canStopScan ? Color.orange : Color.white.opacity(0.2))
                                     .frame(width: 52, height: 52)
                                 Image(systemName: "stop.fill")
                                     .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(capturedCount > 0 ? .white : .white.opacity(0.4))
+                                    .foregroundColor(canStopScan ? .white : .white.opacity(0.4))
                             }
                             Text("Stop & Send")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(capturedCount > 0 ? .orange : .white.opacity(0.5))
+                                .foregroundColor(canStopScan ? .orange : .white.opacity(0.5))
                         }
                     }
-                    .disabled(capturedCount == 0)
+                    .disabled(!canStopScan)
                 }
             }
         }
@@ -975,7 +982,7 @@ struct PhotogrammetryView: View {
         isCapturing = false
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .done
-        sendToLabeler()
+        if capturedCount > 0 { sendToLabeler() }
     }
 
     func sendToLabeler() {
