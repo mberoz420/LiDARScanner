@@ -2948,63 +2948,36 @@
                 labels[i] = 3; nObj++;
             }
 
-            // ── Pass 3: extend walls from floor to ceiling ────────────────────
-            // Add synthetic fill points at every (azimuth, Y) cell that has no
-            // real scan wall point nearby. Two separate hashes:
-            //   realWallHash (20 cm cells) — checks against real scan points only,
-            //     so synthetic fill points don't block adjacent fill slots.
-            //   fillHash (5 cm cells) — deduplicates the fill points themselves.
-            // This gives dense coverage (5 cm Y-steps) in areas the scan missed
-            // (near floor, near ceiling, behind furniture) while not duplicating
-            // where real wall points already exist.
+            // ── Pass 3: reconstruct complete wall shell from outer boundary ──────
+            // Instead of classifying individual scan points, we generate a
+            // COMPLETE wall surface by projecting the outer boundary shell from
+            // floor to ceiling. Every 1° × 5cm cell on the wall is filled —
+            // no skip-if-nearby-real check. This closes all walls regardless of
+            // where the scanner could see. Existing scan points are kept for
+            // object/furniture detail; the shell gives the complete room structure.
             if (floorY !== null && ceilingY !== null) {
-                const FILL_ANG   = 2;     // every 2° azimuth
-                const FILL_Y     = 0.05;  // 5 cm vertical step
-                const CELL_REAL  = 0.20;  // 20 cm — real wall point proximity check
-                const CELL_FILL  = 0.05;  // 5 cm — fill dedup (matches FILL_Y)
+                const FILL_ANG  = 1;     // every 1° azimuth — tight enough to close gaps
+                const FILL_Y    = 0.05;  // 5 cm vertical step
+                const CELL_FILL = 0.05;  // 5 cm dedup cell
 
-                // Hash real wall points only (for proximity check)
-                const realWallHash = new Set();
-                for (let i = 0; i < points.length; i++) {
-                    if (labels[i] !== 2) continue;
-                    const p = points[i];
-                    realWallHash.add(
-                        `${Math.round(p.x/CELL_REAL)},${Math.round(p.y/CELL_REAL)},${Math.round(p.z/CELL_REAL)}`
-                    );
-                }
-
-                // Per-azimuth average RGB — used to colorize fill points so that
-                // the 30 cm uncolored band (LiDAR minimum-range blind spot) inherits
-                // the wall color captured at other heights in the same direction.
-                // Only non-grey pixels (r+g+b > 0.6 away from mid-grey) are included
-                // so the grey default from depth reconstruction doesn't dilute real colors.
+                // Per-azimuth average RGB from existing colored scan points
                 const colorSum = Array.from({length: 360}, () => ({r: 0, g: 0, b: 0, n: 0}));
                 for (let i = 0; i < points.length; i++) {
                     if (labels[i] !== 2 && labels[i] !== 9) continue;
                     if (deletedIndices.has(i)) continue;
                     const c = rgbColors[i];
                     if (!c) continue;
-                    // Skip near-grey default colors
                     if (Math.abs(c.r - 0.5) + Math.abs(c.g - 0.5) + Math.abs(c.b - 0.5) < 0.15) continue;
-                    const p = points[i];
-                    const ang = Math.atan2(p.z - cz, p.x - cx);
+                    const ang = Math.atan2(points[i].z - cz, points[i].x - cx);
                     const bin = ((Math.round(ang * 180 / Math.PI) % 360) + 360) % 360;
-                    colorSum[bin].r += c.r;
-                    colorSum[bin].g += c.g;
-                    colorSum[bin].b += c.b;
-                    colorSum[bin].n++;
+                    colorSum[bin].r += c.r; colorSum[bin].g += c.g;
+                    colorSum[bin].b += c.b; colorSum[bin].n++;
                 }
-                // Resolve fill color per azimuth: expand outward up to ±15° if bin is empty
                 function wallFillColor(a) {
-                    for (let d = 0; d <= 15; d++) {
-                        for (const b of [((a + d) % 360), ((a - d + 360) % 360)]) {
-                            if (colorSum[b].n > 0) {
-                                const cs = colorSum[b];
-                                return {r: cs.r / cs.n, g: cs.g / cs.n, b: cs.b / cs.n};
-                            }
-                        }
-                    }
-                    return {r: 0.65, g: 0.65, b: 0.70};  // fallback grey
+                    for (let d = 0; d <= 15; d++)
+                        for (const b of [((a+d)%360), ((a-d+360)%360)])
+                            if (colorSum[b].n > 0) { const s = colorSum[b]; return {r:s.r/s.n, g:s.g/s.n, b:s.b/s.n}; }
+                    return {r: 0.65, g: 0.65, b: 0.70};
                 }
 
                 const fillHash = new Set();
@@ -3013,26 +2986,12 @@
                 for (let a = 0; a < 360; a += FILL_ANG) {
                     const wb = filled[a];
                     if (wb <= 0) continue;
-                    const θ   = a * Math.PI / 180;
-                    const wx  = cx + wb * Math.cos(θ);
-                    const wz  = cz + wb * Math.sin(θ);
-                    const nx  = -Math.cos(θ), nz = -Math.sin(θ);  // inward normal
-                    const rx  = Math.round(wx / CELL_REAL);
-                    const rz  = Math.round(wz / CELL_REAL);
+                    const θ  = a * Math.PI / 180;
+                    const wx = cx + wb * Math.cos(θ);
+                    const wz = cz + wb * Math.sin(θ);
+                    const nx = -Math.cos(θ), nz = -Math.sin(θ);
 
                     for (let y = floorY; y <= ceilingY + 0.01; y += FILL_Y) {
-                        // Skip if a real scan wall point is within 20 cm
-                        const ry = Math.round(y / CELL_REAL);
-                        let nearReal = false;
-                        outer: for (let da = -1; da <= 1; da++)
-                            for (let db = -1; db <= 1; db++)
-                                for (let dc = -1; dc <= 1; dc++)
-                                    if (realWallHash.has(`${rx+da},${ry+db},${rz+dc}`)) {
-                                        nearReal = true; break outer;
-                                    }
-                        if (nearReal) continue;
-
-                        // Dedup fill cells at 5 cm resolution
                         const fk = `${Math.round(wx/CELL_FILL)},${Math.round(y/CELL_FILL)},${Math.round(wz/CELL_FILL)}`;
                         if (fillHash.has(fk)) continue;
                         fillHash.add(fk);
@@ -3041,16 +3000,12 @@
                         points.push({x: wx, y, z: wz});
                         labels.push(isCov ? 9 : 2);
                         normals.push({x: nx, y: 0, z: nz});
-                        // Use the sampled wall color from other heights in this
-                        // direction to cover the 30 cm LiDAR blind-spot band.
-                        rgbColors.push(isCov
-                            ? {r: 1.0, g: 0.55, b: 0.26}
-                            : wallFillColor(a));
+                        rgbColors.push(isCov ? {r:1.0, g:0.55, b:0.26} : wallFillColor(a));
                         nFill++;
                     }
                 }
                 nWall += nFill;
-                console.log(`[classify] filled ${nFill} synthetic wall/coving points`);
+                console.log(`[classify] shell: ${nFill} wall points generated`);
             }
 
             // ── Pass 4: fill floor and ceiling to close the room ─────────────────
