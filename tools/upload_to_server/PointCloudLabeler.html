@@ -1286,7 +1286,10 @@
 
             // Show/hide ARKit option depending on whether this scan has plane data
             const arkitRow = document.getElementById('arkit-option-row');
+            const arkitChk = document.getElementById('use-arkit-planes');
             if (arkitRow) arkitRow.style.display = scanRoomPlanes ? 'block' : 'none';
+            if (arkitChk && scanRoomPlanes) arkitChk.checked = true;   // default ON when available
+            if (arkitChk && !scanRoomPlanes) arkitChk.checked = false;
 
             if (data.points && Array.isArray(data.points)) {
                 data.points.forEach((p, i) => {
