@@ -529,6 +529,15 @@
             <button class="btn btn-action" onclick="smartAutoClassify(true)"
                     style="background:#c0392b;">&#x21BA; Re-classify All</button>
 
+            <div style="margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;">
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                    <span>Boundary smoothing</span>
+                    <span id="smooth-value">15°</span>
+                </div>
+                <input type="range" id="smooth-span" min="0" max="30" step="1" value="15" style="width:100%;"
+                       oninput="document.getElementById('smooth-value').textContent=this.value+'°'; classifyByFarthestPlanes();">
+            </div>
+
             <div id="arkit-option-row" style="display:none;margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #27ae60;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
                     <input type="checkbox" id="use-arkit-planes" style="width:16px;height:16px;cursor:pointer;"
@@ -3057,16 +3066,18 @@
             // within 30 cm of the centre bin — this keeps wall planes separate so
             // a far wall doesn't pull a near wall outward at corners.
             // Result: lines as smooth as ARKit without losing the room shape.
-            const SMOOTH_SPAN = 15;
+            const SMOOTH_SPAN = parseInt(document.getElementById('smooth-span')?.value ?? '15');
             const smoothed = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
-                if (boundary[b] <= 0) continue;
+                if (boundary[b] <= 0) { smoothed[b] = 0; continue; }
+                if (SMOOTH_SPAN === 0) { smoothed[b] = boundary[b]; continue; }
                 let wSum = 0, vSum = 0;
                 for (let off = -SMOOTH_SPAN; off <= SMOOTH_SPAN; off++) {
                     const nb = (b + off + ABINS) % ABINS;
                     if (boundary[nb] <= 0) continue;
-                    if (Math.abs(boundary[nb] - boundary[b]) > 0.30) continue; // different plane
-                    const w = Math.exp(-0.5 * (off / 7) ** 2);  // Gaussian σ=7°
+                    if (Math.abs(boundary[nb] - boundary[b]) > 0.30) continue;
+                    const sigma = Math.max(SMOOTH_SPAN / 2, 1);
+                    const w = Math.exp(-0.5 * (off / sigma) ** 2);
                     vSum += boundary[nb] * w;
                     wSum += w;
                 }
