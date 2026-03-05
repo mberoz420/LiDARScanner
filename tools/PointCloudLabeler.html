@@ -2814,9 +2814,7 @@
             // Works for any room shape — no assumptions.
 
             const ABINS     = 360;    // 1° azimuth resolution
-            // Old houses have rough walls (concavities/convexities up to ±10 cm).
-            // Keep a generous inward tolerance so those points still get wall label.
-            const WALL_TOL     = 0.15;   // 15 cm inward from boundary plane
+            const WALL_TOL     = 0.35;   // 35 cm inward — mesh vertices sit inside surface
             const COVING_H     = 0.40;   // coving zone = top 40 cm below ceiling
             const Y_BIN        = 0.05;
             const FLOOR_TOL    = 0.20;
@@ -2874,12 +2872,8 @@
             }
 
             // ── Continuity filter: walls span many degrees; objects don't ────
-            // A true wall segment is consistent (same distance ± tolerance)
-            // across at least MIN_SPAN consecutive azimuth bins.
-            // Gas pipes (~1–2°), coffee makers (~5°), fridges (~10°) are removed.
-            // Actual walls (0.5 m wide at 3 m = 9°, 1 m wide = 19°) are kept.
-            const MIN_SPAN  = 12;       // minimum 12° of consistent boundary
-            const CONT_TOL  = 0.20;     // bins within 20 cm = same wall plane
+            const MIN_SPAN  = 8;        // minimum 8° of consistent boundary
+            const CONT_TOL  = 0.40;     // bins within 40 cm = same wall plane
 
             const boundary = new Float32Array(ABINS);
             for (let b = 0; b < ABINS; b++) {
@@ -2891,6 +2885,24 @@
                     if (rawBoundary[nb] > 0 && Math.abs(rawBoundary[nb] - wb) <= CONT_TOL) span++;
                 }
                 if (span >= MIN_SPAN) boundary[b] = wb;
+            }
+
+            // ── Gap-fill boundary: interpolate zero bins from nearest nonzero neighbours ──
+            // Handles directions occluded by furniture or with sparse upper-zone data.
+            const FILL_SPAN = 25;   // fill gaps up to 25° wide
+            const filled = boundary.slice();
+            for (let b = 0; b < ABINS; b++) {
+                if (filled[b] > 0) continue;
+                let leftVal = 0, leftDist = FILL_SPAN + 1;
+                let rightVal = 0, rightDist = FILL_SPAN + 1;
+                for (let off = 1; off <= FILL_SPAN; off++) {
+                    if (leftVal  === 0 && boundary[(b - off + ABINS) % ABINS] > 0) { leftVal  = boundary[(b - off + ABINS) % ABINS]; leftDist  = off; }
+                    if (rightVal === 0 && boundary[(b + off) % ABINS]          > 0) { rightVal = boundary[(b + off) % ABINS];         rightDist = off; }
+                    if (leftVal > 0 && rightVal > 0) break;
+                }
+                if      (leftVal > 0 && rightVal > 0) filled[b] = (leftVal * rightDist + rightVal * leftDist) / (leftDist + rightDist);
+                else if (leftVal  > 0) filled[b] = leftVal;
+                else if (rightVal > 0) filled[b] = rightVal;
             }
 
             // Floor / ceiling
@@ -2908,7 +2920,7 @@
                 const hd = Math.sqrt(dx * dx + dz * dz);
                 const ang = Math.atan2(dz, dx);
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
-                const wb  = boundary[bin];
+                const wb  = filled[bin];
                 const nearWall = wb > 0 && hd >= wb - WALL_TOL;
 
                 // 1. Coving: near the wall boundary AND in the top zone below ceiling.
@@ -2999,7 +3011,7 @@
                 let nFill = 0;
 
                 for (let a = 0; a < 360; a += FILL_ANG) {
-                    const wb = boundary[a];
+                    const wb = filled[a];
                     if (wb <= 0) continue;
                     const θ   = a * Math.PI / 180;
                     const wx  = cx + wb * Math.cos(θ);
@@ -3052,7 +3064,7 @@
 
                 // Max boundary extent
                 let maxBound = 0;
-                for (let b = 0; b < ABINS; b++) if (boundary[b] > maxBound) maxBound = boundary[b];
+                for (let b = 0; b < ABINS; b++) if (filled[b] > maxBound) maxBound = filled[b];
                 maxBound += 0.15;
 
                 // Hash existing real floor / ceiling points so we don't duplicate
@@ -3072,7 +3084,7 @@
                         const hd = Math.sqrt(dx*dx + dz*dz);
                         const ang = Math.atan2(dz, dx);
                         const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
-                        if (boundary[bin] <= 0 || hd >= boundary[bin]) continue;
+                        if (filled[bin] <= 0 || hd >= filled[bin]) continue;
 
                         const hk = `${Math.round(gx/CELL_H)},${Math.round(gz/CELL_H)}`;
 
