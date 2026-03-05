@@ -900,21 +900,23 @@ struct PhotogrammetryView: View {
                     }
 
                     // ── Send to Point Cloud Labeler (photos + mesh) ──────────
-                    Button(action: sendToLabeler) {
-                        Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
-                              systemImage: "square.and.arrow.up.on.square")
-                            .font(.headline).foregroundColor(.white)
-                            .padding(.horizontal, 20).padding(.vertical, 14)
-                            .background(labelerSessionId != nil ? Color.green : Color.orange)
-                            .cornerRadius(14)
+                    if captureMode != .lidarOnly {
+                        Button(action: sendToLabeler) {
+                            Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
+                                  systemImage: "square.and.arrow.up.on.square")
+                                .font(.headline).foregroundColor(.white)
+                                .padding(.horizontal, 20).padding(.vertical, 14)
+                                .background(labelerSessionId != nil ? Color.green : Color.orange)
+                                .cornerRadius(14)
+                        }
+                        .disabled(isUploadingToLabeler || isSendingScanOnly)
                     }
-                    .disabled(isUploadingToLabeler || isSendingScanOnly)
 
                     // ── Scan Only — upload LiDAR mesh without photos ──────────
                     if captureMode != .photoOnly {
                         Button(action: sendScanOnly) {
-                            Label(isSendingScanOnly ? "Uploading…" : "Scan Only",
-                                  systemImage: "cube.transparent")
+                            Label(isSendingScanOnly ? "Uploading…" : (scanOnlyFilename != nil ? "Uploaded!" : "Send to Labeler"),
+                                  systemImage: scanOnlyFilename != nil ? "checkmark.circle.fill" : "cube.transparent")
                                 .font(.headline).foregroundColor(.white)
                                 .padding(.horizontal, 20).padding(.vertical, 14)
                                 .background(scanOnlyFilename != nil ? Color.green : Color.purple)
@@ -1026,7 +1028,8 @@ struct PhotogrammetryView: View {
         isCapturing = false
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .done
-        if capturedCount > 0 { sendToLabeler() }
+        if captureMode == .lidarOnly { sendScanOnly() }
+        else if capturedCount > 0   { sendToLabeler() }
     }
 
     func sendToLabeler() {
