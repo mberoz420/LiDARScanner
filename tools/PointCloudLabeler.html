@@ -1546,7 +1546,10 @@
         // Find the value at the farthest high-density cluster in a 1-D value array.
         // pickLowest=true  → look at the low end  (floor: farthest downward = lowest Y)
         // pickLowest=false → look at the high end (ceiling / wall: farthest = highest value)
-        function farthestDensePeak(values, binSize, pickLowest) {
+        // farZonePct: how much of the range to search from the far end (default 30%).
+        // Use larger values (e.g. 0.50) for walls to tolerate door/window openings
+        // that extend the range with a few far exterior returns.
+        function farthestDensePeak(values, binSize, pickLowest, farZonePct = 0.30) {
             if (!values.length) return null;
             values.sort((a, b) => a - b);
             const lo = values[0], hi = values[values.length - 1], range = hi - lo;
@@ -1559,8 +1562,8 @@
                 bins[key] = (bins[key] ?? 0) + 1;
             });
 
-            // Search in the farthest 30 % of the range for the densest bin
-            const farZone = range * 0.30;
+            // Search in the farthest farZonePct of the range for the densest bin
+            const farZone = range * farZonePct;
             const threshold = pickLowest ? lo + farZone : hi - farZone;
 
             let bestBin = null, bestCount = 0;
@@ -2810,9 +2813,12 @@
             }
 
             // ── Pass 2: boundary planes ────────────────────────────────────────
-            // Wall: densest horizontal distance per azimuth (handles door gaps)
+            // Wall: FARTHEST dense distance per azimuth.
+            // The wall is always the farthest surface — furniture/cabinets are closer.
+            // We use a wider far-zone (50% not 30%) so that a door opening which
+            // adds a few far exterior returns doesn't push the wall out of the window.
             const wallDist = projsByBin.map(dists =>
-                dists.length >= 5 ? dominantWallPeak(dists, DIST_BIN) : null
+                dists.length >= 5 ? farthestDensePeak(dists, DIST_BIN, false, 0.50) : null
             );
             // Floor: lowest dense Y peak
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
