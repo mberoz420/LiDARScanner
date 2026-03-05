@@ -44,6 +44,16 @@ enum SurfaceType: String, CaseIterable, Sendable {
         }
     }
 
+    /// Maps to labeler class index: 0=floor, 1=ceiling, 2=wall, 3=object
+    var labelIndex: Int {
+        switch self {
+        case .floor, .floorEdge:                         return 0
+        case .ceiling, .cove, .ceilingProtrusion:        return 1
+        case .wall, .wallEdge:                           return 2
+        default:                                          return 3  // object, door, window, unknown…
+        }
+    }
+
     /// Whether this surface type should be highlighted for attention
     var isStructuralFeature: Bool {
         switch self {

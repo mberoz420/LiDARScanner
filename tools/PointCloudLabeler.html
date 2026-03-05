@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiDAR Point Cloud Labeler v1.5</title>
+    <title>LiDAR Point Cloud Labeler v1.6</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -422,7 +422,7 @@
             </div>
         </div>
         <div id="sidebar">
-            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v1.5</span></h1>
+            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v1.6</span></h1>
 
             <div id="dropzone" onclick="document.getElementById('file-input').click()">
                 <p>Drop JSON file here</p>
@@ -2532,6 +2532,44 @@
         }
 
         // ── Auto-load from ?photos=SESSION_ID URL param ───────────────────────
+        // ── Combined-mode helpers: LiDAR spatial grid → depth label transfer ────
+        function buildLidarGrid(ptArray, labelArray, cellSize) {
+            const grid = new Map();
+            for (let i = 0; i < ptArray.length; i++) {
+                if (labelArray[i] < 0) continue;  // skip unlabeled
+                const {x, y, z} = ptArray[i];
+                const k = `${Math.round(x/cellSize)},${Math.round(y/cellSize)},${Math.round(z/cellSize)}`;
+                if (!grid.has(k)) grid.set(k, []);
+                grid.get(k).push(i);
+            }
+            return { grid, cellSize };
+        }
+
+        function applyLidarLabels(lidarPts, lidarLbls, gridInfo) {
+            const { grid, cellSize } = gridInfo;
+            for (let i = 0; i < points.length; i++) {
+                const {x, y, z} = points[i];
+                const cx = Math.round(x/cellSize);
+                const cy = Math.round(y/cellSize);
+                const cz = Math.round(z/cellSize);
+                let bestDist = Infinity, bestLabel = -1;
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dz = -1; dz <= 1; dz++) {
+                            const cell = grid.get(`${cx+dx},${cy+dy},${cz+dz}`);
+                            if (!cell) continue;
+                            for (const j of cell) {
+                                const p = lidarPts[j];
+                                const d = (p.x-x)**2 + (p.y-y)**2 + (p.z-z)**2;
+                                if (d < bestDist) { bestDist = d; bestLabel = lidarLbls[j]; }
+                            }
+                        }
+                    }
+                }
+                labels[i] = bestLabel;
+            }
+        }
+
         (async function autoLoadPhotos() {
             const params    = new URLSearchParams(window.location.search);
             const sessionId = params.get('photos');
@@ -2574,9 +2612,25 @@
                     if (pcRes.ok) {
                         const pcData = await pcRes.json();
                         loadJSON(pcData);
+
+                        if (depthSizes.length) {
+                            // Combined mode: depth maps give dense geometry, LiDAR gives labels
+                            const lidarPts  = points.slice();
+                            const lidarLbls = labels.slice();
+                            const lidarGrid = buildLidarGrid(lidarPts, lidarLbls, 0.15);
+                            await reconstructFromDepths(
+                                sessionId, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
+                            applyLidarLabels(lidarPts, lidarLbls, lidarGrid);
+                            colorMode = 'label';
+                            document.getElementById('color-mode').value = 'label';
+                            rebuildPointCloud();
+                            document.getElementById('selection-info').textContent =
+                                `Combined: ${points.length.toLocaleString()} depth pts labeled from ${lidarPts.length.toLocaleString()} LiDAR pts`;
+                            return;
+                        }
+
                         document.getElementById('selection-info').textContent =
                             `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
-
                         await colorizePointCloudWithPhotos(
                             sessionId, poses, intrinsics, imgSize[0], imgSize[1]);
                         return;
@@ -2649,6 +2703,23 @@
                         if (pcRes.ok) {
                             const pcData = await pcRes.json();
                             loadJSON(pcData);
+
+                            if (depthSizes.length) {
+                                // Combined mode: depth maps give dense geometry, LiDAR gives labels
+                                const lidarPts  = points.slice();
+                                const lidarLbls = labels.slice();
+                                const lidarGrid = buildLidarGrid(lidarPts, lidarLbls, 0.15);
+                                await reconstructFromDepths(
+                                    scanFile, poses, intrinsics, imgSize[0], imgSize[1], depthSizes, scanVolume);
+                                applyLidarLabels(lidarPts, lidarLbls, lidarGrid);
+                                colorMode = 'label';
+                                document.getElementById('color-mode').value = 'label';
+                                rebuildPointCloud();
+                                document.getElementById('selection-info').textContent =
+                                    `Combined: ${points.length.toLocaleString()} depth pts labeled from ${lidarPts.length.toLocaleString()} LiDAR pts`;
+                                return;
+                            }
+
                             document.getElementById('selection-info').textContent =
                                 `3D scan loaded — ${photoCount} photos + ${pcData.num_points?.toLocaleString() || '?'} LiDAR points`;
                             await colorizePointCloudWithPhotos(

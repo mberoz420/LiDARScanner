@@ -322,13 +322,27 @@ class MeshManager: NSObject, ObservableObject {
             let count = min(mesh.vertices.count, mesh.normals.count)
             let uCount = UInt32(count)
 
+            // Start with -1 for all vertices; we'll overwrite using per-face classifications
+            var vertexLabels = [Int](repeating: -1, count: count)
+
+            // Propagate face classifications to vertices (last face wins per vertex)
+            if let faceClasses = mesh.faceClassifications {
+                for (fi, face) in mesh.faces.enumerated() {
+                    guard fi < faceClasses.count, face.count == 3 else { continue }
+                    let labelIdx = faceClasses[fi].labelIndex
+                    for vi in face {
+                        if Int(vi) < count { vertexLabels[Int(vi)] = labelIdx }
+                    }
+                }
+            }
+
             for i in 0..<count {
                 let v = mesh.vertices[i]
                 let n = mesh.normals[i]
                 let vw = t * SIMD4<Float>(v.x, v.y, v.z, 1)
                 let nw = t * SIMD4<Float>(n.x, n.y, n.z, 0)
                 points.append([vw.x, vw.y, vw.z, nw.x, nw.y, nw.z])
-                labels.append(-1)
+                labels.append(vertexLabels[i])
             }
             // Collect face indices with vertex offset, skip any out-of-range
             for face in mesh.faces {
