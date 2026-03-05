@@ -813,10 +813,8 @@
             controls.target.set(c.x, c.y, c.z);
 
             if (!isPersp) {
-                // Ortho views: disable rotation so the view stays flat
-                controls.enableRotate = false;
                 document.getElementById('ortho-badge').style.display = 'block';
-                document.getElementById('info').textContent = 'Drag to pan | Scroll to zoom | (orthographic)';
+                document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan | (orthographic)';
             } else {
                 document.getElementById('ortho-badge').style.display = 'none';
                 document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan';
