@@ -529,6 +529,13 @@
             <button class="btn btn-action" onclick="smartAutoClassify(true)"
                     style="background:#c0392b;">&#x21BA; Re-classify All</button>
 
+            <div id="arkit-option-row" style="display:none;margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #27ae60;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="use-arkit-planes" style="width:16px;height:16px;cursor:pointer;">
+                    <span>&#x1F4CD; Use ARKit plane boundary<br><span style="color:#888;font-size:11px;">Uses wall planes detected during scan</span></span>
+                </label>
+            </div>
+
             <h2>Selection Tools</h2>
             <button class="btn btn-action" onclick="selectByNormal('up')">Select Floors (normal up)</button>
             <button class="btn btn-action" onclick="selectByNormal('down')">Select Ceilings (normal down)</button>
@@ -691,6 +698,7 @@
         let grid;
         let currentViewMode = 'perspective';  // 'perspective' | 'ortho'
         let meshFaces = null;               // [[i0,i1,i2], ...] from pointcloud.json
+        let scanRoomPlanes = null;          // ARKit plane anchors from room_planes[] in scan JSON
 
         // Custom labels (start from index 10 to avoid conflicts)
         let customLabels = [];
@@ -1270,8 +1278,13 @@
             normals = [];
             rgbColors = [];
             meshFaces = data.faces || null;
+            scanRoomPlanes = (data.room_planes && data.room_planes.length) ? data.room_planes : null;
             deletedIndices.clear();
             selectedIndices.clear();
+
+            // Show/hide ARKit option depending on whether this scan has plane data
+            const arkitRow = document.getElementById('arkit-option-row');
+            if (arkitRow) arkitRow.style.display = scanRoomPlanes ? 'block' : 'none';
 
             if (data.points && Array.isArray(data.points)) {
                 data.points.forEach((p, i) => {
@@ -2798,6 +2811,83 @@
             return bestBin ?? hi;
         }
 
+        // ── ARKit plane boundary ──────────────────────────────────────────────
+        // Given room_planes[] from the scan JSON, sample the ceiling-wall junction
+        // lines into 360 azimuth bins. Returns a Float32Array(360) or null.
+        function computeArkitBoundary(roomPlanes, cx, cz) {
+            const ABINS = 360;
+            const wallPlanes = roomPlanes.filter(p => p.type === 'wall');
+            if (wallPlanes.length < 2) return null;
+
+            // Bounding box of point cloud for guard
+            let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+            points.forEach(p => {
+                if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+                if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+            });
+            const BB = 0.30;
+            const bbMinX = minX - BB, bbMaxX = maxX + BB, bbMinZ = minZ - BB, bbMaxZ = maxZ + BB;
+
+            // Ceiling Y from point cloud
+            let qFloor = Infinity, qCeil = -Infinity;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                if (points[i].y < qFloor) qFloor = points[i].y;
+                if (points[i].y > qCeil)  qCeil  = points[i].y;
+            }
+            const ceilY = qCeil;
+
+            const junctionBoundary = new Float32Array(ABINS);
+
+            for (const plane of wallPlanes) {
+                const [cpx, cpy, cpz] = plane.center;
+                const [ax, ay, az]    = plane.axis_x;
+                const [zx, zy, zz]    = plane.axis_z;
+                const [extW, extD]    = plane.extent;
+
+                const axIsVert  = Math.abs(ay) > Math.abs(zy);
+                const heightDir = axIsVert ? [ax, ay, az] : [zx, zy, zz];
+                const horizDir  = axIsVert ? [zx, zy, zz] : [ax, ay, az];
+                const halfWidth = axIsVert ? extD / 2 : extW / 2;
+
+                if (Math.abs(heightDir[1]) < 0.30) continue;  // not vertical enough
+
+                // Junction point where this wall plane crosses ceilY
+                const t  = (ceilY - cpy) / heightDir[1];
+                const jx = cpx + t * heightDir[0];
+                const jz = cpz + t * heightDir[2];
+
+                // Skip planes whose junction midpoint is outside the scan bounds
+                if (jx < bbMinX || jx > bbMaxX || jz < bbMinZ || jz > bbMaxZ) continue;
+
+                // Sample along the junction line at 5 cm steps
+                const steps = Math.max(4, Math.ceil(halfWidth * 2 / 0.05));
+                for (let s = 0; s <= steps; s++) {
+                    const frac = (s / steps) - 0.5;
+                    const wx = jx + frac * halfWidth * 2 * horizDir[0];
+                    const wz = jz + frac * halfWidth * 2 * horizDir[2];
+                    if (wx < bbMinX || wx > bbMaxX || wz < bbMinZ || wz > bbMaxZ) continue;
+                    const dx = wx - cx, dz = wz - cz;
+                    const hd = Math.sqrt(dx * dx + dz * dz);
+                    const bin = ((Math.round(Math.atan2(dz, dx) * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
+                    if (hd > junctionBoundary[bin]) junctionBoundary[bin] = hd;
+                }
+            }
+
+            // Outlier clip: P50 × 1.5
+            const jVals = Array.from(junctionBoundary).filter(v => v > 0).sort((a, b) => a - b);
+            if (jVals.length === 0) return null;
+            const p50  = jVals[Math.floor(jVals.length * 0.50)];
+            const CLIP = p50 * 1.5;
+            let clipped = 0;
+            for (let b = 0; b < ABINS; b++) {
+                if (junctionBoundary[b] > CLIP) { junctionBoundary[b] = 0; clipped++; }
+            }
+            const filled = Array.from(junctionBoundary).filter(v => v > 0).length;
+            console.log(`[ARKit] ${wallPlanes.length} wall planes → ${filled} bins, clipped ${clipped}`);
+            return filled >= 20 ? junctionBoundary : null;
+        }
+
         function classifyByFarthestPlanes() {
             if (!points.length) return;
 
@@ -2862,12 +2952,36 @@
 
             // Dense farthest cluster per bin — prefer upper-zone data (immune to
             // appliances). Fall back to all-heights if upper zone is sparse (<5 pts).
-            const PROJ_BIN = 0.10;
-            const rawBoundary = new Float32Array(ABINS);
-            for (let b = 0; b < ABINS; b++) {
-                const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
-                if (src.length >= 2) {
-                    rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
+            // ── Boundary source: ARKit planes (if checked) or point cloud ────────
+            const useArkit = scanRoomPlanes &&
+                             document.getElementById('use-arkit-planes')?.checked;
+            let rawBoundary;
+            if (useArkit) {
+                const ab = computeArkitBoundary(scanRoomPlanes, cx, cz);
+                if (ab) {
+                    rawBoundary = ab;
+                    const n = Array.from(ab).filter(v => v > 0).length;
+                    document.getElementById('selection-info').textContent =
+                        `ARKit boundary: ${n}/360 bins`;
+                    console.log(`[classify] Using ARKit boundary (${n} bins)`);
+                } else {
+                    // ARKit didn't produce enough data — fall back silently
+                    useArkit && console.warn('[classify] ARKit boundary failed, falling back to point cloud');
+                    rawBoundary = new Float32Array(ABINS);
+                    const PROJ_BIN2 = 0.10;
+                    for (let b = 0; b < ABINS; b++) {
+                        const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
+                        if (src.length >= 2) rawBoundary[b] = farthestDensePeak(src, PROJ_BIN2, false, 0.20) ?? 0;
+                    }
+                }
+            } else {
+                const PROJ_BIN = 0.10;
+                rawBoundary = new Float32Array(ABINS);
+                for (let b = 0; b < ABINS; b++) {
+                    const src = hdPerBinUpper[b].length >= 2 ? hdPerBinUpper[b] : hdPerBin[b];
+                    if (src.length >= 2) {
+                        rawBoundary[b] = farthestDensePeak(src, PROJ_BIN, false, 0.20) ?? 0;
+                    }
                 }
             }
 
