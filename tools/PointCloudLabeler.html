@@ -2928,22 +2928,24 @@
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
                 const wb  = filled[bin];
 
-                // Radial normal alignment: wall surface normals should point roughly
-                // toward or away from the room centroid (inward/outward radial).
-                // Objects with arbitrary face directions near the wall won't align → excluded.
+                // Normal quality checks for wall classification:
+                // 1. Radial alignment: normal should point roughly toward/away from centroid
+                // 2. Horizontal: normal should not be dominated by Y (floor/ceiling-like)
                 let radialAlign = 1.0;  // default: pass (used when normal is absent)
+                let normNyAbs   = 0.0;  // normalized abs(ny) — 0=horizontal, 1=vertical
                 const n = normals[i];
                 if (n) {
                     const nmag = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
                     if (nmag > 0.01) {
+                        normNyAbs = Math.abs(n.y) / nmag;  // 0=horizontal wall, 1=flat floor/ceiling
                         // Inward radial unit vector (toward centroid)
                         const radInX = -Math.cos(ang), radInZ = -Math.sin(ang);
                         // Absolute dot product: either face direction counts (normals may flip)
                         radialAlign = Math.abs((n.x * radInX + n.z * radInZ) / nmag);
                     }
                 }
-                // Require normal within ~63° of radial (cos 63° ≈ 0.45)
-                const nearWall = wb > 0 && hd >= wb - WALL_TOL && radialAlign >= 0.45;
+                // Wall: normal within ~63° of radial AND mostly horizontal (normNy < 0.5 → within 30° of horizontal)
+                const nearWall = wb > 0 && hd >= wb - WALL_TOL && radialAlign >= 0.45 && normNyAbs < 0.50;
 
                 // 1. Coving: near the wall boundary AND in the top zone below ceiling.
                 // Checked before wall so the coving strip gets its own label.
