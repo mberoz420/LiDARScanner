@@ -573,6 +573,14 @@
                     <input type="checkbox" id="show-backreflections" checked onchange="updateVisibility()">
                     <span class="color-dot" style="background:#ff00ff"></span> Back Reflections
                 </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="show-doors" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#A0522D"></span> Doors
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="show-windows" checked onchange="updateVisibility()">
+                    <span class="color-dot" style="background:#00BCD4"></span> Windows
+                </label>
             </div>
 
             <h2>Statistics</h2>
@@ -586,6 +594,8 @@
                 <div><span><span class="color-dot" style="background:#e68080"></span>Object Top:</span><span id="stat-objecttop">0</span></div>
                 <div><span><span class="color-dot" style="background:#ff00ff"></span>Back Reflection:</span><span id="stat-backreflection">0</span></div>
                 <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
+                <div><span><span class="color-dot" style="background:#A0522D"></span>Door:</span><span id="stat-door">0</span></div>
+                <div><span><span class="color-dot" style="background:#00BCD4"></span>Window:</span><span id="stat-window">0</span></div>
                 <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
             </div>
 
@@ -953,6 +963,7 @@
         // Visibility filters
         let showFloors = true, showCeilings = true, showWalls = true, showObjects = true;
         let showObjectTops = true, showBackReflections = true;
+        let showDoors = true, showWindows = true;
 
         function updateVisibility() {
             showFloors = document.getElementById('show-floors').checked;
@@ -961,6 +972,8 @@
             showObjects = document.getElementById('show-objects').checked;
             showObjectTops = document.getElementById('show-objecttops').checked;
             showBackReflections = document.getElementById('show-backreflections').checked;
+            showDoors = document.getElementById('show-doors').checked;
+            showWindows = document.getElementById('show-windows').checked;
             rebuildPointCloud();
         }
 
@@ -984,6 +997,8 @@
             // Handle numeric labels (legacy/manual labeling)
             if (label === 5) return 'objecttop';
             if (label === 6) return 'backreflection';
+            if (label === 7) return 'door';
+            if (label === 8) return 'window';
             if (label === 0) return 'floor';
             if (label === 1) return 'ceiling';
             if (label === 2) return 'wall';
@@ -1014,6 +1029,8 @@
                 case 'object': return showObjects;
                 case 'objecttop': return showObjectTops;
                 case 'backreflection': return showBackReflections;
+                case 'door': return showDoors;
+                case 'window': return showWindows;
                 default: return true;
             }
         }
@@ -1696,7 +1713,7 @@
         function updateStats() {
             const counts = {
                 floor: 0, ceiling: 0, wall: 0, object: 0,
-                objecttop: 0, backreflection: 0, unlabeled: 0
+                objecttop: 0, backreflection: 0, door: 0, window: 0, unlabeled: 0
             };
             let activeCount = 0;
 
@@ -1720,6 +1737,8 @@
             document.getElementById('stat-object').textContent = counts.object.toLocaleString();
             document.getElementById('stat-objecttop').textContent = counts.objecttop.toLocaleString();
             document.getElementById('stat-backreflection').textContent = counts.backreflection.toLocaleString();
+            document.getElementById('stat-door').textContent = counts.door.toLocaleString();
+            document.getElementById('stat-window').textContent = counts.window.toLocaleString();
             document.getElementById('stat-noise').textContent = '0';  // Noise counted separately if needed
             document.getElementById('stat-unlabeled').textContent = counts.unlabeled.toLocaleString();
         }
