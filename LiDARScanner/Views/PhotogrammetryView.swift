@@ -429,12 +429,6 @@ struct PhotogrammetryView: View {
         _preloadedPhotoDir = State(initialValue: preloadedDir)
     }
 
-    /// No-photos init — skips mode selection and starts LiDAR-only scanning immediately.
-    init(lidarOnly: Bool) {
-        _phase = State(initialValue: .capturing)
-        _captureMode = State(initialValue: .lidarOnly)
-    }
-
     // MARK: - Helpers
 
     var capturedCount: Int {
@@ -548,7 +542,6 @@ struct PhotogrammetryView: View {
         }
         .onAppear {
             meshManager.lightweightScanMode = true   // skip per-frame color sampling + classification
-            if captureMode == .lidarOnly { isCapturing = true }  // skip mode selection screen
         }
         .onDisappear {
             meshManager.lightweightScanMode = false  // restore for regular scan modes
@@ -821,6 +814,21 @@ struct PhotogrammetryView: View {
                     .cornerRadius(12)
                     .overlay(RoundedRectangle(cornerRadius: 12)
                         .stroke(Color.cyan.opacity(0.7), lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { selectMode(.lidarOnly); isCapturing = true }) {
+                    VStack(spacing: 5) {
+                        Image(systemName: "cube.transparent")
+                            .font(.title3).foregroundColor(.purple)
+                        Text("No Photos")
+                            .font(.caption2).foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .background(Color.black.opacity(0.55))
+                    .cornerRadius(12)
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.purple.opacity(0.7), lineWidth: 1.5))
                 }
                 .buttonStyle(.plain)
             }
