@@ -3147,13 +3147,12 @@
                 for (let b = 0; b < ABINS; b++) if (filled[b] === 0) filled[b] = median;
             }
 
-            // wallPlane = gap-filled boundary used for Pass 3 shell and outline.
-            // No cosine corner-enforcement — that formula caused phantom walls far
-            // outside the room whenever any bin had a large value (adjacent room,
-            // closet, outdoor surface). Simple gap-fill is safe: missing corner bins
-            // get the interpolated value of their real-wall neighbors, which is
-            // slightly inside the true corner but never outside the room.
-            const wallPlane = filled.slice();
+            // wallPlane: used only for Pass 3 shell and outline.
+            // Use boundary[] (continuity-filtered real data only, no gap-fill, no median fallback).
+            // Bins where boundary[b]=0 have no confirmed wall data → shell skips them.
+            // This prevents phantom walls in all unscanned directions.
+            // filled[] (with gap-fill) is kept for Pass 2 to classify real scan points.
+            const wallPlane = boundary.slice();
 
             // Floor / ceiling
             const floorY   = farthestDensePeak(allY, Y_BIN, true);
