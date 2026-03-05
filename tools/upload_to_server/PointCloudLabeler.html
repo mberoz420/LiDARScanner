@@ -2814,7 +2814,7 @@
             // Works for any room shape — no assumptions.
 
             const ABINS     = 360;    // 1° azimuth resolution
-            const WALL_TOL     = 0.35;   // 35 cm inward — mesh vertices sit inside surface
+            const WALL_TOL     = 0.10;   // 10 cm inward — accommodates 0-2° wall slope over 3m height; Pass 3 shell covers the rest
             const COVING_H     = 0.40;   // coving zone = top 40 cm below ceiling
             const Y_BIN        = 0.05;
             const FLOOR_TOL    = 0.20;
