@@ -550,11 +550,11 @@
             <h2>Visibility</h2>
             <div style="display:flex;flex-direction:column;gap:6px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-floors" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-floors" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#2ecc71"></span> Floors
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-ceilings" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-ceilings" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#f1c40f"></span> Ceilings
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
@@ -562,23 +562,23 @@
                     <span class="color-dot" style="background:#3498db"></span> Walls
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-objects" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-objects" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#e74c3c"></span> Objects
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-objecttops" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-objecttops" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#e68080"></span> Object Tops
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-backreflections" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-backreflections" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#ff00ff"></span> Back Reflections
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-doors" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-doors" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#A0522D"></span> Doors
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-windows" checked onchange="updateVisibility()">
+                    <input type="checkbox" id="show-windows" onchange="updateVisibility()">
                     <span class="color-dot" style="background:#00BCD4"></span> Windows
                 </label>
             </div>
@@ -968,9 +968,9 @@
         }
 
         // Visibility filters
-        let showFloors = true, showCeilings = true, showWalls = true, showObjects = true;
-        let showObjectTops = true, showBackReflections = true;
-        let showDoors = true, showWindows = true;
+        let showFloors = false, showCeilings = false, showWalls = true, showObjects = false;
+        let showObjectTops = false, showBackReflections = false;
+        let showDoors = false, showWindows = false;
 
         function updateVisibility() {
             showFloors = document.getElementById('show-floors').checked;
@@ -2770,86 +2770,96 @@
             if (!points.length) return;
 
             // ── Algorithm ─────────────────────────────────────────────────────
-            // In any direction there is exactly ONE farthest plane — the wall.
-            // Anything closer than that plane is an object (furniture, cabinets).
+            // Every flat wall has a single normal direction. Measuring distance
+            // ALONG that normal (projection) gives the same value for every point
+            // on the wall — it is a constant. Radial distance from the centroid
+            // does NOT: corner wall points are farther than center wall points.
             //
-            // 1. Bin by azimuth (36 × 10°). Per bin, take the 95th-percentile
-            //    horizontal distance — the farthest visible surface, robust to
-            //    1–2 stray points beyond the room. Skip door/window points
-            //    (they look through the wall to the outside).
+            // 1. Bin by azimuth (36 × 10°). For each bin, the "wall normal"
+            //    direction is the bin's center angle unit vector (cos θ, sin θ).
+            //    Project every point onto that direction:
+            //      proj = dx·cos(θ) + dz·sin(θ)
+            //    All points on a flat wall give the same proj — a sharp peak.
+            //    Objects in front give smaller proj. Skip door/window points.
             //
-            // 2. Smooth wall distances with max over ±9 bins (90°).
-            //    Bins occluded by tall cabinets inherit the true wall distance
-            //    from adjacent visible directions. Walls are flat planes — the
-            //    same wall distance must hold across the full cabinet span.
+            // 2. Wall distance per bin = farthest dense peak of projections
+            //    (top 30% of projection range, 10 cm bins). Robust to a few
+            //    stray returns beyond the room (reflections, window views).
             //
-            // 3. Floor = 5th-percentile Y; ceiling = 95th-percentile Y.
+            // 3. Smooth: replace each bin's wall distance with the upper-quartile
+            //    (75th pct) of its ±6-bin neighbourhood. Upper quartile is robust
+            //    to one inflated outlier bin while still propagating the true wall
+            //    distance into fully-occluded bins (cabinet behind scanner).
             //
-            // 4. Classify — wall check first (tight 15 cm tolerance):
-            //    a. hd ≥ wallDist − 0.15 → WALL
-            //    b. Y ≤ floorY + 0.20    → FLOOR
-            //    c. Y ≥ ceilingY − 0.20  → CEILING
-            //    d. else                 → OBJECT (cabinet, furniture, …)
+            // 4. Floor = lowest dense Y peak; ceiling = highest dense Y peak.
+            //
+            // 5. Classify wall-first: proj ≥ wallDist − 0.25 → WALL;
+            //    else Y-floor/ceiling checks; else OBJECT.
 
             const ANGULAR_BINS = 36;
-            const Y_BIN        = 0.05;   // 5 cm Y bins for floor/ceiling
-            const WALL_TOL     = 0.30;   // 30 cm: captures noisy wall surface
+            const PROJ_BIN     = 0.10;   // 10 cm projection bins
+            const Y_BIN        = 0.05;
+            const WALL_TOL     = 0.25;   // 25 cm along wall normal
             const FLOOR_TOL    = 0.20;
             const CEIL_TOL     = 0.20;
-            const SMOOTH_BINS  = 9;      // ±9 bins = ±90°, covers large cabinets
+            const SMOOTH_BINS  = 6;      // ±6 bins = ±60°
+            const BIN_ANGLE    = 2 * Math.PI / ANGULAR_BINS;
 
-            // helper: kth percentile of a numeric array
-            const pct = (arr, k) => {
-                const s = arr.slice().sort((a, b) => a - b);
-                return s[Math.min(Math.floor(s.length * k), s.length - 1)];
-            };
+            // Precompute each bin's normal unit vector (center of bin arc)
+            const binNx = new Float64Array(ANGULAR_BINS);
+            const binNz = new Float64Array(ANGULAR_BINS);
+            for (let b = 0; b < ANGULAR_BINS; b++) {
+                const θ = (b + 0.5) * BIN_ANGLE - Math.PI;
+                binNx[b] = Math.cos(θ);
+                binNz[b] = Math.sin(θ);
+            }
 
-            // XZ centroid (azimuth origin)
+            // XZ centroid (origin for projections)
             let cx = 0, cz = 0;
             points.forEach(p => { cx += p.x; cz += p.z; });
             cx /= points.length; cz /= points.length;
 
-            // ── Pass 1: collect horizontal distances per azimuth + all Y ─────
+            // ── Pass 1: project each point onto its bin's normal ──────────────
             const projsByBin = Array.from({length: ANGULAR_BINS}, () => []);
             const allY       = [];
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
-                if (labels[i] === 7 || labels[i] === 8) continue; // door/window: skip
-                const p  = points[i];
-                const dx = p.x - cx, dz = p.z - cz;
-                const hd = Math.sqrt(dx * dx + dz * dz);
+                if (labels[i] === 7 || labels[i] === 8) continue;
+                const p   = points[i];
+                const dx  = p.x - cx, dz = p.z - cz;
                 const ang = Math.atan2(dz, dx);
-                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                const bin = ((Math.floor((ang + Math.PI) / BIN_ANGLE)
                               % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
-                projsByBin[bin].push(hd);
+                // Project onto bin normal — flat wall = constant value
+                const proj = dx * binNx[bin] + dz * binNz[bin];
+                projsByBin[bin].push(proj);
                 allY.push(p.y);
             }
 
-            // ── Pass 2: wall distance per bin = 90th percentile ───────────────
-            // One farthest plane per direction. 90th pct is more robust than
-            // 95th to outlier stray points (reflections, window views) that
-            // would inflate the wall estimate and kill the wall check via smoothing.
-            const wallDist = projsByBin.map(dists =>
-                dists.length >= 3 ? pct(dists, 0.90) : null
+            // ── Pass 2: wall distance = farthest dense peak of projections ────
+            const wallDist = projsByBin.map(projs =>
+                projs.length >= 5 ? farthestDensePeak(projs, PROJ_BIN, false, 0.30) : null
             );
 
-            // Floor = 5th pct Y (robust lowest),  ceiling = 95th pct Y
-            const floorY   = allY.length ? pct(allY, 0.05) : null;
-            const ceilingY = allY.length ? pct(allY, 0.95) : null;
+            // Floor/ceiling from all Y values
+            const floorY   = farthestDensePeak(allY, Y_BIN, true);
+            const ceilingY = farthestDensePeak(allY, Y_BIN, false);
 
-            // ── Pass 3: smooth wall distances ─────────────────────────────────
-            // Max-of-window propagates the true (larger) wall distance from
-            // visible directions into directions fully occluded by cabinets.
+            // ── Pass 3: smooth — upper quartile of neighbours ─────────────────
+            // Propagates true wall distance to occluded bins; robust to one
+            // inflated neighbour (stray point through a window).
             const smoothedWall = wallDist.slice();
             for (let bin = 0; bin < ANGULAR_BINS; bin++) {
+                const nbVals = [];
                 for (let off = -SMOOTH_BINS; off <= SMOOTH_BINS; off++) {
                     const nb = (bin + off + ANGULAR_BINS) % ANGULAR_BINS;
-                    if (wallDist[nb] !== null) {
-                        smoothedWall[bin] = smoothedWall[bin] === null
-                            ? wallDist[nb]
-                            : Math.max(smoothedWall[bin], wallDist[nb]);
-                    }
+                    if (wallDist[nb] !== null) nbVals.push(wallDist[nb]);
+                }
+                if (nbVals.length > 0) {
+                    nbVals.sort((a, b) => a - b);
+                    // 75th percentile: captures true wall over outlier-inflated bins
+                    smoothedWall[bin] = nbVals[Math.floor(nbVals.length * 0.75)];
                 }
             }
 
@@ -2858,16 +2868,18 @@
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
                 if (labels[i] === 7 || labels[i] === 8) continue;
-                const p  = points[i];
-                const dx = p.x - cx, dz = p.z - cz;
-                const hd = Math.sqrt(dx * dx + dz * dz);
+                const p   = points[i];
+                const dx  = p.x - cx, dz = p.z - cz;
                 const ang = Math.atan2(dz, dx);
-                const bin = ((Math.floor((ang + Math.PI) / (2 * Math.PI / ANGULAR_BINS))
+                const bin = ((Math.floor((ang + Math.PI) / BIN_ANGLE)
                               % ANGULAR_BINS) + ANGULAR_BINS) % ANGULAR_BINS;
 
-                // 1. Wall: at or very near the single farthest plane
+                // Projection onto wall normal for this direction
+                const proj  = dx * binNx[bin] + dz * binNz[bin];
                 const wdist = smoothedWall[bin];
-                if (wdist !== null && hd >= wdist - WALL_TOL) {
+
+                // 1. Wall: projection at or near the farthest visible plane
+                if (wdist !== null && proj >= wdist - WALL_TOL) {
                     labels[i] = 2; nWall++; continue;
                 }
 
@@ -2881,7 +2893,7 @@
                     labels[i] = 1; nCeil++; continue;
                 }
 
-                // 4. Object — closer than the farthest plane in its direction
+                // 4. Object — in front of the farthest plane
                 labels[i] = 3; nObj++;
             }
 
