@@ -785,6 +785,14 @@
                 </div>
             </div>
         </div>
+        <div class="menu-item" onclick="toggleMenu(this)">
+            Files
+            <div class="menu-dropdown" onclick="event.stopPropagation()">
+                <div class="menu-dropdown-item" onclick="closeMenus(); showFileManager()">
+                    <span>File Manager…</span>
+                </div>
+            </div>
+        </div>
         <div style="flex:1"></div>
         <div id="top-filename" style="font-size:11px;color:#6e7681;padding-right:12px;"></div>
     </div>
@@ -1315,6 +1323,29 @@
                     <div id="open-server-status" style="font-size:12px;color:#888;margin-bottom:10px;">Loading…</div>
                     <div id="open-server-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;"></div>
                 </div>
+            </div>
+        </div>
+        <!-- File Manager modal -->
+        <div id="fm-modal" style="display:none;position:fixed;inset:0;
+            background:rgba(0,0,0,0.7);z-index:600;align-items:center;justify-content:center;">
+            <div style="background:#0d1a2e;border:1px solid #00d9ff;border-radius:12px;
+                        padding:20px;width:520px;max-height:80vh;display:flex;flex-direction:column;
+                        box-shadow:0 8px 40px rgba(0,0,0,0.8);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <span style="font-weight:700;color:#00d9ff;font-size:14px;">📂 File Manager</span>
+                    <span onclick="hideFileManager()" style="cursor:pointer;color:#666;font-size:20px;line-height:1;">✕</span>
+                </div>
+                <!-- Breadcrumb -->
+                <div id="fm-breadcrumb" style="font-size:11px;color:#888;margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap;"></div>
+                <!-- Toolbar -->
+                <div style="display:flex;gap:6px;margin-bottom:10px;">
+                    <button onclick="fmNewFolder()" style="padding:4px 10px;background:#1a2744;color:#00d9ff;border:1px solid #0f3460;border-radius:5px;font-size:11px;cursor:pointer;">+ Folder</button>
+                    <button onclick="fmRefresh()" style="padding:4px 10px;background:#1a2744;color:#aaa;border:1px solid #0f3460;border-radius:5px;font-size:11px;cursor:pointer;">Refresh</button>
+                    <div style="flex:1"></div>
+                    <span id="fm-status" style="font-size:10px;color:#666;align-self:center;"></span>
+                </div>
+                <!-- File list -->
+                <div id="fm-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:3px;min-height:200px;"></div>
             </div>
         </div>
     </div>
@@ -4140,6 +4171,183 @@
             const name = prompt('Save to server as:', defaultName);
             if (!name) return;
             saveToServer(name);
+        }
+
+        // ── File Manager ────────────────────────────────────────────────────────
+        let fmCurrentPath = '';
+
+        function showFileManager() {
+            document.getElementById('fm-modal').style.display = 'flex';
+            fmCurrentPath = '';
+            fmLoadDir('');
+        }
+
+        function hideFileManager() {
+            document.getElementById('fm-modal').style.display = 'none';
+        }
+
+        function fmRefresh() { fmLoadDir(fmCurrentPath); }
+
+        async function fmLoadDir(path) {
+            fmCurrentPath = path;
+            const listEl = document.getElementById('fm-list');
+            const statusEl = document.getElementById('fm-status');
+            listEl.innerHTML = '<div style="color:#666;font-size:11px;padding:10px;">Loading…</div>';
+            fmUpdateBreadcrumb(path);
+
+            try {
+                const url = SERVER_BASE + '/file_manager.php?action=list&path=' + encodeURIComponent(path);
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const { items } = await res.json();
+
+                if (!items || items.length === 0) {
+                    listEl.innerHTML = '<div style="color:#666;font-size:11px;padding:10px;">Empty folder</div>';
+                    statusEl.textContent = '0 items';
+                    return;
+                }
+
+                const folders = items.filter(i => i.type === 'folder');
+                const files = items.filter(i => i.type === 'file');
+                statusEl.textContent = `${folders.length} folders, ${files.length} files`;
+
+                listEl.innerHTML = items.map(item => {
+                    const isFolder = item.type === 'folder';
+                    const icon = isFolder ? '📁' : (item.name.endsWith('.json') ? '📄' : '📎');
+                    const size = isFolder ? '' : fmFormatSize(item.size);
+                    const pts = item.num_points ? ` · ${Number(item.num_points).toLocaleString()} pts` : '';
+                    const date = item.modified ? new Date(item.modified).toLocaleDateString() : '';
+                    const itemPath = path ? path + '/' + item.name : item.name;
+
+                    return `<div style="display:flex;align-items:center;padding:6px 8px;background:#1a2744;border:1px solid #0f3460;border-radius:6px;font-size:11px;gap:8px;"
+                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
+                        <span style="cursor:${isFolder ? 'pointer' : 'default'};flex:1;display:flex;align-items:center;gap:6px;"
+                            ${isFolder ? `onclick="fmLoadDir('${itemPath.replace(/'/g, "\\'")}')"` : ''}>
+                            <span>${icon}</span>
+                            <span style="color:#fff;${isFolder ? 'font-weight:600;' : ''}">${item.name}</span>
+                            <span style="color:#555;font-size:9px;">${size}${pts}</span>
+                            <span style="color:#444;font-size:9px;margin-left:auto;">${date}</span>
+                        </span>
+                        <span style="display:flex;gap:4px;">
+                            ${!isFolder ? `<button onclick="fmOpenScan('${itemPath.replace(/'/g, "\\'")}')" title="Open in labeler"
+                                style="padding:2px 6px;background:#0f3460;color:#00d9ff;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">Open</button>` : ''}
+                            <button onclick="fmRename('${itemPath.replace(/'/g, "\\'")}')" title="Rename"
+                                style="padding:2px 6px;background:#0f3460;color:#aaa;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">✏️</button>
+                            ${!isFolder ? `<button onclick="fmCopy('${itemPath.replace(/'/g, "\\'")}')" title="Copy"
+                                style="padding:2px 6px;background:#0f3460;color:#aaa;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">📋</button>` : ''}
+                            <button onclick="fmDelete('${itemPath.replace(/'/g, "\\'")}')" title="Delete"
+                                style="padding:2px 6px;background:#3a1010;color:#f55;border:1px solid #5a2020;border-radius:3px;font-size:9px;cursor:pointer;">🗑</button>
+                        </span>
+                    </div>`;
+                }).join('');
+
+            } catch (err) {
+                listEl.innerHTML = `<div style="color:#f55;font-size:11px;padding:10px;">Error: ${err.message}</div>`;
+            }
+        }
+
+        function fmUpdateBreadcrumb(path) {
+            const el = document.getElementById('fm-breadcrumb');
+            const parts = path ? path.split('/') : [];
+            let html = `<span onclick="fmLoadDir('')" style="cursor:pointer;color:#00d9ff;">scans</span>`;
+            let cumulative = '';
+            parts.forEach(p => {
+                cumulative += (cumulative ? '/' : '') + p;
+                const cp = cumulative;
+                html += ` <span style="color:#444;">/</span> <span onclick="fmLoadDir('${cp}')" style="cursor:pointer;color:#00d9ff;">${p}</span>`;
+            });
+            el.innerHTML = html;
+        }
+
+        function fmFormatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+        async function fmNewFolder() {
+            const name = prompt('New folder name:');
+            if (!name) return;
+            const path = fmCurrentPath ? fmCurrentPath + '/' + name : name;
+            try {
+                const res = await fetch(SERVER_BASE + '/file_manager.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body: JSON.stringify({ action: 'mkdir', path })
+                });
+                const data = await res.json();
+                if (!data.success) alert('Error: ' + (data.error || 'Unknown'));
+                fmRefresh();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function fmDelete(path) {
+            if (!confirm('Delete "' + path.split('/').pop() + '"?')) return;
+            try {
+                const res = await fetch(SERVER_BASE + '/file_manager.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body: JSON.stringify({ action: 'delete', path })
+                });
+                const data = await res.json();
+                if (!data.success) alert('Error: ' + (data.error || 'Unknown'));
+                fmRefresh();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function fmRename(path) {
+            const oldName = path.split('/').pop();
+            const newName = prompt('Rename to:', oldName);
+            if (!newName || newName === oldName) return;
+            try {
+                const res = await fetch(SERVER_BASE + '/file_manager.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body: JSON.stringify({ action: 'rename', path, name: newName })
+                });
+                const data = await res.json();
+                if (!data.success) alert('Error: ' + (data.error || 'Unknown'));
+                fmRefresh();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function fmCopy(path) {
+            const fileName = path.split('/').pop();
+            const dest = prompt('Copy to (full path):', fmCurrentPath ? fmCurrentPath + '/copy_' + fileName : 'copy_' + fileName);
+            if (!dest) return;
+            try {
+                const res = await fetch(SERVER_BASE + '/file_manager.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body: JSON.stringify({ action: 'copy', from: path, to: dest })
+                });
+                const data = await res.json();
+                if (!data.success) alert('Error: ' + (data.error || 'Unknown'));
+                fmRefresh();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function fmOpenScan(path) {
+            if (!path.endsWith('.json')) { alert('Can only open JSON files'); return; }
+            hideFileManager();
+            const parts = path.split('/');
+            const filename = parts.pop();
+            const project = parts.join('/');
+            document.getElementById('selection-info').textContent = `Opening ${filename}…`;
+            try {
+                let url = SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename);
+                if (project) url += '&project=' + encodeURIComponent(project);
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
+                if (!res.ok) throw new Error('Server error ' + res.status);
+                const data = await res.json();
+                currentFilename = filename;
+                currentProject = project || '';
+                updateFilenameDisplay();
+                loadJSON(data);
+            } catch (err) {
+                alert('Failed to open: ' + err.message);
+                document.getElementById('selection-info').textContent = 'Open failed.';
+            }
         }
 
         async function showOpenFromServer() {
