@@ -455,6 +455,10 @@
                 <button class="btn btn-view btn-small" onclick="setView('bottom')">Bottom</button>
                 <button class="btn btn-view btn-small" onclick="centerCamera()">Reset</button>
             </div>
+            <div class="view-buttons" style="margin-top:6px;">
+                <button class="btn btn-view" style="width:48%;font-size:18px;" onclick="rotateView(-45)">&#x21BA; 45°</button>
+                <button class="btn btn-view" style="width:48%;font-size:18px;" onclick="rotateView(+45)">45° &#x21BB;</button>
+            </div>
 
             <h2>Label Selected Points</h2>
             <button class="btn btn-floor" onclick="labelSelected(0)">
@@ -820,6 +824,19 @@
                 document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan';
             }
 
+            controls.update();
+        }
+
+        function rotateView(degrees) {
+            const rad = degrees * Math.PI / 180;
+            const c = controls.target;
+            const pos = camera.position.clone().sub(c);
+            // Rotate around Y axis (vertical)
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+            const x = pos.x * cos - pos.z * sin;
+            const z = pos.x * sin + pos.z * cos;
+            camera.position.set(c.x + x, c.y + pos.y, c.z + z);
+            camera.lookAt(c);
             controls.update();
         }
 
