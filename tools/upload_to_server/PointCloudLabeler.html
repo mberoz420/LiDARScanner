@@ -407,6 +407,50 @@
             border-radius: 10px;
             margin-left: 6px;
         }
+
+        /* ── Collapsible Cards ─────────────────────────────────── */
+        #sidebar {
+            padding: 10px 10px 20px;
+        }
+        .sidebar-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #e94560;
+            padding: 8px 6px 10px;
+            border-bottom: 1px solid #0f3460;
+            margin-bottom: 8px;
+        }
+        .card {
+            background: #1e2d50;
+            border-radius: 10px;
+            margin-bottom: 6px;
+            overflow: hidden;
+            border: 1px solid #0f3460;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 9px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            color: #cdd;
+            user-select: none;
+            background: #1a2744;
+            transition: background 0.15s;
+        }
+        .card-header:hover { background: #223060; }
+        .card-icon {
+            font-size: 9px;
+            opacity: 0.6;
+            transition: transform 0.2s;
+        }
+        .card-body {
+            padding: 10px 10px 4px;
+        }
+        .card-body .btn { margin: 4px 0; }
+        .card-body .input-group { margin: 6px 0; }
     </style>
 </head>
 <body>
@@ -422,309 +466,304 @@
             </div>
         </div>
         <div id="sidebar">
-            <h1>Point Cloud Labeler <span style="font-size:11px;font-weight:normal;opacity:0.5;vertical-align:middle;">v2.0</span></h1>
+            <div class="sidebar-title">⚡ Point Cloud Labeler <span style="font-size:10px;opacity:0.35;font-weight:400;">v2.0</span></div>
 
-            <div id="dropzone" onclick="document.getElementById('file-input').click()">
-                <p>Drop JSON file here</p>
-                <p style="font-size: 12px; color: #888; margin-top: 5px;">or click to browse</p>
-            </div>
-            <input type="file" id="file-input" accept=".json" />
-
-            <h2>Point Size</h2>
-            <div class="input-group">
-                <label>Size: <span id="size-value">0.5</span></label>
-                <input type="range" id="size-slider" min="0.1" max="1" step="0.05" value="0.5"
-                       onchange="updatePointSize(this.value)">
-                <div style="display:flex;gap:5px;margin-top:5px;">
-                    <button class="btn btn-action btn-small" onclick="decreasePointSize()">- Smaller</button>
-                    <button class="btn btn-action btn-small" onclick="increasePointSize()">+ Bigger</button>
+            <!-- FILE -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('file')">
+                    <span>📁 File</span><span class="card-icon" id="card-icon-file">▼</span>
                 </div>
-                <p class="keyboard-hint">Use [ and ] keys to adjust size</p>
-            </div>
-
-            <h2>Camera Views</h2>
-            <div class="view-buttons">
-                <button class="btn btn-view btn-small" onclick="setView('top')">Top</button>
-                <button class="btn btn-view btn-small" onclick="setView('front')">Front</button>
-                <button class="btn btn-view btn-small" onclick="setView('right')">Right</button>
-                <button class="btn btn-view btn-small" onclick="setView('left')">Left</button>
-            </div>
-            <div class="view-buttons">
-                <button class="btn btn-view btn-small" onclick="setView('perspective')">3D</button>
-                <button class="btn btn-view btn-small" onclick="setView('back')">Back</button>
-                <button class="btn btn-view btn-small" onclick="setView('bottom')">Bottom</button>
-                <button class="btn btn-view btn-small" onclick="centerCamera()">Reset</button>
-            </div>
-            <div class="view-buttons" style="margin-top:6px;">
-                <button class="btn btn-view" style="width:48%;font-size:18px;" onclick="rotateView(-45)">&#x21BA; 45°</button>
-                <button class="btn btn-view" style="width:48%;font-size:18px;" onclick="rotateView(+45)">45° &#x21BB;</button>
-            </div>
-            <div style="margin:8px 0;">
-                <button id="draw-mode-btn" class="btn btn-action" style="border-color:#f39c12;" onclick="toggleDrawMode()">&#x270F;&#xFE0F; Draw Boundary</button>
-            </div>
-            <div id="manual-boundary-row" style="display:none;margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #f39c12;">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="use-manual-boundary" checked style="width:16px;height:16px;cursor:pointer;"
-                           onchange="classifyByFarthestPlanes()">
-                    <span>&#x270F;&#xFE0F; Use manual boundary</span>
-                </label>
-                <button class="btn btn-action btn-small" style="margin-top:6px;border-color:#e74c3c;color:#e74c3c;" onclick="clearManualBoundary()">&#x2715; Clear manual boundary</button>
-            </div>
-
-            <h2>Label Selected Points</h2>
-            <button class="btn btn-floor" onclick="labelSelected(0)">
-                <span class="color-dot" style="background:#2ecc71"></span>Floor (1)
-            </button>
-            <button class="btn btn-ceiling" onclick="labelSelected(1)">
-                <span class="color-dot" style="background:#f1c40f"></span>Ceiling (2)
-            </button>
-            <button class="btn btn-wall" onclick="labelSelected(2)">
-                <span class="color-dot" style="background:#3498db"></span>Wall (3)
-            </button>
-            <button class="btn btn-object" onclick="labelSelected(3)">
-                <span class="color-dot" style="background:#e74c3c"></span>Object (4)
-            </button>
-            <button class="btn btn-objecttop" onclick="labelSelected(5)">
-                <span class="color-dot" style="background:#e68080"></span>Object Top (5)
-            </button>
-            <button class="btn btn-backreflection" onclick="labelSelected(6)">
-                <span class="color-dot" style="background:#ff00ff"></span>Back Reflection (6)
-            </button>
-            <button class="btn btn-noise" onclick="labelSelected(4)">
-                <span class="color-dot" style="background:#9b59b6"></span>Noise (7)
-            </button>
-            <button class="btn btn-unlabeled" onclick="labelSelected(-1)">
-                Clear Label (0)
-            </button>
-            <button class="btn btn-delete" onclick="deleteSelected()">
-                Delete Selected Points
-            </button>
-            <p class="keyboard-hint">Keys 0-7 as shortcuts, Delete/Backspace to delete</p>
-
-            <h2>Custom Labels</h2>
-            <div class="input-group">
-                <div class="input-row">
-                    <input type="text" id="new-label-name" placeholder="Label name (e.g., door)">
-                    <button class="btn btn-custom btn-small" onclick="addCustomLabel()">Add</button>
-                </div>
-            </div>
-            <div class="custom-labels-list" id="custom-labels-list">
-                <!-- Custom labels appear here -->
-            </div>
-
-            <h2>Height Selection</h2>
-            <div class="input-group">
-                <label>Select points by Y height (meters)</label>
-                <div class="input-row">
-                    <input type="number" id="height-min" placeholder="Min Y" step="0.1">
-                    <input type="number" id="height-max" placeholder="Max Y" step="0.1">
-                </div>
-            </div>
-            <button class="btn btn-action" onclick="selectByHeight()">Select Height Range</button>
-            <button class="btn btn-action" onclick="selectAboveHeight()">Select Above Min Y</button>
-            <button class="btn btn-action" onclick="selectBelowHeight()">Select Below Max Y</button>
-
-            <h2>Selection Tools</h2>
-            <div class="input-group">
-                <label>Selection Radius: <span id="radius-value">0.3</span>m</label>
-                <input type="range" id="radius-slider" min="0.05" max="1.0" step="0.05" value="0.3"
-                       onchange="updateRadius(this.value)">
-            </div>
-            <h2>Smart Auto-Classify</h2>
-            <div style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.4;">
-                From room centroid: farthest plane with highest point density in each direction = room boundary.
-            </div>
-            <div class="input-group">
-                <label>Wall tolerance: <span id="tolerance-value">0.30</span>m</label>
-                <input type="range" id="classify-tolerance" min="0.05" max="0.80" step="0.05" value="0.30"
-                       oninput="document.getElementById('tolerance-value').textContent=parseFloat(this.value).toFixed(2)">
-            </div>
-            <button class="btn btn-action" onclick="smartAutoClassify(false)"
-                    style="background:#8e44ad;">&#x2728; Classify Unlabeled</button>
-            <button class="btn btn-action" onclick="smartAutoClassify(true)"
-                    style="background:#c0392b;">&#x21BA; Re-classify All</button>
-
-            <div style="margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;">
-                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
-                    <span>Wall tolerance</span>
-                    <span id="wall-tol-value">0.10 m</span>
-                </div>
-                <input type="range" id="wall-tol" min="0.02" max="0.40" step="0.02" value="0.10" style="width:100%;"
-                       oninput="document.getElementById('wall-tol-value').textContent=parseFloat(this.value).toFixed(2)+' m'; classifyByFarthestPlanes();">
-            </div>
-
-            <div style="margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;">
-                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
-                    <span>Boundary smoothing</span>
-                    <span id="smooth-value">0°</span>
-                </div>
-                <input type="range" id="smooth-span" min="0" max="30" step="1" value="0" style="width:100%;"
-                       oninput="document.getElementById('smooth-value').textContent=this.value+'°'; classifyByFarthestPlanes();">
-            </div>
-
-            <div id="arkit-option-row" style="display:none;margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #27ae60;">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="use-arkit-planes" style="width:16px;height:16px;cursor:pointer;"
-                           onchange="classifyByFarthestPlanes()">
-                    <span>&#x1F4CD; Use ARKit plane boundary<br><span style="color:#888;font-size:11px;">Uses wall planes detected during scan</span></span>
-                </label>
-            </div>
-
-            <div style="margin:8px 0;padding:6px 8px;background:#0f3460;border-radius:6px;">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-outline" checked style="width:16px;height:16px;cursor:pointer;"
-                           onchange="if(roomOutlineGroup) roomOutlineGroup.visible = this.checked;">
-                    <span>Show boundary outline lines</span>
-                </label>
-            </div>
-
-            <h2>Selection Tools</h2>
-            <button class="btn btn-action" onclick="selectByNormal('up')">Select Floors (normal up)</button>
-            <button class="btn btn-action" onclick="selectByNormal('down')">Select Ceilings (normal down)</button>
-            <button class="btn btn-action" onclick="selectByNormal('vertical')">Select Walls (vertical)</button>
-            <button class="btn btn-action" onclick="selectAll()">Select All</button>
-            <button class="btn btn-action" onclick="clearSelection()">Clear Selection</button>
-            <button class="btn btn-action" onclick="invertSelection()">Invert Selection</button>
-
-            <h2>Color Mode</h2>
-            <div class="input-group">
-                <select id="color-mode" onchange="updateColorMode(this.value)" style="width:100%;padding:8px;background:#0f3460;color:#fff;border:1px solid #0f3460;border-radius:4px;">
-                    <option value="label">By Label</option>
-                    <option value="normal" selected>By Normal (Auto-detect)</option>
-                    <option value="height">By Height</option>
-                    <option value="rgb">Original Colors</option>
-                </select>
-            </div>
-
-            <h2>Visibility</h2>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-floors" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#2ecc71"></span> Floors
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-ceilings" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#f1c40f"></span> Ceilings
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-walls" checked onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#3498db"></span> Walls
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-objects" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#e74c3c"></span> Objects
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-objecttops" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#e68080"></span> Object Tops
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-backreflections" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#ff00ff"></span> Back Reflections
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-doors" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#A0522D"></span> Doors
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-windows" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#00BCD4"></span> Windows
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                    <input type="checkbox" id="show-covings" onchange="updateVisibility()">
-                    <span class="color-dot" style="background:#FF8C42"></span> Covings
-                </label>
-            </div>
-
-            <h2>Statistics</h2>
-            <div class="stats" id="stats">
-                <div><span>Total Points:</span><span id="stat-total">0</span></div>
-                <div><span>Visible:</span><span id="stat-visible">0</span></div>
-                <div><span><span class="color-dot" style="background:#2ecc71"></span>Floor:</span><span id="stat-floor">0</span></div>
-                <div><span><span class="color-dot" style="background:#f1c40f"></span>Ceiling:</span><span id="stat-ceiling">0</span></div>
-                <div><span><span class="color-dot" style="background:#3498db"></span>Wall:</span><span id="stat-wall">0</span></div>
-                <div><span><span class="color-dot" style="background:#e74c3c"></span>Object:</span><span id="stat-object">0</span></div>
-                <div><span><span class="color-dot" style="background:#e68080"></span>Object Top:</span><span id="stat-objecttop">0</span></div>
-                <div><span><span class="color-dot" style="background:#ff00ff"></span>Back Reflection:</span><span id="stat-backreflection">0</span></div>
-                <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
-                <div><span><span class="color-dot" style="background:#A0522D"></span>Door:</span><span id="stat-door">0</span></div>
-                <div><span><span class="color-dot" style="background:#00BCD4"></span>Window:</span><span id="stat-window">0</span></div>
-                <div><span><span class="color-dot" style="background:#FF8C42"></span>Coving:</span><span id="stat-coving">0</span></div>
-                <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
-            </div>
-
-            <!-- ── Photogrammetry Panel (shown only when ?photos= param present) ── -->
-            <h2 id="photo-panel-header" style="display:none">
-                📷 Photogrammetry
-                <span class="photo-badge" id="photo-count-badge">0</span>
-            </h2>
-            <div id="photo-panel" style="display:none">
-                <div class="stats">
-                    <div><span>Session</span><span id="photo-session-label" style="font-family:monospace;font-size:10px">—</span></div>
-                    <div><span>Photos</span><span id="photo-count-stat">—</span></div>
-                    <div><span>Camera Poses</span><span id="photo-pose-stat">—</span></div>
-                </div>
-
-                <div class="photo-toggle-row">
-                    <input type="checkbox" id="show-camera-path" checked onchange="toggleCameraPath()">
-                    <label for="show-camera-path" style="cursor:pointer;">Show Camera Path</label>
-                </div>
-                <div class="photo-toggle-row">
-                    <input type="checkbox" id="show-photo-cones" checked onchange="toggleCameraPath()">
-                    <label for="show-photo-cones" style="cursor:pointer;">Show Camera Cones</label>
-                </div>
-
-                <div class="photo-filmstrip" id="photo-filmstrip"></div>
-
-                <div class="photo-preview-wrap" id="photo-preview-wrap">
-                    <img id="photo-preview-img" src="" alt="preview">
-                    <div class="photo-preview-label" id="photo-preview-label"></div>
-                </div>
-
-                <button class="btn btn-action btn-small" onclick="clearPhotoLayer()" style="margin-top:6px">
-                    ✕ Clear Photo Layer
-                </button>
-
-                <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
-                    <div style="font-size:10px;color:#aaa;margin-bottom:5px">Door &amp; Window Detection</div>
-                    <button class="btn btn-action btn-small" id="btn-detect-depth"
-                            onclick="runDepthDetection()" style="margin-bottom:4px;width:100%">
-                        📐 Depth: Detect Openings
-                    </button>
-                    <button class="btn btn-action btn-small" id="btn-detect-ai"
-                            onclick="runAIDetection()" style="width:100%">
-                        🤖 AI: Detect Doors &amp; Windows
-                    </button>
-                </div>
-                <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
-                    <div style="font-size:10px;color:#aaa;margin-bottom:5px">Surface Completion</div>
-                    <button class="btn btn-action btn-small" id="btn-fill-holes"
-                            onclick="fillSurfaceHoles()" style="width:100%">
-                        🪣 Fill Surface Holes
-                    </button>
+                <div class="card-body" id="card-body-file">
+                    <div id="dropzone" onclick="document.getElementById('file-input').click()">
+                        <p>Drop JSON file here</p>
+                        <p style="font-size:11px;color:#888;margin-top:4px;">or click to browse</p>
+                    </div>
+                    <input type="file" id="file-input" accept=".json" />
                 </div>
             </div>
 
-            <h2>Build Status</h2>
-            <div id="build-status-container">
-                <div class="build-status loading">
-                    <div class="build-status-header">
-                        <span>Loading...</span>
+            <!-- DISPLAY -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('display')">
+                    <span>🎨 Display</span><span class="card-icon" id="card-icon-display">▶</span>
+                </div>
+                <div class="card-body" id="card-body-display" style="display:none">
+                    <div class="input-group">
+                        <label>Point size: <span id="size-value">0.5</span></label>
+                        <input type="range" id="size-slider" min="0.1" max="1" step="0.05" value="0.5" onchange="updatePointSize(this.value)">
+                        <div style="display:flex;gap:5px;margin-top:5px;">
+                            <button class="btn btn-action btn-small" onclick="decreasePointSize()">− Smaller</button>
+                            <button class="btn btn-action btn-small" onclick="increasePointSize()">+ Bigger</button>
+                        </div>
+                        <p class="keyboard-hint">[ ] keys to adjust size</p>
+                    </div>
+                    <div class="input-group">
+                        <label>Color Mode</label>
+                        <select id="color-mode" onchange="updateColorMode(this.value)" style="width:100%;padding:8px;background:#0f3460;color:#fff;border:1px solid #0f3460;border-radius:4px;">
+                            <option value="label">By Label</option>
+                            <option value="normal" selected>By Normal</option>
+                            <option value="height">By Height</option>
+                            <option value="rgb">Original Colors</option>
+                        </select>
                     </div>
                 </div>
             </div>
-            <button class="btn btn-action" onclick="refreshBuildStatus()">Refresh Status</button>
 
-            <h2>Export</h2>
-            <button class="btn btn-file" onclick="exportLabeled()">Export Labeled JSON</button>
-            <button class="btn btn-action" onclick="exportForTraining()">Export for ML Training</button>
-            <button class="btn btn-action" style="background:#27ae60;border-color:#2ecc71" onclick="exportGLB()">&#x1F4E6; Export Colored Mesh (.glb)</button>
+            <!-- VIEWS -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('views')">
+                    <span>📷 Camera &amp; Views</span><span class="card-icon" id="card-icon-views">▼</span>
+                </div>
+                <div class="card-body" id="card-body-views">
+                    <div class="view-buttons">
+                        <button class="btn btn-view btn-small" onclick="setView('top')">Top</button>
+                        <button class="btn btn-view btn-small" onclick="setView('front')">Front</button>
+                        <button class="btn btn-view btn-small" onclick="setView('right')">Right</button>
+                        <button class="btn btn-view btn-small" onclick="setView('left')">Left</button>
+                    </div>
+                    <div class="view-buttons">
+                        <button class="btn btn-view btn-small" onclick="setView('perspective')">3D</button>
+                        <button class="btn btn-view btn-small" onclick="setView('back')">Back</button>
+                        <button class="btn btn-view btn-small" onclick="setView('bottom')">Bottom</button>
+                        <button class="btn btn-view btn-small" onclick="centerCamera()">Reset</button>
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:4px;">
+                        <button class="btn btn-view" style="flex:1;font-size:16px;" onclick="rotateView(-45)">&#x21BA; 45°</button>
+                        <button class="btn btn-view" style="flex:1;font-size:16px;" onclick="rotateView(+45)">45° &#x21BB;</button>
+                    </div>
+                    <button id="draw-mode-btn" class="btn btn-action" style="margin-top:6px;border-color:#f39c12;" onclick="toggleDrawMode()">&#x270F;&#xFE0F; Draw Boundary</button>
+                    <div id="manual-boundary-row" style="display:none;margin-top:6px;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #f39c12;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                            <input type="checkbox" id="use-manual-boundary" checked style="width:16px;height:16px;cursor:pointer;" onchange="classifyByFarthestPlanes()">
+                            <span>&#x270F;&#xFE0F; Use manual boundary</span>
+                        </label>
+                        <button class="btn btn-action btn-small" style="margin-top:6px;border-color:#e74c3c;color:#e74c3c;" onclick="clearManualBoundary()">&#x2715; Clear</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LABELS -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('labels')">
+                    <span>🏷️ Labels</span><span class="card-icon" id="card-icon-labels">▼</span>
+                </div>
+                <div class="card-body" id="card-body-labels">
+                    <button class="btn btn-floor" onclick="labelSelected(0)"><span class="color-dot" style="background:#2ecc71"></span>Floor (1)</button>
+                    <button class="btn btn-ceiling" onclick="labelSelected(1)"><span class="color-dot" style="background:#f1c40f"></span>Ceiling (2)</button>
+                    <button class="btn btn-wall" onclick="labelSelected(2)"><span class="color-dot" style="background:#3498db"></span>Wall (3)</button>
+                    <button class="btn btn-object" onclick="labelSelected(3)"><span class="color-dot" style="background:#e74c3c"></span>Object (4)</button>
+                    <button class="btn btn-objecttop" onclick="labelSelected(5)"><span class="color-dot" style="background:#e68080"></span>Object Top (5)</button>
+                    <button class="btn btn-backreflection" onclick="labelSelected(6)"><span class="color-dot" style="background:#ff00ff"></span>Back Reflection (6)</button>
+                    <button class="btn btn-noise" onclick="labelSelected(4)"><span class="color-dot" style="background:#9b59b6"></span>Noise (7)</button>
+                    <button class="btn btn-unlabeled" onclick="labelSelected(-1)">Clear Label (0)</button>
+                    <button class="btn btn-delete" onclick="deleteSelected()">Delete Selected</button>
+                    <p class="keyboard-hint">Keys 0–7 to label · Del/Backspace to delete</p>
+                </div>
+            </div>
+
+            <!-- CUSTOM LABELS -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('custom')">
+                    <span>🔖 Custom Labels</span><span class="card-icon" id="card-icon-custom">▶</span>
+                </div>
+                <div class="card-body" id="card-body-custom" style="display:none">
+                    <div class="input-group">
+                        <div class="input-row">
+                            <input type="text" id="new-label-name" placeholder="Label name (e.g., door)">
+                            <button class="btn btn-custom btn-small" onclick="addCustomLabel()">Add</button>
+                        </div>
+                    </div>
+                    <div class="custom-labels-list" id="custom-labels-list"></div>
+                </div>
+            </div>
+
+            <!-- SELECTION -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('selection')">
+                    <span>🔍 Selection</span><span class="card-icon" id="card-icon-selection">▶</span>
+                </div>
+                <div class="card-body" id="card-body-selection" style="display:none">
+                    <div class="input-group">
+                        <label>Radius: <span id="radius-value">0.3</span>m</label>
+                        <input type="range" id="radius-slider" min="0.05" max="1.0" step="0.05" value="0.3" onchange="updateRadius(this.value)">
+                    </div>
+                    <button class="btn btn-action" onclick="selectByNormal('up')">Select Floors (↑ normal)</button>
+                    <button class="btn btn-action" onclick="selectByNormal('down')">Select Ceilings (↓ normal)</button>
+                    <button class="btn btn-action" onclick="selectByNormal('vertical')">Select Walls (vertical)</button>
+                    <button class="btn btn-action" onclick="selectAll()">Select All</button>
+                    <button class="btn btn-action" onclick="clearSelection()">Clear Selection</button>
+                    <button class="btn btn-action" onclick="invertSelection()">Invert Selection</button>
+                    <div style="margin-top:8px;border-top:1px solid #0f3460;padding-top:8px;">
+                        <label style="font-size:12px;color:#888;display:block;margin-bottom:6px;">Height range (m)</label>
+                        <div class="input-row" style="margin-bottom:6px;">
+                            <input type="number" id="height-min" placeholder="Min Y" step="0.1">
+                            <input type="number" id="height-max" placeholder="Max Y" step="0.1">
+                        </div>
+                        <button class="btn btn-action" onclick="selectByHeight()">Select Height Range</button>
+                        <button class="btn btn-action" onclick="selectAboveHeight()">Select Above Min Y</button>
+                        <button class="btn btn-action" onclick="selectBelowHeight()">Select Below Max Y</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AUTO-CLASSIFY -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('classify')">
+                    <span>🤖 Auto-Classify</span><span class="card-icon" id="card-icon-classify">▼</span>
+                </div>
+                <div class="card-body" id="card-body-classify">
+                    <div style="font-size:11px;color:#888;margin-bottom:6px;line-height:1.4;">Farthest dense point per azimuth = room boundary.</div>
+                    <div class="input-group">
+                        <label>Wall tolerance: <span id="tolerance-value">0.30</span>m</label>
+                        <input type="range" id="classify-tolerance" min="0.05" max="0.80" step="0.05" value="0.30" oninput="document.getElementById('tolerance-value').textContent=parseFloat(this.value).toFixed(2)">
+                    </div>
+                    <button class="btn btn-action" onclick="smartAutoClassify(false)" style="background:#8e44ad;">&#x2728; Classify Unlabeled</button>
+                    <button class="btn btn-action" onclick="smartAutoClassify(true)" style="background:#c0392b;">&#x21BA; Re-classify All</button>
+                    <div style="margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                            <span>Wall tolerance</span><span id="wall-tol-value">0.10 m</span>
+                        </div>
+                        <input type="range" id="wall-tol" min="0.02" max="0.40" step="0.02" value="0.10" style="width:100%;" oninput="document.getElementById('wall-tol-value').textContent=parseFloat(this.value).toFixed(2)+' m'; classifyByFarthestPlanes();">
+                    </div>
+                    <div style="margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                            <span>Boundary smoothing</span><span id="smooth-value">0°</span>
+                        </div>
+                        <input type="range" id="smooth-span" min="0" max="30" step="1" value="0" style="width:100%;" oninput="document.getElementById('smooth-value').textContent=this.value+'°'; classifyByFarthestPlanes();">
+                    </div>
+                    <div id="arkit-option-row" style="display:none;margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #27ae60;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                            <input type="checkbox" id="use-arkit-planes" style="width:16px;height:16px;cursor:pointer;" onchange="classifyByFarthestPlanes()">
+                            <span>&#x1F4CD; Use ARKit plane boundary<br><span style="color:#888;font-size:11px;">Wall planes from scan session</span></span>
+                        </label>
+                    </div>
+                    <div style="margin:8px 0;padding:6px 8px;background:#0f3460;border-radius:6px;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                            <input type="checkbox" id="show-outline" checked style="width:16px;height:16px;cursor:pointer;" onchange="if(roomOutlineGroup) roomOutlineGroup.visible = this.checked;">
+                            <span>Show boundary outline lines</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VISIBILITY -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('visibility')">
+                    <span>👁️ Visibility</span><span class="card-icon" id="card-icon-visibility">▶</span>
+                </div>
+                <div class="card-body" id="card-body-visibility" style="display:none">
+                    <div style="display:flex;flex-direction:column;gap:7px;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-floors" onchange="updateVisibility()"><span class="color-dot" style="background:#2ecc71"></span>Floors</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-ceilings" onchange="updateVisibility()"><span class="color-dot" style="background:#f1c40f"></span>Ceilings</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-walls" checked onchange="updateVisibility()"><span class="color-dot" style="background:#3498db"></span>Walls</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-objects" onchange="updateVisibility()"><span class="color-dot" style="background:#e74c3c"></span>Objects</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-objecttops" onchange="updateVisibility()"><span class="color-dot" style="background:#e68080"></span>Object Tops</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-backreflections" onchange="updateVisibility()"><span class="color-dot" style="background:#ff00ff"></span>Back Reflections</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-doors" onchange="updateVisibility()"><span class="color-dot" style="background:#A0522D"></span>Doors</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-windows" onchange="updateVisibility()"><span class="color-dot" style="background:#00BCD4"></span>Windows</label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-covings" onchange="updateVisibility()"><span class="color-dot" style="background:#FF8C42"></span>Covings</label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STATISTICS -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('stats')">
+                    <span>📊 Statistics</span><span class="card-icon" id="card-icon-stats">▶</span>
+                </div>
+                <div class="card-body" id="card-body-stats" style="display:none">
+                    <div class="stats" id="stats">
+                        <div><span>Total:</span><span id="stat-total">0</span></div>
+                        <div><span>Visible:</span><span id="stat-visible">0</span></div>
+                        <div><span><span class="color-dot" style="background:#2ecc71"></span>Floor:</span><span id="stat-floor">0</span></div>
+                        <div><span><span class="color-dot" style="background:#f1c40f"></span>Ceiling:</span><span id="stat-ceiling">0</span></div>
+                        <div><span><span class="color-dot" style="background:#3498db"></span>Wall:</span><span id="stat-wall">0</span></div>
+                        <div><span><span class="color-dot" style="background:#e74c3c"></span>Object:</span><span id="stat-object">0</span></div>
+                        <div><span><span class="color-dot" style="background:#e68080"></span>Obj Top:</span><span id="stat-objecttop">0</span></div>
+                        <div><span><span class="color-dot" style="background:#ff00ff"></span>Back Refl:</span><span id="stat-backreflection">0</span></div>
+                        <div><span><span class="color-dot" style="background:#9b59b6"></span>Noise:</span><span id="stat-noise">0</span></div>
+                        <div><span><span class="color-dot" style="background:#A0522D"></span>Door:</span><span id="stat-door">0</span></div>
+                        <div><span><span class="color-dot" style="background:#00BCD4"></span>Window:</span><span id="stat-window">0</span></div>
+                        <div><span><span class="color-dot" style="background:#FF8C42"></span>Coving:</span><span id="stat-coving">0</span></div>
+                        <div><span><span class="color-dot" style="background:#95a5a6"></span>Unlabeled:</span><span id="stat-unlabeled">0</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PHOTOGRAMMETRY (hidden until ?photos= param) -->
+            <div class="card" id="card-photo" style="display:none">
+                <div class="card-header" onclick="toggleCard('photo')">
+                    <span>📷 Photogrammetry <span class="photo-badge" id="photo-count-badge">0</span></span>
+                    <span class="card-icon" id="card-icon-photo">▶</span>
+                </div>
+                <div class="card-body" id="card-body-photo" style="display:none">
+                    <h2 id="photo-panel-header" style="display:none"></h2>
+                    <div id="photo-panel">
+                        <div class="stats">
+                            <div><span>Session</span><span id="photo-session-label" style="font-family:monospace;font-size:10px">—</span></div>
+                            <div><span>Photos</span><span id="photo-count-stat">—</span></div>
+                            <div><span>Poses</span><span id="photo-pose-stat">—</span></div>
+                        </div>
+                        <div class="photo-toggle-row"><input type="checkbox" id="show-camera-path" checked onchange="toggleCameraPath()"><label for="show-camera-path" style="cursor:pointer;">Camera Path</label></div>
+                        <div class="photo-toggle-row"><input type="checkbox" id="show-photo-cones" checked onchange="toggleCameraPath()"><label for="show-photo-cones" style="cursor:pointer;">Camera Cones</label></div>
+                        <div class="photo-filmstrip" id="photo-filmstrip"></div>
+                        <div class="photo-preview-wrap" id="photo-preview-wrap">
+                            <img id="photo-preview-img" src="" alt="preview">
+                            <div class="photo-preview-label" id="photo-preview-label"></div>
+                        </div>
+                        <button class="btn btn-action btn-small" onclick="clearPhotoLayer()" style="margin-top:6px">✕ Clear Photo Layer</button>
+                        <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
+                            <div style="font-size:10px;color:#aaa;margin-bottom:5px">Door &amp; Window Detection</div>
+                            <button class="btn btn-action btn-small" id="btn-detect-depth" onclick="runDepthDetection()" style="margin-bottom:4px;width:100%">📐 Depth: Detect Openings</button>
+                            <button class="btn btn-action btn-small" id="btn-detect-ai" onclick="runAIDetection()" style="width:100%">🤖 AI: Detect Doors &amp; Windows</button>
+                        </div>
+                        <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
+                            <div style="font-size:10px;color:#aaa;margin-bottom:5px">Surface Completion</div>
+                            <button class="btn btn-action btn-small" id="btn-fill-holes" onclick="fillSurfaceHoles()" style="width:100%">🪣 Fill Surface Holes</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BUILD STATUS -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('build')">
+                    <span>🔨 Build Status</span><span class="card-icon" id="card-icon-build">▶</span>
+                </div>
+                <div class="card-body" id="card-body-build" style="display:none">
+                    <div id="build-status-container">
+                        <div class="build-status loading"><div class="build-status-header"><span>Loading...</span></div></div>
+                    </div>
+                    <button class="btn btn-action" onclick="refreshBuildStatus()">Refresh Status</button>
+                </div>
+            </div>
+
+            <!-- EXPORT -->
+            <div class="card">
+                <div class="card-header" onclick="toggleCard('export')">
+                    <span>💾 Export</span><span class="card-icon" id="card-icon-export">▼</span>
+                </div>
+                <div class="card-body" id="card-body-export">
+                    <button class="btn btn-file" onclick="exportLabeled()">Export Labeled JSON</button>
+                    <button class="btn btn-action" onclick="exportForTraining()">Export for ML Training</button>
+                    <button class="btn btn-action" style="background:#27ae60;border-color:#2ecc71" onclick="exportGLB()">&#x1F4E6; Export Colored Mesh (.glb)</button>
+                </div>
+            </div>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script>
+        function toggleCard(id) {
+            const body = document.getElementById('card-body-' + id);
+            const icon = document.getElementById('card-icon-' + id);
+            if (!body) return;
+            const open = body.style.display !== 'none';
+            body.style.display = open ? 'none' : 'block';
+            if (icon) icon.textContent = open ? '▶' : '▼';
+        }
+
         // Global state
         let scene, camera, perspCamera, orthoCamera, renderer, controls;
         let pointCloud, points = [], labels = [], normals = [], rgbColors = [];
@@ -2467,8 +2506,8 @@
         }
 
         function showPhotogrammetryPanel(sessionId, photoCount, poseCount) {
-            document.getElementById('photo-panel-header').style.display = '';
-            document.getElementById('photo-panel').style.display = '';
+            document.getElementById('card-photo').style.display = '';
+            document.getElementById('card-body-photo').style.display = '';
             document.getElementById('photo-count-badge').textContent = photoCount;
             document.getElementById('photo-session-label').textContent = sessionId;
             document.getElementById('photo-count-stat').textContent   = photoCount;
@@ -2945,8 +2984,7 @@
         function clearPhotoLayer() {
             if (cameraPathGroup) { scene.remove(cameraPathGroup); cameraPathGroup = null; }
             if (photoPlaneGroup) { scene.remove(photoPlaneGroup); photoPlaneGroup = null; }
-            document.getElementById('photo-panel-header').style.display = 'none';
-            document.getElementById('photo-panel').style.display = 'none';
+            document.getElementById('card-photo').style.display = 'none';
             document.getElementById('photo-preview-wrap').style.display = 'none';
             document.getElementById('photo-filmstrip').innerHTML = '';
         }
