@@ -570,6 +570,14 @@
                 </label>
             </div>
 
+            <div style="margin:8px 0;padding:6px 8px;background:#0f3460;border-radius:6px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="show-outline" checked style="width:16px;height:16px;cursor:pointer;"
+                           onchange="if(roomOutlineGroup) roomOutlineGroup.visible = this.checked;">
+                    <span>Show boundary outline lines</span>
+                </label>
+            </div>
+
             <h2>Selection Tools</h2>
             <button class="btn btn-action" onclick="selectByNormal('up')">Select Floors (normal up)</button>
             <button class="btn btn-action" onclick="selectByNormal('down')">Select Ceilings (normal down)</button>
