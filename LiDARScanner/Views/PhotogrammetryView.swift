@@ -920,7 +920,7 @@ struct PhotogrammetryView: View {
 
                         // ── Send to Point Cloud Labeler (photos + mesh) ──────────
                         if captureMode != .lidarOnly {
-                            Button(action: sendToLabeler) {
+                            Button(action: { sendToLabeler(project: settings.selectedProject.isEmpty ? nil : settings.selectedProject) }) {
                                 Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
                                       systemImage: "square.and.arrow.up.on.square")
                                     .font(.caption).foregroundColor(.white)
