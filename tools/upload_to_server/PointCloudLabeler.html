@@ -829,14 +829,29 @@
 
         function rotateView(degrees) {
             const rad = degrees * Math.PI / 180;
-            const c = controls.target;
-            const pos = camera.position.clone().sub(c);
-            // Rotate around Y axis (vertical)
+            const target = controls.target.clone();
+            const pos = camera.position.clone().sub(target);
+            const up  = camera.up.clone();
+
+            // Rotate position around Y axis
             const cos = Math.cos(rad), sin = Math.sin(rad);
-            const x = pos.x * cos - pos.z * sin;
-            const z = pos.x * sin + pos.z * cos;
-            camera.position.set(c.x + x, c.y + pos.y, c.z + z);
-            camera.lookAt(c);
+            const nx = pos.x * cos - pos.z * sin;
+            const nz = pos.x * sin + pos.z * cos;
+
+            // Also rotate camera.up around Y so top/bottom views stay oriented correctly
+            const nux = up.x * cos - up.z * sin;
+            const nuz = up.x * sin + up.z * cos;
+
+            camera.up.set(nux, up.y, nuz);
+            camera.position.set(target.x + nx, target.y + pos.y, target.z + nz);
+            camera.lookAt(target);
+
+            // Recreate OrbitControls so its internal spherical state matches the new position
+            controls.dispose();
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.target.copy(target);
+            if (currentViewMode === 'ortho') updateOrthoFrustum();
             controls.update();
         }
 
