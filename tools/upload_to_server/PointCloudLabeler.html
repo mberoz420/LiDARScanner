@@ -967,6 +967,68 @@
         // View lock state
         let viewLocked = false;
 
+        // ── Undo System ────────────────────────────────────────────────────────
+        const undoStack = [];
+        const MAX_UNDO  = 50;
+        let pendingUndoChanges  = [];   // accumulated during a paint/erase stroke
+        let pendingUndoIndexSet = new Set();
+        let pendingUndoType     = null;
+
+        function pushUndo(record) {
+            undoStack.push(record);
+            if (undoStack.length > MAX_UNDO) undoStack.shift();
+        }
+
+        function performUndo() {
+            // 1. Undo last vertex while actively drawing guide polygon/polyline
+            if (isDrawingGuide && activeGuidePoints.length > 0) {
+                activeGuidePoints.pop();
+                rebuildGuideLines();
+                document.getElementById('selection-info').textContent =
+                    `Undo: vertex removed (${activeGuidePoints.length} remaining)`;
+                return;
+            }
+            // 2. Undo last vertex while drawing boundary
+            if (drawMode && drawnPoints3D.length > 0) {
+                drawnPoints3D.pop();
+                updateDrawGroup();
+                document.getElementById('selection-info').textContent =
+                    `Undo: boundary vertex removed (${drawnPoints3D.length} remaining)`;
+                return;
+            }
+            // 3. Pop from undo stack
+            if (!undoStack.length) {
+                document.getElementById('selection-info').textContent = 'Nothing to undo.';
+                return;
+            }
+            const action = undoStack.pop();
+            if (action.type === 'stroke') {
+                action.changes.forEach(({ index, prevLabel }) => {
+                    deletedIndices.delete(index);
+                    labels[index] = prevLabel;
+                });
+                rebuildPointCloud(); updateStats();
+                document.getElementById('selection-info').textContent =
+                    `Undo: ${action.strokeType} (${action.changes.length} pts)`;
+            } else if (action.type === 'guide') {
+                guideLines = action.prev;
+                rebuildGuideLines();
+                document.getElementById('selection-info').textContent = 'Undo: guide line change';
+            } else if (action.type === 'boundary') {
+                window._manualBoundary = action.prev;
+                const row = document.getElementById('manual-boundary-row');
+                if (action.prev) {
+                    if (row) row.style.display = 'block';
+                    const chk = document.getElementById('use-manual-boundary');
+                    if (chk) chk.checked = true;
+                } else {
+                    if (row) row.style.display = 'none';
+                }
+                classifyByFarthestPlanes();
+                document.getElementById('selection-info').textContent = 'Undo: boundary change';
+            }
+        }
+
         function setGuideColor(hex) {
             guideLineColor = parseInt(hex.replace('#', ''), 16);
             if (scene) rebuildGuideLines();
@@ -1038,6 +1100,11 @@
                 const p = points[i];
                 const d = Math.sqrt((p.x-hitPt.x)**2 + (p.y-hitPt.y)**2 + (p.z-hitPt.z)**2);
                 if (d > selectionRadius) continue;
+                // Capture original state for undo (once per index per stroke)
+                if (!pendingUndoIndexSet.has(i)) {
+                    pendingUndoIndexSet.add(i);
+                    pendingUndoChanges.push({ index: i, prevLabel: labels[i] ?? -1 });
+                }
                 if (activeTool === 'erase') { deletedIndices.add(i); changed++; }
                 else { labels[i] = paintLabel; changed++; }
             }
@@ -1214,6 +1281,7 @@
                     const first = activeGuidePoints[0];
                     const dist = Math.sqrt((pos.x-first.x)**2 + (pos.z-first.z)**2);
                     if (dist < 0.3) {
+                        pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
                         guideLines.push({ type: 'polygon', points: [...activeGuidePoints], closed: true });
                         activeGuidePoints = [];
                         isDrawingGuide = false;
@@ -1248,6 +1316,7 @@
 
         function finishGuidePolyline() {
             if (activeGuidePoints.length < 2) { cancelGuideDraw(); return; }
+            pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
             guideLines.push({ type: 'polyline', points: [...activeGuidePoints], closed: false });
             activeGuidePoints = [];
             isDrawingGuide = false;
@@ -1268,6 +1337,7 @@
         }
 
         function applyTrimAt(seg, clickPt) {
+            pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
             const { guide, guideIdx, segIdx } = seg;
             const pts = guide.points;
             const p1 = pts[segIdx % pts.length], p2 = pts[(segIdx+1) % pts.length];
@@ -1317,6 +1387,7 @@
         }
 
         function applyExtendAt(seg, clickPt) {
+            pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
             const { guide, guideIdx } = seg;
             const pts = guide.points;
             const firstPt = pts[0], lastPt = pts[pts.length-1];
@@ -1689,6 +1760,9 @@
                     'Need at least 3 points to define a boundary.';
                 return;
             }
+            // Snapshot for undo
+            pushUndo({ type: 'boundary', prev: window._manualBoundary
+                ? new Float32Array(window._manualBoundary) : null });
             const cx = sceneCenter.x, cz = sceneCenter.z;
             const ABINS = 360;
             const manual = new Float32Array(ABINS);
@@ -2136,8 +2210,22 @@
 
             renderer.domElement.addEventListener('click', onMouseClick);
             renderer.domElement.addEventListener('mousemove', onMouseMoveForDraw);
-            renderer.domElement.addEventListener('mousedown', () => { isMouseDown = true; });
-            renderer.domElement.addEventListener('mouseup',   () => { isMouseDown = false; });
+            renderer.domElement.addEventListener('mousedown', () => {
+                isMouseDown = true;
+                if (activeTool === 'paint' || activeTool === 'erase') {
+                    pendingUndoChanges  = [];
+                    pendingUndoIndexSet = new Set();
+                    pendingUndoType     = activeTool;
+                }
+            });
+            renderer.domElement.addEventListener('mouseup', () => {
+                isMouseDown = false;
+                if (pendingUndoChanges.length > 0) {
+                    pushUndo({ type: 'stroke', strokeType: pendingUndoType, changes: pendingUndoChanges });
+                    pendingUndoChanges  = [];
+                    pendingUndoIndexSet = new Set();
+                }
+            });
             renderer.domElement.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 if (activeTool === 'polyline' && isDrawingGuide) finishGuidePolyline();
@@ -2487,11 +2575,15 @@
                         labelSelected(customLabels[customIdx].id);
                     }
                 }
+            } else if ((event.key === 'z' || event.key === 'Z') && event.ctrlKey) {
+                event.preventDefault();
+                performUndo();
             } else if (event.key === 'Delete' || event.key === 'Backspace') {
                 deleteSelected();
             } else if (event.key === 'Escape') {
                 if (isDrawingGuide) {
                     if (activeTool === 'polygon' && activeGuidePoints.length >= 3) {
+                        pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
                         guideLines.push({ type: 'polygon', points: [...activeGuidePoints], closed: true });
                         activeGuidePoints = [];
                         isDrawingGuide = false;
