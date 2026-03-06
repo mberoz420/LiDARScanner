@@ -513,6 +513,23 @@ class MeshManager: NSObject, ObservableObject {
         }
     }
 
+    /// Pause the AR session and release heavy resources to free memory.
+    /// Call when the scanning view is dismissed.
+    func cleanup() {
+        if isScanning { _ = stopScanning() }
+        arView?.session.pause()
+        autoCapture.isEnabled = false
+        clearMeshVisualization()
+        releaseScanData()
+    }
+
+    /// Release heavy scan data to reduce memory pressure.
+    func releaseScanData() {
+        capturedScan = nil
+        currentFrame = nil
+        collectedPlaneAnchors.removeAll()
+    }
+
     // MARK: - Mode Management
     func setMode(_ mode: ScanMode) {
         currentMode = mode

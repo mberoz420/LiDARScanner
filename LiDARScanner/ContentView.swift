@@ -656,6 +656,9 @@ struct ScanModeView: View {
                 }
             }
         }
+        .onDisappear {
+            meshManager.cleanup()
+        }
         .fullScreenCover(isPresented: $showPhotogrammetryFromScan) {
             PhotogrammetryView(preloadedDir: meshManager.autoCapture.photoDir)
         }

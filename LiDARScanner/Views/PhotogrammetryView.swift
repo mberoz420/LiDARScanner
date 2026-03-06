@@ -550,10 +550,9 @@ struct PhotogrammetryView: View {
             meshManager.lightweightScanMode = true   // skip per-frame color sampling + classification
         }
         .onDisappear {
-            meshManager.lightweightScanMode = false  // restore for regular scan modes
-            meshManager.autoCapture.isEnabled = false
+            meshManager.lightweightScanMode = false
+            meshManager.cleanup()
             isCapturing = false
-            if meshManager.isScanning { _ = meshManager.stopScanning() }
         }
         .sheet(isPresented: $showShareSheet) {
             if let url = outputURL { PhotogrammetryShareSheet(url: url) }
@@ -1076,6 +1075,8 @@ struct PhotogrammetryView: View {
         labelerUploadError = nil
         isUploadingToLabeler = false
         isSendingScanOnly = false
+        // Release previous scan data to free memory
+        meshManager.releaseScanData()
         meshManager.autoCapture.reset()
     }
 
