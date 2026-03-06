@@ -114,7 +114,8 @@ class ScanServerManager: ObservableObject {
     /// Returns the server session_id on success, nil on failure.
     func uploadPhotos(from dir: URL, posesData: Data?,
                       pointCloudData: Data? = nil,
-                      depthMaps: [Data] = []) async -> String? {
+                      depthMaps: [Data] = [],
+                      project: String? = nil) async -> String? {
         isUploading = true
         lastError   = nil
         defer { isUploading = false }
@@ -171,7 +172,11 @@ class ScanServerManager: ObservableObject {
             return nil
         }
 
-        var request = URLRequest(url: URL(string: photosURL)!)
+        var uploadURL = photosURL
+        if let project, !project.isEmpty {
+            uploadURL += "?project=\(project.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? project)"
+        }
+        var request = URLRequest(url: URL(string: uploadURL)!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey,             forHTTPHeaderField: "X-API-Key")

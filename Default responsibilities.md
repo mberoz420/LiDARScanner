@@ -42,7 +42,7 @@
 - **ExportView.swift** - Export scan to PLY/USDZ/OBJ formats
 - **SettingsView.swift** - App settings UI (export prefs, classification params, auto-save toggle, room layout mode)
 - **SavedSessionsView.swift** - Browse, rename, resume saved scan sessions
-- **PhotogrammetryView.swift** - Photo-based reconstruction from auto-captured images
+- **PhotogrammetryView.swift** - Multi-mode scanning (Object/Cube, Free, Photo, LiDAR). Project picker on stop. Uploads photos and LiDAR scans to selected project folder. Box toggle for LiDAR/Free/Photo modes. Done overlay with New Scan/Back buttons
 - **MultiRoomView.swift** - Multi-room scanning with door connections between rooms
 - **ArchitecturalExtractionView.swift** - Extract architectural features from scans
 - **AnnotationView.swift** - Annotate scan features
@@ -92,7 +92,8 @@
 - **list_projects.php** - GET: project folder list. POST: create new project folder
 - **list_scans.php** - Returns scan manifest (JSON scans only, excludes photo sessions)
 - **get_scan.php** - Returns specific scan JSON by filename
-- **upload_photos.php** - Receives photos + camera poses as base64 JSON
+- **upload_photos.php** - Receives photos + camera poses as base64 JSON. Supports `?project=` to save under `scans/{project}/photos/`
+- **file_manager.php** - Full CRUD file manager API: list, mkdir, delete, copy, rename, move. Path sanitized against traversal
 - **detect_features.php** - AI door/window detection via Anthropic API (Claude Vision)
 - **build_status.php** - Build/processing status
 - **index.php** - Web dashboard
@@ -111,6 +112,8 @@
   - Top menu bar: Project (Open/Save local & server, Export GLB/JSON/ML)
   - Visibility toggles (collapsible left toolbar), photogrammetry layer
   - Ctrl+O/S/Shift+S/Z shortcuts
+  - File Manager: browse server files, create folders, rename, copy, delete
+  - Auto front-direction from vertical surface normals (scan orientation)
 
 - **tools/watch_scans.py** - Local dev scan watcher
 - **tools/analyze_floor.py** - Floor analysis utility

@@ -564,7 +564,7 @@ struct PhotogrammetryView: View {
                     if captureMode == .lidarOnly {
                         sendScanOnly(project: project.isEmpty ? nil : project)
                     } else if capturedCount > 0 {
-                        sendToLabeler()
+                        sendToLabeler(project: project.isEmpty ? nil : project)
                     }
                 },
                 onSkip: {
@@ -1077,7 +1077,7 @@ struct PhotogrammetryView: View {
         meshManager.autoCapture.reset()
     }
 
-    func sendToLabeler() {
+    func sendToLabeler(project: String? = nil) {
         isUploadingToLabeler = true
         labelerSessionId     = nil
         labelerUploadError   = nil
@@ -1088,7 +1088,7 @@ struct PhotogrammetryView: View {
         let depths     = meshManager.autoCapture.depthMaps
         Task {
             let sid = await ScanServerManager.shared.uploadPhotos(
-                from: dir, posesData: poses, pointCloudData: pointCloud, depthMaps: depths)
+                from: dir, posesData: poses, pointCloudData: pointCloud, depthMaps: depths, project: project)
             await MainActor.run {
                 isUploadingToLabeler = false
                 if let sid {
