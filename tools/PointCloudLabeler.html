@@ -414,6 +414,99 @@
             margin-left: 6px;
         }
 
+        /* ── Nudge Panel ──────────────────────────────────────── */
+        #nudge-panel {
+            display: none;
+            position: absolute;
+            bottom: 90px;
+            left: 20px;
+            background: rgba(8,12,28,0.96);
+            border: 1px solid #0f3460;
+            border-radius: 10px;
+            padding: 10px 12px;
+            z-index: 200;
+            pointer-events: auto;
+            user-select: none;
+            min-width: 160px;
+        }
+        #nudge-panel .np-title {
+            font-size: 10px;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            margin-bottom: 8px;
+        }
+        #nudge-panel .np-scan-row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        #nudge-panel .np-scan-btn {
+            flex: 1;
+            padding: 4px 6px;
+            font-size: 10px;
+            border-radius: 4px;
+            border: 1px solid #1a2744;
+            background: #0f1a30;
+            color: #888;
+            cursor: pointer;
+            text-align: center;
+        }
+        #nudge-panel .np-scan-btn.active {
+            border-color: #00d9ff;
+            color: #00d9ff;
+            background: rgba(0,217,255,0.08);
+        }
+        #nudge-panel .np-step-row {
+            display: flex;
+            gap: 3px;
+            margin-bottom: 10px;
+        }
+        #nudge-panel .np-step-btn {
+            flex: 1;
+            padding: 3px 4px;
+            font-size: 9px;
+            border-radius: 4px;
+            border: 1px solid #1a2744;
+            background: #0f1a30;
+            color: #666;
+            cursor: pointer;
+            text-align: center;
+        }
+        #nudge-panel .np-step-btn.active {
+            border-color: #f39c12;
+            color: #f39c12;
+        }
+        /* D-pad */
+        .dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 36px);
+            grid-template-rows: repeat(3, 36px);
+            gap: 3px;
+            justify-content: center;
+        }
+        .dpad-btn {
+            width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
+            background: #1a2744;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+            color: #aaa;
+            transition: background 0.1s, border-color 0.1s;
+        }
+        .dpad-btn:hover  { background: #2a3a5a; border-color: #00d9ff; color: #fff; }
+        .dpad-btn:active { background: rgba(0,217,255,0.2); }
+        .dpad-center {
+            background: #0d0d1f;
+            border-color: #0d0d1f;
+            color: #333;
+            cursor: default;
+            font-size: 9px;
+        }
+        .dpad-center:hover { background: #0d0d1f; border-color: #0d0d1f; color: #333; }
+
         /* ── Left Toolbar (rug-project square style) ─────────── */
         #left-toolbar {
             width: 112px;
@@ -714,6 +807,45 @@
             <div id="scale-bar">
                 <div id="scale-bar-label">--</div>
                 <div id="scale-bar-line" style="width:80px"></div>
+            </div>
+
+            <!-- Fine-alignment nudge panel -->
+            <div id="nudge-panel">
+                <div class="np-title">Fine Tune ↕↔</div>
+
+                <!-- Which scan to move -->
+                <div class="np-scan-row">
+                    <div class="np-scan-btn active" id="nudge-btn-ref" onclick="setNudgeScan(0)">Reference</div>
+                    <div class="np-scan-btn"        id="nudge-btn-ins" onclick="setNudgeScan(1)">Inserted</div>
+                </div>
+
+                <!-- Step size -->
+                <div class="np-step-row">
+                    <div class="np-step-btn" data-step="0.005" onclick="setNudgeStep(0.005,this)">5mm</div>
+                    <div class="np-step-btn active" data-step="0.02" onclick="setNudgeStep(0.02,this)">2cm</div>
+                    <div class="np-step-btn" data-step="0.1"  onclick="setNudgeStep(0.1,this)">10cm</div>
+                </div>
+
+                <!-- D-pad -->
+                <div class="dpad">
+                    <div></div>
+                    <div class="dpad-btn" onclick="nudgeScan(0,0,-1)" title="Forward (↑)">↑</div>
+                    <div></div>
+                    <div class="dpad-btn" onclick="nudgeScan(-1,0,0)" title="Left (←)">←</div>
+                    <div class="dpad-btn dpad-center">XZ</div>
+                    <div class="dpad-btn" onclick="nudgeScan(1,0,0)"  title="Right (→)">→</div>
+                    <div></div>
+                    <div class="dpad-btn" onclick="nudgeScan(0,0,1)"  title="Back (↓)">↓</div>
+                    <div></div>
+                </div>
+
+                <!-- Y (elevation) row -->
+                <div style="display:flex;gap:3px;margin-top:5px;">
+                    <div class="dpad-btn" style="flex:1;border-radius:6px;"
+                         onclick="nudgeScan(0,1,0)" title="Raise Y (Page Up)">Y ▲</div>
+                    <div class="dpad-btn" style="flex:1;border-radius:6px;"
+                         onclick="nudgeScan(0,-1,0)" title="Lower Y (Page Down)">Y ▼</div>
+                </div>
             </div>
 
             <!-- Insert options popup (From File / From Server) -->
@@ -2591,6 +2723,11 @@
 
             rebuildPointCloud();
             updateStats();
+            // Update nudge panel scan buttons to reflect current scan count
+            document.getElementById('nudge-btn-ins').textContent = numScans > 2 ? `Scan ${newScanId+1}` : 'Inserted';
+            nudgeScanId = newScanId;   // default to moving the freshly inserted scan
+            setNudgeScan(newScanId);
+            showNudgePanel();
             document.getElementById('selection-info').textContent =
                 `Inserted ${addedCount.toLocaleString()} points — auto-aligned to reference`;
         }
@@ -2661,6 +2798,47 @@
                 p.z = nz;
                 p.y += ty;
             });
+        }
+
+        // ── Fine Nudge ─────────────────────────────────────────────────────────
+        let nudgeScanId = 1;     // which scan to move (0=reference, 1=inserted)
+        let nudgeStep   = 0.02;  // metres per key/button press
+
+        function setNudgeScan(id) {
+            nudgeScanId = id;
+            document.getElementById('nudge-btn-ref').classList.toggle('active', id === 0);
+            document.getElementById('nudge-btn-ins').classList.toggle('active', id === 1);
+        }
+
+        function setNudgeStep(val, btn) {
+            nudgeStep = val;
+            document.querySelectorAll('.np-step-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        /**
+         * Nudge the selected scan by dx/dy/dz (unit vectors) × nudgeStep.
+         * Pushes one undo record per call.
+         */
+        function nudgeScan(dx, dy, dz) {
+            if (numScans < 2) return;
+            const tx = dx * nudgeStep, ty = dy * nudgeStep, tz = dz * nudgeStep;
+            const changes = [];
+            points.forEach((p, i) => {
+                if (scanIds[i] !== nudgeScanId || deletedIndices.has(i)) return;
+                changes.push({ index: i, prev: { x: p.x, y: p.y, z: p.z } });
+                p.x += tx; p.y += ty; p.z += tz;
+            });
+            if (!changes.length) return;
+            pushUndo({ type: 'align', changes });
+            rebuildPointCloud();
+        }
+
+        function showNudgePanel() {
+            if (numScans >= 2) document.getElementById('nudge-panel').style.display = 'block';
+        }
+        function hideNudgePanel() {
+            document.getElementById('nudge-panel').style.display = 'none';
         }
 
         // ── Insert from Server ─────────────────────────────────────────────────
@@ -3179,6 +3357,14 @@
                 decreasePointSize();
             } else if (event.key === ']' || event.key === '=' || event.key === '+') {
                 increasePointSize();
+            } else if (numScans >= 2 && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','PageUp','PageDown'].includes(event.key)) {
+                event.preventDefault();
+                if      (event.key === 'ArrowUp')    nudgeScan( 0, 0,-1);
+                else if (event.key === 'ArrowDown')  nudgeScan( 0, 0, 1);
+                else if (event.key === 'ArrowLeft')  nudgeScan(-1, 0, 0);
+                else if (event.key === 'ArrowRight') nudgeScan( 1, 0, 0);
+                else if (event.key === 'PageUp')     nudgeScan( 0, 1, 0);
+                else if (event.key === 'PageDown')   nudgeScan( 0,-1, 0);
             }
         }
 
