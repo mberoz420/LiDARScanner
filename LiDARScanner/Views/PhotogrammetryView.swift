@@ -618,37 +618,49 @@ struct PhotogrammetryView: View {
             Spacer()
 
             // Info panel
-            VStack(alignment: .trailing, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "camera.fill").foregroundColor(.white)
-                    Text("\(capturedCount) photos").fontWeight(.semibold).foregroundColor(.white)
-                    Text("/ \(meshManager.autoCapture.depthCount)d")
-                        .font(.caption).foregroundColor(meshManager.autoCapture.depthCount > 0 ? .cyan : .orange)
-                    Text("/ \(meshManager.vertexCount)v")
-                        .font(.caption).foregroundColor(meshManager.vertexCount > 0 ? .green : .red)
+            if captureMode == .lidarOnly {
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "cube.transparent").foregroundColor(.purple)
+                        Text("\(meshManager.vertexCount) vertices")
+                            .fontWeight(.semibold).foregroundColor(.white)
+                    }
+                    if isCapturing {
+                        Text("Walk around the room")
+                            .font(.caption2).foregroundColor(.white.opacity(0.6))
+                    }
                 }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color.black.opacity(0.55)).cornerRadius(14)
+            } else {
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "camera.fill").foregroundColor(.white)
+                        Text("\(capturedCount) photos").fontWeight(.semibold).foregroundColor(.white)
+                        Text("/ \(meshManager.autoCapture.depthCount)d")
+                            .font(.caption).foregroundColor(meshManager.autoCapture.depthCount > 0 ? .cyan : .orange)
+                        Text("/ \(meshManager.vertexCount)v")
+                            .font(.caption).foregroundColor(meshManager.vertexCount > 0 ? .green : .red)
+                    }
 
-                if captureMode != .lidarOnly {
                     Text(qualityInfo.label).font(.caption).foregroundColor(qualityInfo.color)
-                }
 
-                if effectiveTarget != nil && captureMode != .lidarOnly {
-                    ProgressView(value: progressToTarget)
-                        .progressViewStyle(LinearProgressViewStyle(tint: qualityInfo.color))
-                        .frame(width: 120)
-                }
+                    if effectiveTarget != nil {
+                        ProgressView(value: progressToTarget)
+                            .progressViewStyle(LinearProgressViewStyle(tint: qualityInfo.color))
+                            .frame(width: 120)
+                    }
 
-
-                if phase == .capturing && isCapturing {
-                    Text(captureMode == .cube      ? "Cube active — walk around object" :
-                         captureMode == .free      ? "Free — walk around object" :
-                         captureMode == .lidarOnly ? "LiDAR scan — walk around room" :
+                    if phase == .capturing && isCapturing {
+                        Text(captureMode == .cube  ? "Cube active — walk around object" :
+                             captureMode == .free  ? "Free — walk around object" :
                                                      "Photo only — walk around object")
-                        .font(.caption2).foregroundColor(.white.opacity(0.6))
+                            .font(.caption2).foregroundColor(.white.opacity(0.6))
+                    }
                 }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color.black.opacity(0.55)).cornerRadius(14)
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(Color.black.opacity(0.55)).cornerRadius(14)
         }
         .padding()
     }
@@ -829,7 +841,7 @@ struct PhotogrammetryView: View {
                     selectMode(.photoOnly)
                 }
                 modeCard(icon: "cube.transparent", label: "LiDAR", color: .purple) {
-                    selectMode(.lidarOnly); isCapturing = true
+                    selectMode(.lidarOnly)
                 }
             }
             .padding(.bottom, 140)
