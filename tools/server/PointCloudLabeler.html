@@ -3265,14 +3265,21 @@
 
                 listEl.innerHTML = scans.map(s => {
                     const date   = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
-                    const pts    = s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '';
+                    const isPhoto = s.type === 'photos';
+                    const info = isPhoto
+                        ? (s.photo_count || 0) + ' photos' + (s.has_pointcloud ? ' + LiDAR' : '')
+                        : (s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '');
                     const proj   = s.project ? `<span style="color:#00d9ff;font-size:10px;">[${s.project}]</span> ` : '';
-                    return `<div onclick="fetchServerScan('${s.filename}', '${s.project || ''}')"
-                        style="padding:10px 12px;background:#1a2744;border:1px solid #0f3460;border-radius:7px;
+                    const icon = isPhoto ? '📷 ' : '';
+                    const handler = isPhoto
+                        ? `insertPhotoSession('${s.filename}', '${s.project || ''}')`
+                        : `fetchServerScan('${s.filename}', '${s.project || ''}')`;
+                    return `<div onclick="${handler}"
+                        style="padding:10px 12px;background:#1a2744;border:1px solid ${isPhoto ? '#8e44ad' : '#0f3460'};border-radius:7px;
                                cursor:pointer;transition:border-color 0.15s;"
-                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
-                        <div style="font-size:12px;color:#fff;font-weight:600;">${proj}${s.filename}</div>
-                        <div style="font-size:10px;color:#888;margin-top:3px;">${date}${pts ? ' · ' + pts : ''}</div>
+                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='${isPhoto ? '#8e44ad' : '#0f3460'}'">
+                        <div style="font-size:12px;color:#fff;font-weight:600;">${icon}${proj}${s.filename}</div>
+                        <div style="font-size:10px;color:#888;margin-top:3px;">${date}${info ? ' · ' + info : ''}</div>
                     </div>`;
                 }).join('');
 
@@ -4410,14 +4417,21 @@
                 statusEl.textContent = `${scans.length} scan${scans.length > 1 ? 's' : ''} available`;
                 listEl.innerHTML = scans.map(s => {
                     const date = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
-                    const pts  = s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '';
+                    const isPhoto = s.type === 'photos';
+                    const info = isPhoto
+                        ? (s.photo_count || 0) + ' photos' + (s.has_pointcloud ? ' + LiDAR' : '')
+                        : (s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '');
                     const proj = s.project ? `<span style="color:#00d9ff;font-size:10px;">[${s.project}]</span> ` : '';
-                    return `<div onclick="openServerScan('${s.filename}', '${s.project || ''}')"
-                        style="padding:10px 12px;background:#1a2744;border:1px solid #0f3460;border-radius:7px;
+                    const icon = isPhoto ? '📷 ' : '';
+                    const handler = isPhoto
+                        ? `openPhotoSession('${s.filename}', '${s.project || ''}')`
+                        : `openServerScan('${s.filename}', '${s.project || ''}')`;
+                    return `<div onclick="${handler}"
+                        style="padding:10px 12px;background:#1a2744;border:1px solid ${isPhoto ? '#8e44ad' : '#0f3460'};border-radius:7px;
                                cursor:pointer;transition:border-color 0.15s;"
-                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
-                        <div style="font-size:12px;color:#fff;font-weight:600;">${proj}${s.filename}</div>
-                        <div style="font-size:10px;color:#888;margin-top:3px;">${date}${pts ? ' · ' + pts : ''}</div>
+                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='${isPhoto ? '#8e44ad' : '#0f3460'}'">
+                        <div style="font-size:12px;color:#fff;font-weight:600;">${icon}${proj}${s.filename}</div>
+                        <div style="font-size:10px;color:#888;margin-top:3px;">${date}${info ? ' · ' + info : ''}</div>
                     </div>`;
                 }).join('');
             } catch (err) {
@@ -4445,6 +4459,40 @@
             } catch (err) {
                 alert('Failed to open scan: ' + err.message);
                 document.getElementById('selection-info').textContent = 'Open failed.';
+            }
+        }
+
+        // ── Open/Insert photo session ─────────────────────────────────────────
+        async function openPhotoSession(sessionId, project) {
+            hideOpenFromServer();
+            if (project) currentProject = project;
+            currentFilename = sessionId;
+            updateFilenameDisplay();
+            // Redirect to labeler with photo session params
+            const url = window.location.pathname + '?scan=' + encodeURIComponent(sessionId)
+                + (project ? '&project=' + encodeURIComponent(project) : '');
+            window.location.href = url;
+        }
+
+        async function insertPhotoSession(sessionId, project) {
+            hideServerScanPicker();
+            if (project) currentProject = project;
+            document.getElementById('selection-info').textContent = `Loading photo session ${sessionId}…`;
+            try {
+                const base = photosBase(project);
+                const pcRes = await fetch(`${base}/${sessionId}/pointcloud.json`);
+                if (pcRes.ok) {
+                    const pcData = await pcRes.json();
+                    mergeJSON(pcData);
+                    document.getElementById('selection-info').textContent =
+                        `Inserted point cloud from ${sessionId}`;
+                } else {
+                    document.getElementById('selection-info').textContent =
+                        `No point cloud in ${sessionId} — photo-only sessions cannot be inserted`;
+                }
+            } catch (err) {
+                alert('Failed to load photo session: ' + err.message);
+                document.getElementById('selection-info').textContent = 'Insert failed.';
             }
         }
 
