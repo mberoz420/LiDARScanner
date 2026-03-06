@@ -653,6 +653,24 @@
                 <div class="paint-swatch"        data-label="5" style="background:#e68080" title="Obj Top (5)"></div>
                 <div class="paint-swatch"        data-label="6" style="background:#ff00ff" title="Back Refl (6)"></div>
             </div>
+
+            <!-- Scans -->
+            <div class="tool-section-label">Scans</div>
+            <div class="tools-grid">
+                <div class="tool-btn" id="tool-insert-scan"
+                     onclick="document.getElementById('insert-file-input').click()"
+                     title="Insert Scan — overlay a second scan on top of the current one">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                    Insert
+                </div>
+                <div class="tool-btn" id="tool-align-scan"
+                     onclick="enterAlignMode()"
+                     title="Align Scans — pick matching edges to align inserted scan to reference">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20M2 6h10M2 18h10M16 6l4 6-4 6"/></svg>
+                    Align
+                </div>
+            </div>
+            <input type="file" id="insert-file-input" accept=".json" style="display:none" />
         </div>
 
         <div id="viewer">
@@ -712,17 +730,6 @@
                         <p style="font-size:11px;color:#888;margin-top:4px;">or click to browse</p>
                     </div>
                     <input type="file" id="file-input" accept=".json" />
-                    <button class="btn btn-action btn-small" style="width:100%;margin-top:6px;border-color:#2ecc71;color:#2ecc71;"
-                            onclick="document.getElementById('insert-file-input').click()"
-                            title="Add points from a second scan on top of the current one">
-                        ➕ Insert Scan
-                    </button>
-                    <input type="file" id="insert-file-input" accept=".json" style="display:none" />
-                    <button class="btn btn-action btn-small" style="width:100%;margin-top:4px;border-color:#00d9ff;color:#00d9ff;"
-                            onclick="enterAlignMode()"
-                            title="Align inserted scan to reference by picking matching edge points">
-                        📐 Align Scans
-                    </button>
                 </div>
             </div>
 
