@@ -363,6 +363,7 @@ struct RoomScannerSheet: View {
                             HStack(spacing: 20) {
                                 Button(meshManager.isScanning ? "Stop" : "Start") {
                                     if meshManager.isScanning {
+                                        meshManager.arViewSession?.pause()
                                         capturedScan = meshManager.stopScanning()
                                         isScanning = false
                                     } else {

@@ -269,6 +269,7 @@ struct ScannerView: View {
 
     private func toggleScanning() {
         if meshManager.isScanning {
+            meshManager.arViewSession?.pause()
             capturedScan = meshManager.stopScanning()
             Task { await prepareScanForUpload() }
         } else {

@@ -743,6 +743,8 @@ struct ScanModeView: View {
 
     private func toggleScanning() {
         if meshManager.isScanning {
+            // Pause AR session to free GPU/camera resources before heavy export work
+            meshManager.arViewSession?.pause()
             capturedScan = meshManager.stopScanning()
 
             // Auto-save session if resuming

@@ -300,6 +300,8 @@ class MeshManager: NSObject, ObservableObject {
 
     // MARK: - Properties
     private weak var arView: ARView?
+    /// Public access to the AR session for pausing before heavy operations.
+    var arViewSession: ARSession? { arView?.session }
     private var meshAnchors: [UUID: AnchorEntity] = [:]
     private var faceAnchors: [UUID: AnchorEntity] = [:]
     private var surfaceTypes: [UUID: SurfaceType] = [:]  // Track surface type per mesh

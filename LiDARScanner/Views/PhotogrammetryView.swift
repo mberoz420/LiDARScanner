@@ -587,8 +587,8 @@ struct PhotogrammetryView: View {
                     .clipShape(Circle())
             }
 
-            // Cube reposition button — shown in cube and LiDAR modes when box is active
-            if phase == .capturing && (captureMode == .cube || (captureMode == .lidarOnly && meshManager.scanVolume != nil)) {
+            // Cube reposition button — shown when box is active in any mode
+            if phase == .capturing && (captureMode == .cube || meshManager.scanVolume != nil) {
                 Button(action: {
                     if meshManager.scanVolume != nil {
                         meshManager.clearScanVolume()
@@ -718,8 +718,8 @@ struct PhotogrammetryView: View {
 
                     Text("Walk around the room to scan")
                         .font(.caption2).foregroundColor(.purple.opacity(0.9))
-                } else if captureMode == .photoOnly {
-                    // Box toggle for Photo Only mode
+                } else {
+                    // Box toggle for Photo Only and Free modes
                     Button(action: {
                         if meshManager.scanVolume != nil {
                             meshManager.clearScanVolume()
@@ -730,20 +730,15 @@ struct PhotogrammetryView: View {
                         HStack(spacing: 6) {
                             Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
                                 .foregroundColor(.cyan)
-                            Text(meshManager.scanVolume != nil
-                                 ? "Box: ON — tap to remove"
-                                 : "Box: OFF — tap to add box constraint")
-                                .font(.caption).foregroundColor(.white.opacity(0.8))
+                            Text(meshManager.scanVolume != nil ? "Box: ON" : "Box: OFF")
+                                .font(.caption2).foregroundColor(.white.opacity(0.8))
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(Color.black.opacity(0.45)).cornerRadius(10)
-                        .overlay(RoundedRectangle(cornerRadius: 10)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.black.opacity(0.45)).cornerRadius(8)
+                        .overlay(RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.cyan.opacity(0.6), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                } else {
-                    Text("Point at your object, then tap Start")
-                        .font(.caption).foregroundColor(.white.opacity(0.7))
                 }
 
                 Button(action: startCapture) {
@@ -1058,6 +1053,8 @@ struct PhotogrammetryView: View {
     func stopAndUpload() {
         meshManager.autoCapture.isEnabled = false
         isCapturing = false
+        // Pause AR session first to free GPU/camera resources before heavy work
+        meshManager.arViewSession?.pause()
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .done
         showProjectPicker = true
