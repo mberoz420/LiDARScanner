@@ -364,6 +364,10 @@ class MeshManager: NSObject, ObservableObject {
         if !planes.isEmpty {
             data["room_planes"] = planes
         }
+        // Compute scan orientation from dominant vertical surface normals facing camera
+        if let orientation = computeScanOrientation(points: points) {
+            data["scan_orientation"] = orientation
+        }
         return try? JSONSerialization.data(withJSONObject: data)
     }
 
@@ -410,6 +414,76 @@ class MeshManager: NSObject, ObservableObject {
                 "extent":  [ext.x, ext.z]           // [width, depth/height]
             ] as [String: Any]
         }
+    }
+
+    /// Compute scan orientation by averaging vertical surface normals that face the camera.
+    /// Returns a dictionary with x_axis, y_axis, z_axis, and camera_position, or nil if
+    /// no suitable normals are found.
+    /// Points array format: [[x, y, z, nx, ny, nz], ...]
+    private func computeScanOrientation(points: [[Float]]) -> [String: Any]? {
+        // Get camera forward direction (negative Z column of camera transform)
+        guard let frame = currentFrame else { return nil }
+        let camT = frame.camera.transform
+        let camForward = SIMD3<Float>(
+            -camT.columns.2.x,
+            -camT.columns.2.y,
+            -camT.columns.2.z
+        )
+        let camPos = SIMD3<Float>(
+            camT.columns.3.x,
+            camT.columns.3.y,
+            camT.columns.3.z
+        )
+
+        // Collect vertical surface normals facing toward camera
+        var sumNx: Float = 0
+        var sumNz: Float = 0
+        var count: Int = 0
+
+        for p in points {
+            guard p.count >= 6 else { continue }
+            let ny = p[4]
+            // Vertical surface: normal is roughly horizontal (small Y component)
+            guard abs(ny) < 0.3 else { continue }
+
+            let nx = p[3]
+            let nz = p[5]
+            let normal = SIMD3<Float>(nx, 0, nz) // project to horizontal plane
+
+            // Only normals facing toward camera (dot with camera forward > 0)
+            let camFwdHz = SIMD3<Float>(camForward.x, 0, camForward.z)
+            // Normal faces camera if it points opposite to camera forward
+            // (camera looks at object, normal points back at camera)
+            let dot = normal.x * (-camFwdHz.x) + normal.z * (-camFwdHz.z)
+            guard dot > 0 else { continue }
+
+            sumNx += nx
+            sumNz += nz
+            count += 1
+        }
+
+        guard count > 10 else { return nil } // need meaningful data
+
+        // Average and normalize to get X axis (object front → camera direction)
+        let avgNx = sumNx / Float(count)
+        let avgNz = sumNz / Float(count)
+        let len = sqrt(avgNx * avgNx + avgNz * avgNz)
+        guard len > 0.001 else { return nil }
+
+        let xAxis = SIMD3<Float>(avgNx / len, 0, avgNz / len)
+        let yAxis = SIMD3<Float>(0, 1, 0) // up (gravity)
+        let zAxis = SIMD3<Float>( // right-hand rule: Z = X × Y
+            xAxis.y * yAxis.z - xAxis.z * yAxis.y,
+            xAxis.z * yAxis.x - xAxis.x * yAxis.z,
+            xAxis.x * yAxis.y - xAxis.y * yAxis.x
+        )
+
+        return [
+            "x_axis": [xAxis.x, xAxis.y, xAxis.z],
+            "y_axis": [yAxis.x, yAxis.y, yAxis.z],
+            "z_axis": [zAxis.x, zAxis.y, zAxis.z],
+            "camera_position": [camPos.x, camPos.y, camPos.z]
+        ]
     }
 
     /// Active scan volume — filters LiDAR mesh to this cube. nil = capture everything.

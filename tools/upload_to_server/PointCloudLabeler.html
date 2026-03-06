@@ -2907,7 +2907,34 @@
 
             rebuildPointCloud();
             updateStats();
-            centerCamera();
+
+            // Use scan orientation if available — position camera facing the object's front
+            if (data.scan_orientation && data.scan_orientation.x_axis) {
+                const ori = data.scan_orientation;
+                const xAxis = ori.x_axis; // points from object toward camera
+                const dist = sceneSize * 2.5;
+                const c = sceneCenter;
+                camera = perspCamera;
+                currentViewMode = 'perspective';
+                camera.far = Math.max(1000, sceneSize * 10);
+                camera.near = Math.min(0.01, sceneSize * 0.001);
+                camera.updateProjectionMatrix();
+                // Place camera along the X axis direction (front of object)
+                camera.position.set(
+                    c.x + xAxis[0] * dist,
+                    c.y + dist * 0.3,
+                    c.z + xAxis[2] * dist
+                );
+                camera.up.set(0, 1, 0);
+                camera.lookAt(c.x, c.y, c.z);
+                if (controls) controls.dispose();
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.target.set(c.x, c.y, c.z);
+                viewLocked = false;
+            } else {
+                centerCamera();
+            }
 
             document.getElementById('selection-info').textContent =
                 `Loaded ${points.length.toLocaleString()} points. Click to select.`;
