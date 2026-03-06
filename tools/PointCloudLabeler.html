@@ -2580,6 +2580,9 @@
             }
             document.getElementById('y-range').textContent = `${minY.toFixed(2)} to ${maxY.toFixed(2)} m`;
 
+            // Auto-align inserted scan to reference orientation + elevation
+            autoAlignInserted(newScanId);
+
             // Auto-switch to "By Scan" so the user immediately sees the two clouds distinguished
             colorMode = 'scan';
             document.getElementById('color-mode').value = 'scan';
@@ -2589,7 +2592,75 @@
             rebuildPointCloud();
             updateStats();
             document.getElementById('selection-info').textContent =
-                `Inserted ${addedCount.toLocaleString()} points — total: ${points.length.toLocaleString()}`;
+                `Inserted ${addedCount.toLocaleString()} points — auto-aligned to reference`;
+        }
+
+        /**
+         * Auto-align an inserted scan to the reference scan (scan 0).
+         * 1. Elevation: match floor Y (using labeled floor points or 5th-percentile Y)
+         * 2. XZ centroid: translate inserted scan centroid to reference centroid
+         * 3. Orientation: match primary XZ axis via PCA
+         * Pushes an undo record so Ctrl+Z reverses it.
+         */
+        function autoAlignInserted(newScanId) {
+            const refIdx = [], movIdx = [];
+            points.forEach((p, i) => {
+                if (deletedIndices.has(i)) return;
+                if (scanIds[i] === 0)         refIdx.push(i);
+                else if (scanIds[i] === newScanId) movIdx.push(i);
+            });
+            if (!refIdx.length || !movIdx.length) return;
+
+            // Floor Y: prefer labeled floor points (label 0), fall back to 5th-percentile Y
+            const floorY = (indices) => {
+                const fy = indices.filter(i => labels[i] === 0).map(i => points[i].y);
+                if (fy.length > 10) {
+                    fy.sort((a, b) => a - b);
+                    return fy[Math.floor(fy.length * 0.1)];
+                }
+                const all = indices.map(i => points[i].y).sort((a, b) => a - b);
+                return all[Math.floor(all.length * 0.05)];
+            };
+            const ty = floorY(refIdx) - floorY(movIdx);
+
+            // XZ centroids
+            let rcx = 0, rcz = 0, mcx = 0, mcz = 0;
+            refIdx.forEach(i => { rcx += points[i].x; rcz += points[i].z; });
+            movIdx.forEach(i => { mcx += points[i].x; mcz += points[i].z; });
+            rcx /= refIdx.length; rcz /= refIdx.length;
+            mcx /= movIdx.length; mcz /= movIdx.length;
+
+            // PCA: find primary axis angle in XZ for each scan
+            const pcaAngle = (indices, cx, cz) => {
+                let c00 = 0, c01 = 0, c11 = 0;
+                indices.forEach(i => {
+                    const dx = points[i].x - cx, dz = points[i].z - cz;
+                    c00 += dx * dx; c01 += dx * dz; c11 += dz * dz;
+                });
+                return 0.5 * Math.atan2(2 * c01, c00 - c11);
+            };
+            const theta = pcaAngle(refIdx, rcx, rcz) - pcaAngle(movIdx, mcx, mcz);
+            const cos = Math.cos(theta), sin = Math.sin(theta);
+
+            // Translation: rotate mov centroid then shift to ref centroid
+            const tx = rcx - (cos * mcx - sin * mcz);
+            const tz = rcz - (sin * mcx + cos * mcz);
+
+            // Save undo record before modifying
+            pushUndo({
+                type: 'align',
+                changes: movIdx.map(i => ({ index: i, prev: { x: points[i].x, y: points[i].y, z: points[i].z } }))
+            });
+
+            // Apply rotation + translation + elevation
+            movIdx.forEach(i => {
+                const p = points[i];
+                const nx = cos * p.x - sin * p.z + tx;
+                const nz = sin * p.x + cos * p.z + tz;
+                p.x = nx;
+                p.z = nz;
+                p.y += ty;
+            });
         }
 
         // ── Insert from Server ─────────────────────────────────────────────────
