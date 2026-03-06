@@ -935,7 +935,7 @@ struct PhotogrammetryView: View {
 
                     // ── Scan Only — upload LiDAR mesh without photos ──────────
                     if captureMode != .photoOnly {
-                        Button(action: sendScanOnly) {
+                        Button(action: { sendScanOnly(project: settings.selectedProject.isEmpty ? nil : settings.selectedProject) }) {
                             Label(isSendingScanOnly ? "Uploading…" : (scanOnlyFilename != nil ? "Uploaded!" : "Send to Labeler"),
                                   systemImage: scanOnlyFilename != nil ? "checkmark.circle.fill" : "cube.transparent")
                                 .font(.headline).foregroundColor(.white)
