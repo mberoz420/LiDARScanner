@@ -155,8 +155,14 @@
             font-size: 12px;
             font-weight: 600;
             display: none;
-            pointer-events: none;
+            pointer-events: auto;
+            cursor: pointer;
+            user-select: none;
+            gap: 8px;
+            align-items: center;
         }
+        #ortho-badge:hover { background: rgba(52,152,219,1); }
+        #view-lock-icon { font-size: 14px; }
 
         /* Scale bar */
         #scale-bar {
@@ -588,6 +594,15 @@
                 </div>
             </div>
 
+            <!-- Guide line color picker -->
+            <div style="display:flex;align-items:center;gap:5px;margin-top:4px;padding:0 1px;">
+                <label for="guide-color-picker" style="font-size:9px;color:#666;white-space:nowrap;">Line color</label>
+                <input type="color" id="guide-color-picker" value="#00d9ff"
+                       onchange="setGuideColor(this.value)"
+                       title="Guide line color"
+                       style="flex:1;height:20px;border:1px solid #2a2a4a;border-radius:3px;padding:1px 2px;background:#0f0f23;cursor:pointer;">
+            </div>
+
             <div class="tool-separator"></div>
 
             <!-- Edit Tools -->
@@ -642,7 +657,10 @@
 
         <div id="viewer">
             <div id="selection-info">Select points with mouse. Hold Shift for multi-select.</div>
-            <div id="ortho-badge">ORTHOGRAPHIC</div>
+            <div id="ortho-badge" onclick="toggleViewLock()" title="Click to toggle rotation lock">
+                <span id="ortho-view-name">ORTHOGRAPHIC</span>
+                &nbsp;<span id="view-lock-icon">🔒</span>
+            </div>
             <div id="height-info">Y Range: <span id="y-range">--</span></div>
             <div id="info">Drag to rotate | Scroll to zoom | Right-drag to pan</div>
             <div id="scale-bar">
@@ -944,6 +962,24 @@
         let isDrawingGuide = false;
         let snapEnabled = true;
         let snapTypes = { vertex: true, midpoint: true, intersect: true };
+        let guideLineColor = 0x00d9ff;  // user-selectable guide line color
+
+        // View lock state
+        let viewLocked = false;
+
+        function setGuideColor(hex) {
+            guideLineColor = parseInt(hex.replace('#', ''), 16);
+            if (scene) rebuildGuideLines();
+        }
+
+        function toggleViewLock() {
+            viewLocked = !viewLocked;
+            if (controls) controls.enableRotate = !viewLocked;
+            document.getElementById('view-lock-icon').textContent = viewLocked ? '🔒' : '🔓';
+            document.getElementById('info').textContent = viewLocked
+                ? 'Scroll to zoom | Right-drag to pan | Rotation locked'
+                : 'Drag to rotate | Scroll to zoom | Right-drag to pan';
+        }
 
         function toggleSnapType(type) {
             snapTypes[type] = !snapTypes[type];
@@ -964,7 +1000,7 @@
             const isTrimExtend  = (name === 'trim'    || name === 'extend');
 
             drawMode = isConstruct;
-            if (controls) controls.enableRotate = !(isConstruct || isGuideDraw || isTrimExtend);
+            if (controls) controls.enableRotate = !(isConstruct || isGuideDraw || isTrimExtend || viewLocked);
             if (!isConstruct) exitDrawMode();
 
             if (renderer) {
@@ -1040,13 +1076,12 @@
                 }
                 const geo = new THREE.BufferGeometry();
                 geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-                const color = guide.type === 'polygon' ? 0x00d9ff : 0x5faacc;
-                guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, linewidth: 2 })));
+                guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: guideLineColor, linewidth: 2 })));
                 // Vertex dots
                 const dv = pts.flatMap(p => [p.x, p.y, p.z]);
                 const dg = new THREE.BufferGeometry();
                 dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({ color: 0x00d9ff, size: 0.06 })));
+                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({ color: guideLineColor, size: 0.06 })));
             });
 
             // Draw active (in-progress) guide
@@ -1446,9 +1481,16 @@
             controls.target.set(c.x, c.y, c.z);
 
             if (!isPersp) {
-                document.getElementById('ortho-badge').style.display = 'block';
-                document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan | (orthographic)';
+                viewLocked = true;
+                controls.enableRotate = false;
+                const viewName = view.toUpperCase();
+                document.getElementById('ortho-view-name').textContent = viewName;
+                document.getElementById('view-lock-icon').textContent = '🔒';
+                document.getElementById('ortho-badge').style.display = 'flex';
+                document.getElementById('info').textContent = 'Scroll to zoom | Right-drag to pan | Rotation locked — click badge to unlock';
             } else {
+                viewLocked = false;
+                controls.enableRotate = true;
                 document.getElementById('ortho-badge').style.display = 'none';
                 document.getElementById('info').textContent = 'Drag to rotate | Scroll to zoom | Right-drag to pan';
             }
@@ -1511,7 +1553,7 @@
                 btn.style.background = '';
                 btn.style.color = '';
             }
-            controls.enableRotate = true;
+            controls.enableRotate = !viewLocked;
             if (drawGroup) { scene.remove(drawGroup); drawGroup = null; }
             if (snapIndicatorMesh) { scene.remove(snapIndicatorMesh); snapIndicatorMesh = null; }
             drawnPoints3D = [];
