@@ -1897,6 +1897,10 @@
         let originalData = null;
         let currentFilename = null;       // tracks name for re-saves
         let currentProject  = '';         // tracks project folder for re-saves
+        function photosBase(proj) {
+            const p = proj || currentProject || '';
+            return p ? `/scans/${p}/photos` : '/scans/photos';
+        }
         let colorMode = 'normal';
         let minY = 0, maxY = 1;
         let sceneCenter = {x: 0, y: 0, z: 0};
@@ -4890,7 +4894,7 @@
             for (let i = 0; i < photoCount; i++) {
                 const name = 'auto_' + String(i).padStart(4, '0') + '.jpg';
                 const img  = document.createElement('img');
-                img.src   = `/scans/photos/${sessionId}/${name}`;
+                img.src   = `${photosBase()}/${sessionId}/${name}`;
                 img.title = name;
                 img.dataset.idx  = i;
                 img.dataset.name = name;
@@ -4910,7 +4914,7 @@
             const wrap  = document.getElementById('photo-preview-wrap');
             const pImg  = document.getElementById('photo-preview-img');
             const pLbl  = document.getElementById('photo-preview-label');
-            pImg.src    = `/scans/photos/${sessionId}/${name}`;
+            pImg.src    = `${photosBase()}/${sessionId}/${name}`;
             pLbl.textContent = name + '  (#' + idx + ')';
             wrap.style.display = 'block';
 
@@ -4992,7 +4996,7 @@
             poses.forEach((pf, i) => {
                 const name = 'auto_' + String(i).padStart(4, '0') + '.jpg';
                 loader.load(
-                    `/scans/photos/${sessionId}/${name}`,
+                    `${photosBase()}/${sessionId}/${name}`,
                     texture => {
                         const geo = new THREE.PlaneGeometry(0.32, 0.24);
                         const mat = new THREE.MeshBasicMaterial({
@@ -5057,7 +5061,7 @@
             const photoData = [];
             for (let i = 0; i < poses.length; i++) {
                 const name = 'auto_' + String(i).padStart(4, '0') + '.jpg';
-                photoData.push(await _loadPhotoPixels(`/scans/photos/${sessionId}/${name}`, canvW, canvH));
+                photoData.push(await _loadPhotoPixels(`${photosBase()}/${sessionId}/${name}`, canvW, canvH));
             }
 
             const loadedCount = photoData.filter(d => d !== null).length;
@@ -5245,7 +5249,7 @@
 
                 // Load raw Float32 depth binary
                 const depthName = 'auto_' + String(ci).padStart(4,'0') + '_depth.bin';
-                const depthRes = await fetch(`/scans/photos/${sessionId}/${depthName}`);
+                const depthRes = await fetch(`${photosBase()}/${sessionId}/${depthName}`);
                 if (!depthRes.ok) { console.log(`[Depth] missing ${depthName}`); continue; }
                 const depths = new Float32Array(await depthRes.arrayBuffer());
 
@@ -5255,7 +5259,7 @@
                 const canvH = Math.round(W * SCALE);
                 const photoName = 'auto_' + String(ci).padStart(4,'0') + '.jpg';
                 const photoData = await _loadPhotoPixels(
-                    `/scans/photos/${sessionId}/${photoName}`, canvW, canvH);
+                    `${photosBase()}/${sessionId}/${photoName}`, canvW, canvH);
 
                 // Helper: back-project a single depth pixel to world space
                 const bp = (pu, pv, pd) => {
@@ -6204,7 +6208,7 @@
                 const fx_d = fx*sx, fy_d = fy*sy, cx_d = cx*sx, cy_d = cy*sy;
                 const m = poses[ci];
 
-                const depthRes = await fetch(`/scans/photos/${sessionId}/auto_${String(ci).padStart(4,'0')}_depth.bin`);
+                const depthRes = await fetch(`${photosBase()}/${sessionId}/auto_${String(ci).padStart(4,'0')}_depth.bin`);
                 if (!depthRes.ok) continue;
                 const depths = new Float32Array(await depthRes.arrayBuffer());
 
@@ -6326,7 +6330,7 @@
                 let depths = null;
                 if (depthSizes.length) {
                     try {
-                        const dr = await fetch(`/scans/photos/${sessionId}/auto_${String(ci).padStart(4,'0')}_depth.bin`);
+                        const dr = await fetch(`${photosBase()}/${sessionId}/auto_${String(ci).padStart(4,'0')}_depth.bin`);
                         if (dr.ok) depths = new Float32Array(await dr.arrayBuffer());
                     } catch (_) {}
                 }
@@ -6435,7 +6439,7 @@
 
             try {
                 // 1. Session metadata
-                const sRes = await fetch(`/scans/photos/${sessionId}/session.json`);
+                const sRes = await fetch(`${photosBase()}/${sessionId}/session.json`);
                 if (!sRes.ok) throw new Error(`session.json HTTP ${sRes.status}`);
                 const session    = await sRes.json();
                 const photoCount = session.photo_count || 0;
@@ -6446,7 +6450,7 @@
                 // 2. Camera transforms (poses + intrinsics + depth_sizes + scan_volume)
                 let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [], scanVolume = null;
                 try {
-                    const tRes = await fetch(`/scans/photos/${sessionId}/transforms.json`);
+                    const tRes = await fetch(`${photosBase()}/${sessionId}/transforms.json`);
                     if (tRes.ok) {
                         const tData  = await tRes.json();
                         poses        = tData.camera_poses || [];
@@ -6465,7 +6469,7 @@
 
                 // 3. LiDAR point cloud (present in normal scan mode)
                 try {
-                    const pcRes = await fetch(`/scans/photos/${sessionId}/pointcloud.json`);
+                    const pcRes = await fetch(`${photosBase()}/${sessionId}/pointcloud.json`);
                     if (pcRes.ok) {
                         const pcData = await pcRes.json();
                         loadJSON(pcData);
@@ -6539,6 +6543,9 @@
             const params = new URLSearchParams(window.location.search);
             const scanFile = params.get('scan');
             if (!scanFile) return;
+            // Set project from URL so photosBase() resolves correctly
+            const urlProj = params.get('project') || '';
+            if (urlProj) currentProject = urlProj;
 
             // Photogrammetry sessions have IDs starting with 'photos_'
             // Handle ?scan=photos_... the same as ?photos=...
@@ -6546,7 +6553,17 @@
                 document.getElementById('selection-info').textContent =
                     `Loading photogrammetry session: ${scanFile}…`;
                 try {
-                    const sRes = await fetch(`/scans/photos/${scanFile}/session.json`);
+                    // Try direct path first; if 404, ask server to locate the session
+                    let sRes = await fetch(`${photosBase()}/${scanFile}/session.json`);
+                    if (!sRes.ok) {
+                        const findRes = await fetch(SERVER_BASE + '/find_session.php?session=' + encodeURIComponent(scanFile),
+                            { headers: { 'X-API-Key': API_KEY } });
+                        if (findRes.ok) {
+                            const loc = await findRes.json();
+                            if (loc.project !== undefined) currentProject = loc.project;
+                            sRes = await fetch(`${photosBase()}/${scanFile}/session.json`);
+                        }
+                    }
                     if (!sRes.ok) throw new Error(`HTTP ${sRes.status}`);
                     const session    = await sRes.json();
                     const photoCount = session.photo_count || 0;
@@ -6556,7 +6573,7 @@
 
                     let poses = [], intrinsics = [], imgSize = [0, 0], depthSizes = [], scanVolume = null;
                     try {
-                        const tRes = await fetch(`/scans/photos/${scanFile}/transforms.json`);
+                        const tRes = await fetch(`${photosBase()}/${scanFile}/transforms.json`);
                         if (tRes.ok) {
                             const tData  = await tRes.json();
                             poses        = tData.camera_poses || [];
@@ -6573,7 +6590,7 @@
                                      imgW: imgSize[0], imgH: imgSize[1], depthSizes};
 
                     try {
-                        const pcRes = await fetch(`/scans/photos/${scanFile}/pointcloud.json`);
+                        const pcRes = await fetch(`${photosBase()}/${scanFile}/pointcloud.json`);
                         if (pcRes.ok) {
                             const pcData = await pcRes.json();
                             loadJSON(pcData);
