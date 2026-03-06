@@ -413,6 +413,10 @@ struct PhotogrammetryView: View {
     @State private var captureMode: CaptureMode? = nil
     /// True once the user has tapped Start and capture is actively running
     @State private var isCapturing = false
+    /// Project picker state
+    @State private var showProjectPicker = false
+
+    @ObservedObject private var settings = AppSettings.shared
 
     enum Phase { case capturing, processing, done, failed }
     enum CaptureMode { case cube, free, photoOnly, lidarOnly }
@@ -553,6 +557,21 @@ struct PhotogrammetryView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             if let url = outputURL { PhotogrammetryShareSheet(url: url) }
+        }
+        .sheet(isPresented: $showProjectPicker) {
+            ProjectPickerView(
+                onSelect: { project in
+                    showProjectPicker = false
+                    if captureMode == .lidarOnly {
+                        sendScanOnly(project: project.isEmpty ? nil : project)
+                    } else if capturedCount > 0 {
+                        sendToLabeler()
+                    }
+                },
+                onSkip: {
+                    showProjectPicker = false
+                }
+            )
         }
     }
 
@@ -1030,8 +1049,7 @@ struct PhotogrammetryView: View {
         isCapturing = false
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .done
-        if captureMode == .lidarOnly { sendScanOnly() }
-        else if capturedCount > 0   { sendToLabeler() }
+        showProjectPicker = true
     }
 
     func sendToLabeler() {
@@ -1059,7 +1077,7 @@ struct PhotogrammetryView: View {
 
     /// Upload the LiDAR mesh as a regular scan JSON — no photos.
     /// Appears in the ScanWizard dashboard as a normal scan entry.
-    func sendScanOnly() {
+    func sendScanOnly(project: String? = nil) {
         guard let data = meshManager.pointCloudJSON() else {
             scanOnlyError = "No LiDAR mesh data available yet"
             return
@@ -1068,7 +1086,7 @@ struct PhotogrammetryView: View {
         scanOnlyFilename  = nil
         scanOnlyError     = nil
         Task {
-            let filename = await ScanServerManager.shared.uploadScan(data: data)
+            let filename = await ScanServerManager.shared.uploadScan(data: data, project: project)
             await MainActor.run {
                 isSendingScanOnly = false
                 if let filename {
