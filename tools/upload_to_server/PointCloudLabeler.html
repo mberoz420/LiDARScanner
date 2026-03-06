@@ -658,7 +658,7 @@
             <div class="tool-section-label">Scans</div>
             <div class="tools-grid">
                 <div class="tool-btn" id="tool-insert-scan"
-                     onclick="document.getElementById('insert-file-input').click()"
+                     onclick="showInsertOptions(event)"
                      title="Insert Scan — overlay a second scan on top of the current one">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                     Insert
@@ -714,6 +714,41 @@
             <div id="scale-bar">
                 <div id="scale-bar-label">--</div>
                 <div id="scale-bar-line" style="width:80px"></div>
+            </div>
+
+            <!-- Insert options popup (From File / From Server) -->
+            <div id="insert-options-popup" style="display:none;position:absolute;
+                background:rgba(8,12,28,0.97);border:1px solid #0f3460;border-radius:8px;
+                padding:6px;z-index:300;min-width:150px;box-shadow:0 4px 20px rgba(0,0,0,0.6);">
+                <div onclick="document.getElementById('insert-file-input').click(); hideInsertOptions()"
+                     style="padding:8px 12px;cursor:pointer;border-radius:5px;font-size:12px;color:#ccc;
+                            display:flex;align-items:center;gap:8px;"
+                     onmouseover="this.style.background='#1a2744'" onmouseout="this.style.background=''">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    From File
+                </div>
+                <div onclick="showServerScanPicker(); hideInsertOptions()"
+                     style="padding:8px 12px;cursor:pointer;border-radius:5px;font-size:12px;color:#00d9ff;
+                            display:flex;align-items:center;gap:8px;"
+                     onmouseover="this.style.background='#1a2744'" onmouseout="this.style.background=''">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    From Server
+                </div>
+            </div>
+
+            <!-- Server scan picker modal -->
+            <div id="server-scan-modal" style="display:none;position:absolute;inset:0;
+                background:rgba(0,0,0,0.6);z-index:400;display:none;align-items:center;justify-content:center;">
+                <div style="background:#0d1a2e;border:1px solid #00d9ff;border-radius:12px;
+                            padding:20px;width:380px;max-height:70vh;display:flex;flex-direction:column;
+                            box-shadow:0 8px 40px rgba(0,0,0,0.8);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                        <span style="font-weight:700;color:#00d9ff;font-size:14px;">🌐 Insert from Server</span>
+                        <span onclick="hideServerScanPicker()" style="cursor:pointer;color:#666;font-size:20px;line-height:1;">✕</span>
+                    </div>
+                    <div id="server-scan-status" style="font-size:12px;color:#888;margin-bottom:10px;">Loading scans…</div>
+                    <div id="server-scan-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;"></div>
+                </div>
             </div>
         </div>
         <div id="sidebar">
@@ -2555,6 +2590,85 @@
             updateStats();
             document.getElementById('selection-info').textContent =
                 `Inserted ${addedCount.toLocaleString()} points — total: ${points.length.toLocaleString()}`;
+        }
+
+        // ── Insert from Server ─────────────────────────────────────────────────
+        const SERVER_BASE = 'https://scanwizard.robo-wizard.com';
+        const API_KEY     = 'ScanWizard2025Secret';
+
+        function showInsertOptions(event) {
+            const popup = document.getElementById('insert-options-popup');
+            // Position next to the button
+            const btn  = document.getElementById('tool-insert-scan');
+            const rect = btn.getBoundingClientRect();
+            const vRect = document.getElementById('viewer').getBoundingClientRect();
+            popup.style.left = (rect.right - vRect.left + 6) + 'px';
+            popup.style.top  = (rect.top  - vRect.top)      + 'px';
+            popup.style.display = 'block';
+            // Close on outside click
+            setTimeout(() => document.addEventListener('click', hideInsertOptions, { once: true }), 0);
+        }
+
+        function hideInsertOptions() {
+            document.getElementById('insert-options-popup').style.display = 'none';
+        }
+
+        async function showServerScanPicker() {
+            const modal    = document.getElementById('server-scan-modal');
+            const statusEl = document.getElementById('server-scan-status');
+            const listEl   = document.getElementById('server-scan-list');
+            modal.style.display = 'flex';
+            statusEl.textContent = 'Loading scans…';
+            listEl.innerHTML = '';
+
+            try {
+                const res = await fetch(SERVER_BASE + '/list_scans.php', {
+                    headers: { 'X-API-Key': API_KEY }
+                });
+                if (!res.ok) throw new Error('Server error ' + res.status);
+                const { scans } = await res.json();
+
+                if (!scans || scans.length === 0) {
+                    statusEl.textContent = 'No scans found on server.';
+                    return;
+                }
+                statusEl.textContent = `${scans.length} scan${scans.length > 1 ? 's' : ''} available`;
+
+                listEl.innerHTML = scans.map(s => {
+                    const date   = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
+                    const pts    = s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '';
+                    return `<div onclick="fetchServerScan('${s.filename}')"
+                        style="padding:10px 12px;background:#1a2744;border:1px solid #0f3460;border-radius:7px;
+                               cursor:pointer;transition:border-color 0.15s;"
+                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
+                        <div style="font-size:12px;color:#fff;font-weight:600;">${s.filename}</div>
+                        <div style="font-size:10px;color:#888;margin-top:3px;">${date}${pts ? ' · ' + pts : ''}</div>
+                    </div>`;
+                }).join('');
+
+            } catch (err) {
+                statusEl.textContent = 'Error: ' + err.message;
+            }
+        }
+
+        function hideServerScanPicker() {
+            document.getElementById('server-scan-modal').style.display = 'none';
+        }
+
+        async function fetchServerScan(filename) {
+            hideServerScanPicker();
+            document.getElementById('selection-info').textContent = `Downloading ${filename}…`;
+            try {
+                const res = await fetch(SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename), {
+                    headers: { 'X-API-Key': API_KEY }
+                });
+                if (!res.ok) throw new Error('Server error ' + res.status);
+                const data = await res.json();
+                mergeJSON(data);
+            } catch (err) {
+                alert('Failed to load scan from server: ' + err.message);
+                document.getElementById('selection-info').textContent = 'Server load failed.';
+            }
         }
 
         // ── Alignment Tool ─────────────────────────────────────────────────────
