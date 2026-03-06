@@ -588,8 +588,8 @@ struct PhotogrammetryView: View {
                     .clipShape(Circle())
             }
 
-            // Cube reposition button — only shown in cube mode
-            if phase == .capturing && captureMode == .cube {
+            // Cube reposition button — shown in cube and LiDAR modes when box is active
+            if phase == .capturing && (captureMode == .cube || (captureMode == .lidarOnly && meshManager.scanVolume != nil)) {
                 Button(action: {
                     if meshManager.scanVolume != nil {
                         meshManager.clearScanVolume()
@@ -617,49 +617,40 @@ struct PhotogrammetryView: View {
 
             Spacer()
 
-            // Info panel
+            // Info panel — only show after mode is selected
             if captureMode == .lidarOnly {
-                VStack(alignment: .trailing, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "cube.transparent").foregroundColor(.purple)
-                        Text("\(meshManager.vertexCount) vertices")
-                            .fontWeight(.semibold).foregroundColor(.white)
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "cube.transparent").font(.caption).foregroundColor(.purple)
+                        Text("\(meshManager.vertexCount) vtx")
+                            .font(.caption2).fontWeight(.semibold).foregroundColor(.white)
                     }
                     if isCapturing {
                         Text("Walk around the room")
-                            .font(.caption2).foregroundColor(.white.opacity(0.6))
+                            .font(.system(size: 9)).foregroundColor(.white.opacity(0.6))
                     }
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Color.black.opacity(0.55)).cornerRadius(14)
-            } else {
-                VStack(alignment: .trailing, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "camera.fill").foregroundColor(.white)
-                        Text("\(capturedCount) photos").fontWeight(.semibold).foregroundColor(.white)
-                        Text("/ \(meshManager.autoCapture.depthCount)d")
-                            .font(.caption).foregroundColor(meshManager.autoCapture.depthCount > 0 ? .cyan : .orange)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Color.black.opacity(0.55)).cornerRadius(10)
+            } else if captureMode != nil && isCapturing {
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "camera.fill").font(.caption2).foregroundColor(.white)
+                        Text("\(capturedCount) photos").font(.caption2).fontWeight(.semibold).foregroundColor(.white)
                         Text("/ \(meshManager.vertexCount)v")
-                            .font(.caption).foregroundColor(meshManager.vertexCount > 0 ? .green : .red)
+                            .font(.system(size: 9)).foregroundColor(meshManager.vertexCount > 0 ? .green : .red)
                     }
 
-                    Text(qualityInfo.label).font(.caption).foregroundColor(qualityInfo.color)
+                    Text(qualityInfo.label).font(.system(size: 9)).foregroundColor(qualityInfo.color)
 
                     if effectiveTarget != nil {
                         ProgressView(value: progressToTarget)
                             .progressViewStyle(LinearProgressViewStyle(tint: qualityInfo.color))
-                            .frame(width: 120)
-                    }
-
-                    if phase == .capturing && isCapturing {
-                        Text(captureMode == .cube  ? "Cube active — walk around object" :
-                             captureMode == .free  ? "Free — walk around object" :
-                                                     "Photo only — walk around object")
-                            .font(.caption2).foregroundColor(.white.opacity(0.6))
+                            .frame(width: 100)
                     }
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Color.black.opacity(0.55)).cornerRadius(14)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Color.black.opacity(0.55)).cornerRadius(10)
             }
         }
         .padding()
@@ -701,10 +692,33 @@ struct PhotogrammetryView: View {
 
                 if captureMode == .cube {
                     Text("Aim at your object, then tap Start")
-                        .font(.caption).foregroundColor(.yellow.opacity(0.9))
+                        .font(.caption2).foregroundColor(.yellow.opacity(0.9))
                 } else if captureMode == .lidarOnly {
-                    Text("Walk around the room to build the LiDAR mesh")
-                        .font(.caption).foregroundColor(.purple.opacity(0.9))
+                    // Box toggle for LiDAR mode
+                    Button(action: {
+                        if meshManager.scanVolume != nil {
+                            meshManager.clearScanVolume()
+                        } else {
+                            meshManager.placeScanVolume()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                                .foregroundColor(.purple)
+                            Text(meshManager.scanVolume != nil
+                                 ? "Box: ON"
+                                 : "Box: OFF")
+                                .font(.caption2).foregroundColor(.white.opacity(0.8))
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.black.opacity(0.45)).cornerRadius(8)
+                        .overlay(RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.purple.opacity(0.6), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("Walk around the room to scan")
+                        .font(.caption2).foregroundColor(.purple.opacity(0.9))
                 } else if captureMode == .photoOnly {
                     // Box toggle for Photo Only mode
                     Button(action: {
@@ -736,10 +750,10 @@ struct PhotogrammetryView: View {
                 Button(action: startCapture) {
                     Label(captureMode == .lidarOnly ? "Start Scan" : "Start Capture",
                           systemImage: captureMode == .lidarOnly ? "play.fill" : "record.circle.fill")
-                        .font(.headline).foregroundColor(.white)
-                        .padding(.horizontal, 44).padding(.vertical, 16)
+                        .font(.subheadline).foregroundColor(.white)
+                        .padding(.horizontal, 32).padding(.vertical, 12)
                         .background(captureMode == .lidarOnly ? Color.purple : Color.green)
-                        .cornerRadius(16)
+                        .cornerRadius(14)
                 }
 
             } else if isCapturing {
@@ -747,15 +761,15 @@ struct PhotogrammetryView: View {
                 if captureMode == .lidarOnly {
                     // LiDAR-only — no photo UI, just stop button
                     Button(action: stopAndUpload) {
-                        VStack(spacing: 5) {
+                        VStack(spacing: 4) {
                             ZStack {
-                                Circle().fill(Color.orange).frame(width: 72, height: 72)
+                                Circle().fill(Color.orange).frame(width: 60, height: 60)
                                 Image(systemName: "stop.fill")
-                                    .font(.system(size: 24, weight: .bold))
+                                    .font(.system(size: 20, weight: .bold))
                                     .foregroundColor(.white)
                             }
                             Text("Stop & Send")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 10, weight: .semibold))
                                 .foregroundColor(.orange)
                         }
                     }
@@ -894,85 +908,95 @@ struct PhotogrammetryView: View {
     var doneOverlay: some View {
         ZStack {
             Color.black.opacity(0.85).edgesIgnoringSafeArea(.all)
-            VStack(spacing: 24) {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 60)).foregroundColor(.green)
-                Text("3D Model Ready").font(.title2).fontWeight(.bold).foregroundColor(.white)
-                Text("USDZ file — open in AR Quick Look,\nBlender, or any 3D viewer")
-                    .font(.caption).multilineTextAlignment(.center).foregroundColor(.white.opacity(0.7))
+            ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
+                Text(captureMode == .lidarOnly ? "Scan Complete" : "3D Model Ready")
+                    .font(.subheadline).fontWeight(.bold).foregroundColor(.white)
 
-                HStack(spacing: 16) {
-                    Button(action: { showShareSheet = true }) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.headline).foregroundColor(.white)
-                            .padding(.horizontal, 20).padding(.vertical, 14)
-                            .background(Color.blue).cornerRadius(14)
-                    }
-
-                    // ── Send to Point Cloud Labeler (photos + mesh) ──────────
-                    if captureMode != .lidarOnly {
-                        Button(action: sendToLabeler) {
-                            Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
-                                  systemImage: "square.and.arrow.up.on.square")
-                                .font(.headline).foregroundColor(.white)
-                                .padding(.horizontal, 20).padding(.vertical, 14)
-                                .background(labelerSessionId != nil ? Color.green : Color.orange)
-                                .cornerRadius(14)
+                // Action buttons — wrapped so they don't clip
+                VStack(spacing: 10) {
+                    HStack(spacing: 10) {
+                        Button(action: { showShareSheet = true }) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .font(.caption).foregroundColor(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(Color.blue).cornerRadius(10)
                         }
-                        .disabled(isUploadingToLabeler || isSendingScanOnly)
-                    }
 
-                    // ── Scan Only — upload LiDAR mesh without photos ──────────
-                    if captureMode != .photoOnly {
-                        Button(action: { sendScanOnly(project: settings.selectedProject.isEmpty ? nil : settings.selectedProject) }) {
-                            Label(isSendingScanOnly ? "Uploading…" : (scanOnlyFilename != nil ? "Uploaded!" : "Send to Labeler"),
-                                  systemImage: scanOnlyFilename != nil ? "checkmark.circle.fill" : "cube.transparent")
-                                .font(.headline).foregroundColor(.white)
-                                .padding(.horizontal, 20).padding(.vertical, 14)
-                                .background(scanOnlyFilename != nil ? Color.green : Color.purple)
-                                .cornerRadius(14)
+                        // ── Send to Point Cloud Labeler (photos + mesh) ──────────
+                        if captureMode != .lidarOnly {
+                            Button(action: sendToLabeler) {
+                                Label(isUploadingToLabeler ? "Uploading…" : "Send to Labeler",
+                                      systemImage: "square.and.arrow.up.on.square")
+                                    .font(.caption).foregroundColor(.white)
+                                    .padding(.horizontal, 14).padding(.vertical, 10)
+                                    .background(labelerSessionId != nil ? Color.green : Color.orange)
+                                    .cornerRadius(10)
+                            }
+                            .disabled(isUploadingToLabeler || isSendingScanOnly)
                         }
-                        .disabled(isSendingScanOnly || isUploadingToLabeler)
+
+                        // ── Scan Only — upload LiDAR mesh without photos ──────────
+                        if captureMode != .photoOnly {
+                            Button(action: { sendScanOnly(project: settings.selectedProject.isEmpty ? nil : settings.selectedProject) }) {
+                                Label(isSendingScanOnly ? "Uploading…" : (scanOnlyFilename != nil ? "Uploaded!" : "Upload Scan"),
+                                      systemImage: scanOnlyFilename != nil ? "checkmark.circle.fill" : "cube.transparent")
+                                    .font(.caption).foregroundColor(.white)
+                                    .padding(.horizontal, 14).padding(.vertical, 10)
+                                    .background(scanOnlyFilename != nil ? Color.green : Color.purple)
+                                    .cornerRadius(10)
+                            }
+                            .disabled(isSendingScanOnly || isUploadingToLabeler)
+                        }
                     }
 
-                    Button(action: { dismiss() }) {
-                        Text("Done").font(.headline).foregroundColor(.white)
-                            .padding(.horizontal, 20).padding(.vertical, 14)
-                            .background(Color.gray.opacity(0.4)).cornerRadius(14)
+                    HStack(spacing: 10) {
+                        Button(action: { resetForNewScan() }) {
+                            Label("New Scan", systemImage: "play.fill")
+                                .font(.caption).foregroundColor(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(Color.purple.opacity(0.7)).cornerRadius(10)
+                        }
+
+                        Button(action: { dismiss() }) {
+                            Label("Back", systemImage: "chevron.left")
+                                .font(.caption).foregroundColor(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(Color.gray.opacity(0.4)).cornerRadius(10)
+                        }
                     }
                 }
 
                 // Upload status feedback
                 if isUploadingToLabeler {
                     ProgressView("Uploading \(meshManager.autoCapture.photoCount) photos…")
-                        .foregroundColor(.white).tint(.white)
+                        .font(.caption2).foregroundColor(.white).tint(.white)
                 } else if let sid = labelerSessionId {
-                    Text("Photos uploaded — labeler will auto-open")
-                        .font(.caption).foregroundColor(.green)
-                        .multilineTextAlignment(.center)
+                    Text("Photos uploaded").font(.caption2).foregroundColor(.green)
                     Text(sid).font(.system(.caption2, design: .monospaced))
                         .foregroundColor(.white.opacity(0.5))
                 } else if let err = labelerUploadError {
                     Text("Upload failed: \(err)")
-                        .font(.caption).foregroundColor(.red)
+                        .font(.caption2).foregroundColor(.red)
                         .multilineTextAlignment(.center)
                 }
 
                 if isSendingScanOnly {
                     ProgressView("Uploading LiDAR scan…")
-                        .foregroundColor(.white).tint(.white)
+                        .font(.caption2).foregroundColor(.white).tint(.white)
                 } else if let fn = scanOnlyFilename {
-                    Text("Scan uploaded — open in dashboard")
-                        .font(.caption).foregroundColor(.green)
-                        .multilineTextAlignment(.center)
+                    Text("Scan uploaded").font(.caption2).foregroundColor(.green)
                     Text(fn).font(.system(.caption2, design: .monospaced))
                         .foregroundColor(.white.opacity(0.5))
                 } else if let err = scanOnlyError {
-                    Text("Scan upload failed: \(err)")
-                        .font(.caption).foregroundColor(.red)
+                    Text("Upload failed: \(err)")
+                        .font(.caption2).foregroundColor(.red)
                         .multilineTextAlignment(.center)
                 }
             }
-            .padding(40)
+            .padding(30)
+            }
         }
     }
 
@@ -1038,6 +1062,21 @@ struct PhotogrammetryView: View {
         if meshManager.isScanning { _ = meshManager.stopScanning() }
         phase = .done
         showProjectPicker = true
+    }
+
+    /// Reset to the LiDAR start screen for another scan
+    func resetForNewScan() {
+        phase = .capturing
+        isCapturing = false
+        outputURL = nil
+        errorMessage = nil
+        scanOnlyFilename = nil
+        scanOnlyError = nil
+        labelerSessionId = nil
+        labelerUploadError = nil
+        isUploadingToLabeler = false
+        isSendingScanOnly = false
+        meshManager.autoCapture.reset()
     }
 
     func sendToLabeler() {

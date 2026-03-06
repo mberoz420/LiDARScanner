@@ -209,12 +209,12 @@ struct MainMenuSquare: View {
                     .foregroundColor(.white)
 
                 Text(title)
-                    .font(.subheadline)
+                    .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 140)
