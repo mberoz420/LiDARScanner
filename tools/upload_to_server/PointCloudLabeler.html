@@ -682,6 +682,12 @@
                         <p style="font-size:11px;color:#888;margin-top:4px;">or click to browse</p>
                     </div>
                     <input type="file" id="file-input" accept=".json" />
+                    <button class="btn btn-action btn-small" style="width:100%;margin-top:6px;border-color:#2ecc71;color:#2ecc71;"
+                            onclick="document.getElementById('insert-file-input').click()"
+                            title="Add points from a second scan on top of the current one">
+                        ➕ Insert Scan
+                    </button>
+                    <input type="file" id="insert-file-input" accept=".json" style="display:none" />
                 </div>
             </div>
 
@@ -2392,6 +2398,67 @@
                 `Loaded ${points.length.toLocaleString()} points. Click to select.`;
         }
 
+        /** Merge points from a second scan JSON into the current point cloud. */
+        function mergeJSON(data) {
+            if (!points.length) {
+                // Nothing loaded yet — just do a regular load
+                loadJSON(data); return;
+            }
+            const prevCount = points.length;
+
+            // Parse new points using same logic as loadJSON
+            const parsePoints = (src, labelsArr) => {
+                src.forEach((p, i) => {
+                    if (Array.isArray(p)) {
+                        points.push({ x: p[0], y: p[1], z: p[2] });
+                        normals.push({ x: p[3] || 0, y: p[4] || 0, z: p[5] || 0 });
+                        labels.push(labelsArr ? labelsArr[i] : -1);
+                        rgbColors.push(null);
+                    } else if (p.x !== undefined) {
+                        points.push({ x: p.x, y: p.y, z: p.z });
+                        normals.push({ x: p.nx || 0, y: p.ny || 0, z: p.nz || 0 });
+                        labels.push(p.label !== undefined ? p.label : -1);
+                        rgbColors.push(p.r !== undefined ? { r: p.r, g: p.g, b: p.b } : null);
+                    }
+                });
+            };
+
+            if (data.points && Array.isArray(data.points)) {
+                parsePoints(data.points, data.labels);
+            } else if (Array.isArray(data)) {
+                parsePoints(data, null);
+            }
+
+            const addedCount = points.length - prevCount;
+            if (addedCount === 0) { alert('No valid points found in file'); return; }
+
+            // Recalculate bounds across all points
+            let minX = Infinity, maxX = -Infinity;
+            minY = Infinity; maxY = -Infinity;
+            let minZ = Infinity, maxZ = -Infinity;
+            points.forEach(p => {
+                if (isFinite(p.x)) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+                if (isFinite(p.y)) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+                if (isFinite(p.z)) { minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z); }
+            });
+            sceneCenter = { x:(minX+maxX)/2, y:(minY+maxY)/2, z:(minZ+maxZ)/2 };
+            sceneSize = Math.max(maxX-minX, maxY-minY, maxZ-minZ);
+
+            if (grid) {
+                const gs = Math.ceil(sceneSize * 2);
+                scene.remove(grid);
+                grid = new THREE.GridHelper(gs, gs, 0x0f3460, 0x0f3460);
+                grid.position.set(sceneCenter.x, minY, sceneCenter.z);
+                scene.add(grid);
+            }
+            document.getElementById('y-range').textContent = `${minY.toFixed(2)} to ${maxY.toFixed(2)} m`;
+
+            rebuildPointCloud();
+            updateStats();
+            document.getElementById('selection-info').textContent =
+                `Inserted ${addedCount.toLocaleString()} points — total: ${points.length.toLocaleString()}`;
+        }
+
         function centerCamera() {
             if (points.length === 0) return;
 
@@ -3112,6 +3179,23 @@
                 `Exported ${mode} GLB — ${nV.toLocaleString()} vertices` +
                 (hasFaces ? `, ${meshFaces.length.toLocaleString()} faces` : '');
         }
+
+        // Insert (merge) second scan
+        document.getElementById('insert-file-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    try {
+                        mergeJSON(JSON.parse(ev.target.result));
+                    } catch (err) {
+                        alert('Error parsing JSON: ' + err.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+            this.value = ''; // reset so same file can be inserted again
+        });
 
         // File handling
         document.getElementById('file-input').addEventListener('change', function(e) {
