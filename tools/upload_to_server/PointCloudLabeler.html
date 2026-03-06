@@ -408,6 +408,65 @@
             margin-left: 6px;
         }
 
+        /* ── Left Toolbar (rug-project circular style) ────────── */
+        #left-toolbar {
+            width: 64px;
+            background: #12203a;
+            border-right: 1px solid #0f3460;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 14px 0;
+            gap: 8px;
+            flex-shrink: 0;
+            z-index: 10;
+        }
+        .tool-btn {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px;
+            cursor: pointer;
+            background: #1a2744;
+            border: 3px solid #0f3460;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+            user-select: none;
+            transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+            position: relative;
+        }
+        .tool-btn:hover  { transform: scale(1.1); border-color: #3498db; box-shadow: 0 4px 12px rgba(52,152,219,0.3); }
+        .tool-btn.active { border-color: #e94560; transform: scale(1.15); box-shadow: 0 4px 14px rgba(233,69,96,0.45); }
+        .tool-btn::after {
+            content: attr(title);
+            position: absolute;
+            left: 52px; top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.88);
+            color: #fff;
+            font-size: 11px;
+            padding: 4px 9px;
+            border-radius: 6px;
+            white-space: nowrap;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s;
+            z-index: 100;
+        }
+        .tool-btn:hover::after { opacity: 1; }
+        .tool-separator { width: 36px; height: 1px; background: #0f3460; margin: 2px 0; }
+        /* Paint label swatches — circular, like rug-project color palette */
+        #paint-palette { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .paint-swatch {
+            width: 30px; height: 30px;
+            border-radius: 50%;
+            border: 3px solid transparent;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            cursor: pointer;
+            transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+        }
+        .paint-swatch:hover  { transform: scale(1.12); }
+        .paint-swatch.active { border-color: #fff; transform: scale(1.2); box-shadow: 0 3px 10px rgba(255,255,255,0.25); }
+
         /* ── Collapsible Cards ─────────────────────────────────── */
         #sidebar {
             padding: 10px 10px 20px;
@@ -455,6 +514,24 @@
 </head>
 <body>
     <div id="container">
+        <!-- Left Toolbar -->
+        <div id="left-toolbar">
+            <div class="tool-btn active" id="tool-select"    onclick="setTool('select')"    title="Select (V)">🖱️</div>
+            <div class="tool-btn"        id="tool-construct" onclick="setTool('construct')" title="Construction Line (C)">📐</div>
+            <div class="tool-btn"        id="tool-paint"     onclick="setTool('paint')"     title="Paint Label (P)">🖌️</div>
+            <div class="tool-btn"        id="tool-erase"     onclick="setTool('erase')"     title="Erase (E)">🗑️</div>
+            <div class="tool-separator"></div>
+            <div id="paint-palette">
+                <div class="paint-swatch"        data-label="0" style="background:#2ecc71" title="Floor"></div>
+                <div class="paint-swatch"        data-label="1" style="background:#f1c40f" title="Ceiling"></div>
+                <div class="paint-swatch active" data-label="2" style="background:#3498db" title="Wall"></div>
+                <div class="paint-swatch"        data-label="3" style="background:#e74c3c" title="Object"></div>
+                <div class="paint-swatch"        data-label="4" style="background:#9b59b6" title="Noise"></div>
+                <div class="paint-swatch"        data-label="5" style="background:#e68080" title="Obj Top"></div>
+                <div class="paint-swatch"        data-label="6" style="background:#ff00ff" title="Back Refl"></div>
+            </div>
+        </div>
+
         <div id="viewer">
             <div id="selection-info">Select points with mouse. Hold Shift for multi-select.</div>
             <div id="ortho-badge">ORTHOGRAPHIC</div>
@@ -531,7 +608,7 @@
                         <button class="btn btn-view" style="flex:1;font-size:16px;" onclick="rotateView(-45)">&#x21BA; 45°</button>
                         <button class="btn btn-view" style="flex:1;font-size:16px;" onclick="rotateView(+45)">45° &#x21BB;</button>
                     </div>
-                    <button id="draw-mode-btn" class="btn btn-action" style="margin-top:6px;border-color:#f39c12;" onclick="toggleDrawMode()">&#x270F;&#xFE0F; Draw Boundary</button>
+                    <button id="draw-mode-btn" class="btn btn-action" style="display:none"></button>
                     <div id="manual-boundary-row" style="display:none;margin-top:6px;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #f39c12;">
                         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
                             <input type="checkbox" id="use-manual-boundary" checked style="width:16px;height:16px;cursor:pointer;" onchange="classifyByFarthestPlanes()">
@@ -542,7 +619,7 @@
                 </div>
             </div>
 
-            <!-- LABELS -->
+            <!-- LABELS + CUSTOM LABELS -->
             <div class="card">
                 <div class="card-header" onclick="toggleCard('labels')">
                     <span>🏷️ Labels</span><span class="card-icon" id="card-icon-labels">▼</span>
@@ -558,22 +635,14 @@
                     <button class="btn btn-unlabeled" onclick="labelSelected(-1)">Clear Label (0)</button>
                     <button class="btn btn-delete" onclick="deleteSelected()">Delete Selected</button>
                     <p class="keyboard-hint">Keys 0–7 to label · Del/Backspace to delete</p>
-                </div>
-            </div>
-
-            <!-- CUSTOM LABELS -->
-            <div class="card">
-                <div class="card-header" onclick="toggleCard('custom')">
-                    <span>🔖 Custom Labels</span><span class="card-icon" id="card-icon-custom">▶</span>
-                </div>
-                <div class="card-body" id="card-body-custom" style="display:none">
-                    <div class="input-group">
+                    <div style="margin-top:8px;border-top:1px solid #0f3460;padding-top:8px;">
+                        <div style="font-size:11px;color:#888;margin-bottom:6px;">Custom Labels</div>
                         <div class="input-row">
                             <input type="text" id="new-label-name" placeholder="Label name (e.g., door)">
                             <button class="btn btn-custom btn-small" onclick="addCustomLabel()">Add</button>
                         </div>
+                        <div class="custom-labels-list" id="custom-labels-list"></div>
                     </div>
-                    <div class="custom-labels-list" id="custom-labels-list"></div>
                 </div>
             </div>
 
@@ -755,6 +824,63 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script>
+        // ── Left Toolbar Tool System ───────────────────────────────────────────
+        let activeTool = 'select';
+        let paintLabel = 2;         // wall by default
+        let isMouseDown = false;
+
+        function setTool(name) {
+            activeTool = name;
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('tool-' + name)?.classList.add('active');
+            const isConstruct = (name === 'construct');
+            drawMode = isConstruct;
+            if (controls) controls.enableRotate = !isConstruct;
+            if (!isConstruct) exitDrawMode();
+            if (renderer) {
+                renderer.domElement.style.cursor =
+                    name === 'paint' || name === 'erase' ? 'crosshair' :
+                    name === 'construct' ? 'cell' : 'default';
+            }
+            // Show/hide paint palette hint
+            const palette = document.getElementById('paint-palette');
+            if (palette) palette.style.opacity = (name === 'paint') ? '1' : '0.45';
+        }
+
+        function applyBrushAt(event) {
+            if (!pointCloud) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width)  * 2 - 1;
+            mouse.y = -((event.clientY - rect.top)  / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObject(pointCloud);
+            if (!hits.length) return;
+            const visIdx = pointCloud.userData.visibleIndices;
+            const hitPt  = points[visIdx[hits[0].index]];
+            let changed = 0;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                const p = points[i];
+                const d = Math.sqrt((p.x-hitPt.x)**2 + (p.y-hitPt.y)**2 + (p.z-hitPt.z)**2);
+                if (d > selectionRadius) continue;
+                if (activeTool === 'erase') { deletedIndices.add(i); changed++; }
+                else { labels[i] = paintLabel; changed++; }
+            }
+            if (changed > 0) { rebuildPointCloud(); updateStats(); }
+        }
+
+        // Init paint swatches click handlers (called after DOM ready)
+        function initPaintPalette() {
+            document.querySelectorAll('.paint-swatch').forEach(sw => {
+                sw.addEventListener('click', () => {
+                    document.querySelectorAll('.paint-swatch').forEach(s => s.classList.remove('active'));
+                    sw.classList.add('active');
+                    paintLabel = parseInt(sw.dataset.label);
+                    setTool('paint');
+                });
+            });
+        }
+
         function toggleCard(id) {
             const body = document.getElementById('card-body-' + id);
             const icon = document.getElementById('card-icon-' + id);
@@ -1006,8 +1132,13 @@
             return bestPt;
         }
 
-        /** Mouse move handler — only active in draw mode. Shows snap indicator. */
+        /** Mouse move handler — draw mode snap + paint/erase drag. */
         function onMouseMoveForDraw(event) {
+            // Paint / Erase drag
+            if ((activeTool === 'paint' || activeTool === 'erase') && isMouseDown) {
+                applyBrushAt(event);
+                return;
+            }
             if (!drawMode) return;
             const snap = findSnapPoint(event);
             drawSnapTarget = snap ? {x: snap.x, y: snap.y, z: snap.z}
@@ -1507,8 +1638,11 @@
 
             renderer.domElement.addEventListener('click', onMouseClick);
             renderer.domElement.addEventListener('mousemove', onMouseMoveForDraw);
+            renderer.domElement.addEventListener('mousedown', () => { isMouseDown = true; });
+            renderer.domElement.addEventListener('mouseup',   () => { isMouseDown = false; });
             window.addEventListener('resize', onWindowResize);
             window.addEventListener('keydown', onKeyDown);
+            initPaintPalette();
 
             animate();
         }
@@ -1678,6 +1812,12 @@
         }
 
         function onMouseClick(event) {
+            // ── Paint / Erase tool intercept ─────────────────────────────────
+            if (activeTool === 'paint' || activeTool === 'erase') {
+                applyBrushAt(event);
+                return;
+            }
+
             // ── Draw mode intercept ──────────────────────────────────────────
             if (drawMode) {
                 const pos = drawSnapTarget || getClickWorldPos(event);
@@ -1850,6 +1990,14 @@
                     return;
                 }
                 clearSelection();
+            } else if (event.key === 'v' || event.key === 'V') {
+                setTool('select');
+            } else if (event.key === 'c' || event.key === 'C') {
+                setTool('construct');
+            } else if (event.key === 'p' || event.key === 'P') {
+                setTool('paint');
+            } else if ((event.key === 'e' || event.key === 'E') && !event.ctrlKey) {
+                setTool('erase');
             } else if (event.key === '[' || event.key === '-') {
                 decreasePointSize();
             } else if (event.key === ']' || event.key === '=' || event.key === '+') {
