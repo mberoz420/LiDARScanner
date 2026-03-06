@@ -2939,10 +2939,9 @@
             rebuildPointCloud();
             updateStats();
 
-            // Use scan orientation if available — position camera facing the object's front
-            if (data.scan_orientation && data.scan_orientation.x_axis) {
-                const ori = data.scan_orientation;
-                const xAxis = ori.x_axis; // points from object toward camera
+            // Compute front direction from vertical surface normals
+            const frontDir = computeFrontDirection(data);
+            if (frontDir) {
                 const dist = sceneSize * 2.5;
                 const c = sceneCenter;
                 camera = perspCamera;
@@ -2950,11 +2949,10 @@
                 camera.far = Math.max(1000, sceneSize * 10);
                 camera.near = Math.min(0.01, sceneSize * 0.001);
                 camera.updateProjectionMatrix();
-                // Place camera along the X axis direction (front of object)
                 camera.position.set(
-                    c.x + xAxis[0] * dist,
+                    c.x + frontDir.x * dist,
                     c.y + dist * 0.3,
-                    c.z + xAxis[2] * dist
+                    c.z + frontDir.z * dist
                 );
                 camera.up.set(0, 1, 0);
                 camera.lookAt(c.x, c.y, c.z);
@@ -2969,6 +2967,73 @@
 
             document.getElementById('selection-info').textContent =
                 `Loaded ${points.length.toLocaleString()} points. Click to select.`;
+        }
+
+        /**
+         * Compute front viewing direction from the point cloud normals.
+         * Finds the dominant vertical surface normal direction — the largest
+         * cluster of roughly-horizontal normals gives the object's "front face".
+         * Returns {x, z} unit vector or null if not enough data.
+         */
+        function computeFrontDirection(data) {
+            // If scan_orientation is embedded by the iOS app, use it directly
+            if (data && data.scan_orientation && data.scan_orientation.x_axis) {
+                const ax = data.scan_orientation.x_axis;
+                return { x: ax[0], z: ax[2] };
+            }
+
+            // Compute from loaded points/normals
+            if (!normals || normals.length < 20) return null;
+
+            // Bin horizontal normals into angle buckets (10° each = 36 bins)
+            const NUM_BINS = 36;
+            const bins = new Float64Array(NUM_BINS);  // sum of weights per bin
+            const binNx = new Float64Array(NUM_BINS);
+            const binNz = new Float64Array(NUM_BINS);
+
+            for (let i = 0; i < normals.length; i++) {
+                const n = normals[i];
+                // Vertical surface: normal is roughly horizontal
+                if (Math.abs(n.y) > 0.3) continue;
+
+                const hLen = Math.sqrt(n.x * n.x + n.z * n.z);
+                if (hLen < 0.01) continue;
+
+                // Angle in [0, 2π)
+                let angle = Math.atan2(n.z, n.x);
+                if (angle < 0) angle += Math.PI * 2;
+
+                const bin = Math.floor(angle / (Math.PI * 2) * NUM_BINS) % NUM_BINS;
+                bins[bin] += 1;
+                binNx[bin] += n.x / hLen;
+                binNz[bin] += n.z / hLen;
+            }
+
+            // Find the bin with the most normals (dominant vertical face direction)
+            let maxBin = 0;
+            let maxCount = 0;
+            for (let i = 0; i < NUM_BINS; i++) {
+                // Sum with neighbors for smoothing (3-bin window)
+                const sum = bins[i] + bins[(i + 1) % NUM_BINS] + bins[(i + NUM_BINS - 1) % NUM_BINS];
+                if (sum > maxCount) {
+                    maxCount = sum;
+                    maxBin = i;
+                }
+            }
+
+            if (maxCount < 10) return null;  // not enough vertical surface data
+
+            // Average the normals in the winning 3-bin window
+            let sx = 0, sz = 0;
+            for (let d = -1; d <= 1; d++) {
+                const b = (maxBin + d + NUM_BINS) % NUM_BINS;
+                sx += binNx[b];
+                sz += binNz[b];
+            }
+            const len = Math.sqrt(sx * sx + sz * sz);
+            if (len < 0.001) return null;
+
+            return { x: sx / len, z: sz / len };
         }
 
         /** Merge points from a second scan JSON into the current point cloud. */
