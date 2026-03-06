@@ -628,9 +628,11 @@ struct PhotogrammetryView: View {
                         .font(.caption).foregroundColor(meshManager.vertexCount > 0 ? .green : .red)
                 }
 
-                Text(qualityInfo.label).font(.caption).foregroundColor(qualityInfo.color)
+                if captureMode != .lidarOnly {
+                    Text(qualityInfo.label).font(.caption).foregroundColor(qualityInfo.color)
+                }
 
-                if effectiveTarget != nil {
+                if effectiveTarget != nil && captureMode != .lidarOnly {
                     ProgressView(value: progressToTarget)
                         .progressViewStyle(LinearProgressViewStyle(tint: qualityInfo.color))
                         .frame(width: 120)
@@ -817,65 +819,18 @@ struct PhotogrammetryView: View {
         VStack {
             Spacer()
             HStack(spacing: 12) {
-                Button(action: { selectMode(.cube) }) {
-                    VStack(spacing: 5) {
-                        Image(systemName: "cube")
-                            .font(.title3).foregroundColor(.yellow)
-                        Text("Object Scan")
-                            .font(.caption2).foregroundColor(.white)
-                    }
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(Color.black.opacity(0.55))
-                    .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.yellow.opacity(0.7), lineWidth: 1.5))
+                modeCard(icon: "cube", label: "Object", color: .yellow) {
+                    selectMode(.cube)
                 }
-                .buttonStyle(.plain)
-
-                Button(action: { selectMode(.free) }) {
-                    VStack(spacing: 5) {
-                        Image(systemName: "camera")
-                            .font(.title3).foregroundColor(.white)
-                        Text("Free Capture")
-                            .font(.caption2).foregroundColor(.white)
-                    }
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(Color.black.opacity(0.55))
-                    .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.white.opacity(0.35), lineWidth: 1.5))
+                modeCard(icon: "camera", label: "Free", color: .white) {
+                    selectMode(.free)
                 }
-                .buttonStyle(.plain)
-
-                Button(action: { selectMode(.photoOnly) }) {
-                    VStack(spacing: 5) {
-                        Image(systemName: "photo.stack")
-                            .font(.title3).foregroundColor(.cyan)
-                        Text("Photo Only")
-                            .font(.caption2).foregroundColor(.white)
-                    }
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(Color.black.opacity(0.55))
-                    .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.cyan.opacity(0.7), lineWidth: 1.5))
+                modeCard(icon: "photo.stack", label: "Photo", color: .cyan) {
+                    selectMode(.photoOnly)
                 }
-                .buttonStyle(.plain)
-
-                Button(action: { selectMode(.lidarOnly); isCapturing = true }) {
-                    VStack(spacing: 5) {
-                        Image(systemName: "cube.transparent")
-                            .font(.title3).foregroundColor(.purple)
-                        Text("No Photos")
-                            .font(.caption2).foregroundColor(.white)
-                    }
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(Color.black.opacity(0.55))
-                    .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.purple.opacity(0.7), lineWidth: 1.5))
+                modeCard(icon: "cube.transparent", label: "LiDAR", color: .purple) {
+                    selectMode(.lidarOnly); isCapturing = true
                 }
-                .buttonStyle(.plain)
             }
             .padding(.bottom, 140)
         }
@@ -899,6 +854,27 @@ struct PhotogrammetryView: View {
             }
             .padding(40)
         }
+    }
+
+    // MARK: - Mode card helper
+
+    private func modeCard(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.title2).foregroundColor(color)
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            .frame(width: 70, height: 70)
+            .background(Color.black.opacity(0.55))
+            .cornerRadius(12)
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .stroke(color.opacity(0.7), lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Done overlay
