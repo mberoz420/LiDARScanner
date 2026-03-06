@@ -459,6 +459,17 @@
                 <button class="btn btn-view" style="width:48%;font-size:18px;" onclick="rotateView(-45)">&#x21BA; 45°</button>
                 <button class="btn btn-view" style="width:48%;font-size:18px;" onclick="rotateView(+45)">45° &#x21BB;</button>
             </div>
+            <div style="margin:8px 0;">
+                <button id="draw-mode-btn" class="btn btn-action" style="border-color:#f39c12;" onclick="toggleDrawMode()">&#x270F;&#xFE0F; Draw Boundary</button>
+            </div>
+            <div id="manual-boundary-row" style="display:none;margin:8px 0;padding:8px;background:#0f3460;border-radius:6px;border:1px solid #f39c12;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
+                    <input type="checkbox" id="use-manual-boundary" checked style="width:16px;height:16px;cursor:pointer;"
+                           onchange="classifyByFarthestPlanes()">
+                    <span>&#x270F;&#xFE0F; Use manual boundary</span>
+                </label>
+                <button class="btn btn-action btn-small" style="margin-top:6px;border-color:#e74c3c;color:#e74c3c;" onclick="clearManualBoundary()">&#x2715; Clear manual boundary</button>
+            </div>
 
             <h2>Label Selected Points</h2>
             <button class="btn btn-floor" onclick="labelSelected(0)">
@@ -724,6 +735,13 @@
         let scanRoomPlanes = null;          // ARKit plane anchors from room_planes[] in scan JSON
         let roomOutlineGroup = null;        // THREE.Group for floor/ceiling outline lines
 
+        // ── Draw Mode ──────────────────────────────────────────────────────────
+        let drawMode = false;
+        let drawnPoints3D = [];             // [{x,y,z}] polygon vertices
+        let drawGroup = null;               // THREE.Group — yellow construction lines
+        let snapIndicatorMesh = null;       // sphere shown at snap target
+        let drawSnapTarget = null;          // current world-space snap/hover pos
+
         // Custom labels (start from index 10 to avoid conflicts)
         let customLabels = [];
         let nextCustomLabelId = 10;
@@ -853,6 +871,185 @@
             controls.target.copy(target);
             if (currentViewMode === 'ortho') updateOrthoFrustum();
             controls.update();
+        }
+
+        // ── Draw Mode Functions ───────────────────────────────────────────────
+
+        function toggleDrawMode() {
+            drawMode = !drawMode;
+            const btn = document.getElementById('draw-mode-btn');
+            if (drawMode) {
+                btn.textContent = '✏️ Exit Draw Mode';
+                btn.style.background = '#f39c12';
+                btn.style.color = '#000';
+                drawnPoints3D = [];
+                updateDrawGroup();
+                controls.enableRotate = false;  // lock orbit so clicks place points
+                document.getElementById('selection-info').textContent =
+                    'Draw Mode: click to place boundary points — Esc to close & apply';
+            } else {
+                exitDrawMode();
+            }
+        }
+
+        function exitDrawMode(applyMsg) {
+            drawMode = false;
+            const btn = document.getElementById('draw-mode-btn');
+            if (btn) {
+                btn.textContent = '✏️ Draw Boundary';
+                btn.style.background = '';
+                btn.style.color = '';
+            }
+            controls.enableRotate = true;
+            if (drawGroup) { scene.remove(drawGroup); drawGroup = null; }
+            if (snapIndicatorMesh) { scene.remove(snapIndicatorMesh); snapIndicatorMesh = null; }
+            drawnPoints3D = [];
+            drawSnapTarget = null;
+        }
+
+        function clearManualBoundary() {
+            window._manualBoundary = null;
+            const row = document.getElementById('manual-boundary-row');
+            if (row) row.style.display = 'none';
+            classifyByFarthestPlanes();
+        }
+
+        /** Project mouse event to world-space on a plane through sceneCenter
+         *  perpendicular to the camera view direction. Works for all view angles. */
+        function getClickWorldPos(event) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            const mx = ((event.clientX - rect.left) / rect.width)  * 2 - 1;
+            const my = -((event.clientY - rect.top)  / rect.height) * 2 + 1;
+            const tmpMouse = new THREE.Vector2(mx, my);
+            const tmpRay   = new THREE.Raycaster();
+            tmpRay.setFromCamera(tmpMouse, camera);
+            const camDir = new THREE.Vector3();
+            camera.getWorldDirection(camDir);
+            const center = new THREE.Vector3(sceneCenter.x, sceneCenter.y, sceneCenter.z);
+            const plane  = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, center);
+            const target = new THREE.Vector3();
+            if (!tmpRay.ray.intersectPlane(plane, target)) return null;
+            return target;
+        }
+
+        /** Find nearest visible point cloud point within SNAP_PX pixels of the cursor. */
+        function findSnapPoint(event) {
+            if (!pointCloud || !points.length) return null;
+            const rect = renderer.domElement.getBoundingClientRect();
+            const ex = event.clientX - rect.left;
+            const ey = event.clientY - rect.top;
+            const W = rect.width, H = rect.height;
+            const SNAP_PX = 20;
+            let bestDist2 = SNAP_PX * SNAP_PX;
+            let bestPt = null;
+            const proj = new THREE.Vector3();
+            const visIdx = pointCloud.userData.visibleIndices || [];
+            // Sample every 4th visible point for performance
+            for (let vi = 0; vi < visIdx.length; vi += 4) {
+                const i = visIdx[vi];
+                if (deletedIndices.has(i)) continue;
+                const p = points[i];
+                proj.set(p.x, p.y, p.z).project(camera);
+                const sx = (proj.x * 0.5 + 0.5) * W;
+                const sy = (1 - (proj.y * 0.5 + 0.5)) * H;
+                const dx = sx - ex, dy = sy - ey;
+                const d2 = dx*dx + dy*dy;
+                if (d2 < bestDist2) { bestDist2 = d2; bestPt = p; }
+            }
+            return bestPt;
+        }
+
+        /** Mouse move handler — only active in draw mode. Shows snap indicator. */
+        function onMouseMoveForDraw(event) {
+            if (!drawMode) return;
+            const snap = findSnapPoint(event);
+            drawSnapTarget = snap ? {x: snap.x, y: snap.y, z: snap.z}
+                                  : getClickWorldPos(event);
+            // Reuse / create snap indicator mesh
+            if (!snapIndicatorMesh) {
+                const geo = new THREE.SphereGeometry(0.04, 8, 8);
+                const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+                snapIndicatorMesh = new THREE.Mesh(geo, mat);
+                scene.add(snapIndicatorMesh);
+            }
+            if (drawSnapTarget) {
+                snapIndicatorMesh.material.color.setHex(snap ? 0x00ff88 : 0xffcc00);
+                snapIndicatorMesh.position.set(drawSnapTarget.x, drawSnapTarget.y, drawSnapTarget.z);
+                snapIndicatorMesh.visible = true;
+            } else {
+                snapIndicatorMesh.visible = false;
+            }
+        }
+
+        /** Rebuild the yellow construction line group from drawnPoints3D. */
+        function updateDrawGroup() {
+            if (drawGroup) scene.remove(drawGroup);
+            drawGroup = new THREE.Group();
+            const pts = drawnPoints3D;
+
+            if (pts.length >= 2) {
+                const verts = [];
+                for (let i = 0; i < pts.length - 1; i++) {
+                    verts.push(pts[i].x,   pts[i].y,   pts[i].z,
+                               pts[i+1].x, pts[i+1].y, pts[i+1].z);
+                }
+                const lg = new THREE.BufferGeometry();
+                lg.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+                drawGroup.add(new THREE.LineSegments(lg,
+                    new THREE.LineBasicMaterial({ color: 0xffcc00, linewidth: 2 })));
+            }
+
+            if (pts.length > 0) {
+                const mkVerts = pts.flatMap(p => [p.x, p.y, p.z]);
+                const mg = new THREE.BufferGeometry();
+                mg.setAttribute('position', new THREE.Float32BufferAttribute(mkVerts, 3));
+                drawGroup.add(new THREE.Points(mg,
+                    new THREE.PointsMaterial({ color: 0xffcc00, size: 0.07 })));
+            }
+            scene.add(drawGroup);
+        }
+
+        /** Convert the drawn polygon to azimuth-bin distances and apply as boundary. */
+        function applyDrawnBoundary() {
+            if (drawnPoints3D.length < 3) {
+                document.getElementById('selection-info').textContent =
+                    'Need at least 3 points to define a boundary.';
+                return;
+            }
+            const cx = sceneCenter.x, cz = sceneCenter.z;
+            const ABINS = 360;
+            const manual = new Float32Array(ABINS);
+
+            // Rasterize each polygon edge into azimuth bins
+            const pts = drawnPoints3D;
+            for (let i = 0; i < pts.length; i++) {
+                const a = pts[i], b = pts[(i + 1) % pts.length];
+                const segLen = Math.sqrt((b.x-a.x)**2 + (b.z-a.z)**2);
+                const steps  = Math.max(20, Math.ceil(segLen / 0.015));
+                for (let s = 0; s <= steps; s++) {
+                    const t = s / steps;
+                    const x = a.x + (b.x - a.x) * t - cx;
+                    const z = a.z + (b.z - a.z) * t - cz;
+                    const angle = Math.atan2(z, x) * 180 / Math.PI;
+                    const bin = Math.round(((angle % 360) + 360) % 360) % ABINS;
+                    const r   = Math.sqrt(x*x + z*z);
+                    if (manual[bin] === 0 || r > manual[bin]) manual[bin] = r;
+                }
+            }
+
+            window._manualBoundary = manual;
+            const nBins = Array.from(manual).filter(v => v > 0).length;
+            exitDrawMode();
+
+            // Show manual boundary checkbox row
+            const row = document.getElementById('manual-boundary-row');
+            if (row) row.style.display = 'block';
+            const chk = document.getElementById('use-manual-boundary');
+            if (chk) chk.checked = true;
+
+            document.getElementById('selection-info').textContent =
+                `Manual boundary applied (${nBins}/360 bins) — re-classifying…`;
+            classifyByFarthestPlanes();
         }
 
         function updateOrthoFrustum() {
@@ -1262,6 +1459,7 @@
             mouse = new THREE.Vector2();
 
             renderer.domElement.addEventListener('click', onMouseClick);
+            renderer.domElement.addEventListener('mousemove', onMouseMoveForDraw);
             window.addEventListener('resize', onWindowResize);
             window.addEventListener('keydown', onKeyDown);
 
@@ -1433,6 +1631,19 @@
         }
 
         function onMouseClick(event) {
+            // ── Draw mode intercept ──────────────────────────────────────────
+            if (drawMode) {
+                const pos = drawSnapTarget || getClickWorldPos(event);
+                if (pos) {
+                    drawnPoints3D.push({x: pos.x, y: pos.y, z: pos.z});
+                    updateDrawGroup();
+                    const n = drawnPoints3D.length;
+                    document.getElementById('selection-info').textContent =
+                        `Draw Mode: ${n} point${n===1?'':'s'} placed — Esc to close & apply, click to add more`;
+                }
+                return;
+            }
+
             if (!pointCloud) return;
 
             const viewer = document.getElementById('viewer');
@@ -1582,6 +1793,15 @@
             } else if (event.key === 'Delete' || event.key === 'Backspace') {
                 deleteSelected();
             } else if (event.key === 'Escape') {
+                if (drawMode) {
+                    if (drawnPoints3D.length >= 3) {
+                        applyDrawnBoundary();
+                    } else {
+                        exitDrawMode();
+                        document.getElementById('selection-info').textContent = 'Draw mode cancelled.';
+                    }
+                    return;
+                }
                 clearSelection();
             } else if (event.key === '[' || event.key === '-') {
                 decreasePointSize();
@@ -3055,6 +3275,18 @@
                 for (let b = 0; b < ABINS; b++) {
                     if (hdPerBin[b].length >= 2)
                         rawBoundary[b] = farthestDensePeak(hdPerBin[b], 0.10, false, 0.20) ?? 0;
+                }
+            }
+
+            // ── Manual boundary override (drawn polygon) ─────────────────────
+            const useManual = window._manualBoundary &&
+                              document.getElementById('use-manual-boundary')?.checked;
+            if (useManual) {
+                const mn = window._manualBoundary;
+                const nManual = Array.from(mn).filter(v => v > 0).length;
+                if (nManual > 10) {
+                    for (let b = 0; b < ABINS; b++) rawBoundary[b] = mn[b];
+                    console.log(`[classify] Using manual boundary (${nManual} bins)`);
                 }
             }
 
