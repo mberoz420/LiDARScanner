@@ -1035,6 +1035,12 @@
                         <span style="font-weight:700;color:#00d9ff;font-size:14px;">🌐 Insert from Server</span>
                         <span onclick="hideServerScanPicker()" style="cursor:pointer;color:#666;font-size:20px;line-height:1;">✕</span>
                     </div>
+                    <div style="margin-bottom:10px;">
+                        <select id="insert-project-select" onchange="loadInsertScans()"
+                            style="width:100%;padding:6px 8px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:6px;font-size:12px;">
+                            <option value="">All projects</option>
+                        </select>
+                    </div>
                     <div id="server-scan-status" style="font-size:12px;color:#888;margin-bottom:10px;">Loading scans…</div>
                     <div id="server-scan-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;"></div>
                 </div>
@@ -1300,6 +1306,12 @@
                         <span style="font-weight:700;color:#00d9ff;font-size:14px;">🌐 Open from Server</span>
                         <span onclick="hideOpenFromServer()" style="cursor:pointer;color:#666;font-size:20px;line-height:1;">✕</span>
                     </div>
+                    <div style="margin-bottom:10px;">
+                        <select id="open-project-select" onchange="loadOpenScans()"
+                            style="width:100%;padding:6px 8px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:6px;font-size:12px;">
+                            <option value="">All projects</option>
+                        </select>
+                    </div>
                     <div id="open-server-status" style="font-size:12px;color:#888;margin-bottom:10px;">Loading…</div>
                     <div id="open-server-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;"></div>
                 </div>
@@ -1347,7 +1359,10 @@
 
         function updateFilenameDisplay() {
             const el = document.getElementById('top-filename');
-            if (el) el.textContent = currentFilename || '';
+            if (el) {
+                const prefix = currentProject ? `[${currentProject}] ` : '';
+                el.textContent = currentFilename ? prefix + currentFilename : '';
+            }
         }
 
         function closeProject() {
@@ -1881,6 +1896,7 @@
         let raycaster, mouse;
         let originalData = null;
         let currentFilename = null;       // tracks name for re-saves
+        let currentProject  = '';         // tracks project folder for re-saves
         let colorMode = 'normal';
         let minY = 0, maxY = 1;
         let sceneCenter = {x: 0, y: 0, z: 0};
@@ -3107,23 +3123,46 @@
             document.getElementById('insert-options-popup').style.display = 'none';
         }
 
+        async function populateProjectSelect(selectId) {
+            const sel = document.getElementById(selectId);
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">All projects</option><option value="__root__">Root (no project)</option>';
+            try {
+                const res = await fetch(SERVER_BASE + '/list_projects.php', { headers: { 'X-API-Key': API_KEY } });
+                if (res.ok) {
+                    const { projects } = await res.json();
+                    (projects || []).forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p; opt.textContent = p;
+                        sel.appendChild(opt);
+                    });
+                }
+            } catch(e) { console.log('Failed to load projects:', e); }
+            if (prev) sel.value = prev;
+        }
+
         async function showServerScanPicker() {
             const modal    = document.getElementById('server-scan-modal');
+            modal.style.display = 'flex';
+            await populateProjectSelect('insert-project-select');
+            loadInsertScans();
+        }
+
+        async function loadInsertScans() {
             const statusEl = document.getElementById('server-scan-status');
             const listEl   = document.getElementById('server-scan-list');
-            modal.style.display = 'flex';
+            const project  = document.getElementById('insert-project-select').value;
             statusEl.textContent = 'Loading scans…';
             listEl.innerHTML = '';
 
             try {
-                const res = await fetch(SERVER_BASE + '/list_scans.php', {
-                    headers: { 'X-API-Key': API_KEY }
-                });
+                const url = SERVER_BASE + '/list_scans.php' + (project ? '?project=' + encodeURIComponent(project) : '');
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
                 if (!res.ok) throw new Error('Server error ' + res.status);
                 const { scans } = await res.json();
 
                 if (!scans || scans.length === 0) {
-                    statusEl.textContent = 'No scans found on server.';
+                    statusEl.textContent = 'No scans found.';
                     return;
                 }
                 statusEl.textContent = `${scans.length} scan${scans.length > 1 ? 's' : ''} available`;
@@ -3131,11 +3170,12 @@
                 listEl.innerHTML = scans.map(s => {
                     const date   = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
                     const pts    = s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '';
-                    return `<div onclick="fetchServerScan('${s.filename}')"
+                    const proj   = s.project ? `<span style="color:#00d9ff;font-size:10px;">[${s.project}]</span> ` : '';
+                    return `<div onclick="fetchServerScan('${s.filename}', '${s.project || ''}')"
                         style="padding:10px 12px;background:#1a2744;border:1px solid #0f3460;border-radius:7px;
                                cursor:pointer;transition:border-color 0.15s;"
                         onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
-                        <div style="font-size:12px;color:#fff;font-weight:600;">${s.filename}</div>
+                        <div style="font-size:12px;color:#fff;font-weight:600;">${proj}${s.filename}</div>
                         <div style="font-size:10px;color:#888;margin-top:3px;">${date}${pts ? ' · ' + pts : ''}</div>
                     </div>`;
                 }).join('');
@@ -3149,13 +3189,13 @@
             document.getElementById('server-scan-modal').style.display = 'none';
         }
 
-        async function fetchServerScan(filename) {
+        async function fetchServerScan(filename, project) {
             hideServerScanPicker();
             document.getElementById('selection-info').textContent = `Downloading ${filename}…`;
             try {
-                const res = await fetch(SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename), {
-                    headers: { 'X-API-Key': API_KEY }
-                });
+                let url = SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename);
+                if (project) url += '&project=' + encodeURIComponent(project);
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
                 if (!res.ok) throw new Error('Server error ' + res.status);
                 const data = await res.json();
                 mergeJSON(data);
@@ -4046,7 +4086,10 @@
             try {
                 const body = JSON.stringify(buildSaveData());
                 let url = SERVER_BASE + '/upload.php';
-                if (saveName) url += '?filename=' + encodeURIComponent(saveName);
+                const params = [];
+                if (saveName) params.push('filename=' + encodeURIComponent(saveName));
+                if (currentProject) params.push('project=' + encodeURIComponent(currentProject));
+                if (params.length) url += '?' + params.join('&');
                 const res = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
@@ -4073,16 +4116,21 @@
         }
 
         async function showOpenFromServer() {
-            const modal    = document.getElementById('open-server-modal');
+            const modal = document.getElementById('open-server-modal');
+            modal.style.display = 'flex';
+            await populateProjectSelect('open-project-select');
+            loadOpenScans();
+        }
+
+        async function loadOpenScans() {
             const statusEl = document.getElementById('open-server-status');
             const listEl   = document.getElementById('open-server-list');
-            modal.style.display = 'flex';
+            const project  = document.getElementById('open-project-select').value;
             statusEl.textContent = 'Loading scans…';
             listEl.innerHTML = '';
             try {
-                const res = await fetch(SERVER_BASE + '/list_scans.php', {
-                    headers: { 'X-API-Key': API_KEY }
-                });
+                const url = SERVER_BASE + '/list_scans.php' + (project ? '?project=' + encodeURIComponent(project) : '');
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
                 if (!res.ok) throw new Error('Server error ' + res.status);
                 const { scans } = await res.json();
                 if (!scans || scans.length === 0) { statusEl.textContent = 'No scans found.'; return; }
@@ -4090,11 +4138,12 @@
                 listEl.innerHTML = scans.map(s => {
                     const date = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
                     const pts  = s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '';
-                    return `<div onclick="openServerScan('${s.filename}')"
+                    const proj = s.project ? `<span style="color:#00d9ff;font-size:10px;">[${s.project}]</span> ` : '';
+                    return `<div onclick="openServerScan('${s.filename}', '${s.project || ''}')"
                         style="padding:10px 12px;background:#1a2744;border:1px solid #0f3460;border-radius:7px;
                                cursor:pointer;transition:border-color 0.15s;"
                         onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
-                        <div style="font-size:12px;color:#fff;font-weight:600;">${s.filename}</div>
+                        <div style="font-size:12px;color:#fff;font-weight:600;">${proj}${s.filename}</div>
                         <div style="font-size:10px;color:#888;margin-top:3px;">${date}${pts ? ' · ' + pts : ''}</div>
                     </div>`;
                 }).join('');
@@ -4107,16 +4156,17 @@
             document.getElementById('open-server-modal').style.display = 'none';
         }
 
-        async function openServerScan(filename) {
+        async function openServerScan(filename, project) {
             hideOpenFromServer();
             document.getElementById('selection-info').textContent = `Opening ${filename}…`;
             try {
-                const res = await fetch(SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename), {
-                    headers: { 'X-API-Key': API_KEY }
-                });
+                let url = SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename);
+                if (project) url += '&project=' + encodeURIComponent(project);
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
                 if (!res.ok) throw new Error('Server error ' + res.status);
                 const data = await res.json();
                 currentFilename = filename;
+                currentProject = project || '';
                 updateFilenameDisplay();
                 loadJSON(data);
             } catch (err) {
@@ -6314,10 +6364,23 @@
             // LiDAR point-cloud scan
             document.getElementById('selection-info').textContent = `Auto-loading: ${scanFile}…`;
             try {
-                const res = await fetch(`/scans/${scanFile}`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                loadJSON(data);
+                const urlParams = new URLSearchParams(window.location.search);
+                const proj = urlParams.get('project') || '';
+                let url = SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(scanFile);
+                if (proj) url += '&project=' + encodeURIComponent(proj);
+                const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
+                if (!res.ok) {
+                    // Fallback: try direct /scans/ path
+                    const res2 = await fetch(`/scans/${scanFile}`);
+                    if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
+                    const data = await res2.json();
+                    loadJSON(data);
+                } else {
+                    const data = await res.json();
+                    currentFilename = scanFile;
+                    currentProject = proj;
+                    loadJSON(data);
+                }
                 document.getElementById('selection-info').textContent =
                     `Loaded: ${scanFile} — ${points.length.toLocaleString()} points`;
                 classifyByFarthestPlanes();

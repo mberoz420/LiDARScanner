@@ -2,7 +2,8 @@
 /**
  * ScanWizard — Serve Scan JSON
  * Streams a scan .json file by filename, authenticated by X-API-Key.
- * Used by PointCloudLabeler "Insert from Server" feature.
+ * Optional ?project= to load from a project subfolder.
+ * Used by PointCloudLabeler "Insert from Server" and "Open from Server".
  */
 require_once 'includes/config.php';
 
@@ -26,7 +27,15 @@ if (!$filename || !str_ends_with($filename, '.json') || str_starts_with($filenam
     exit;
 }
 
-$path = SCANS_PATH . '/' . $filename;
+$project = preg_replace('/[^a-zA-Z0-9_\- ]/', '', $_GET['project'] ?? '');
+$project = trim($project);
+
+if ($project !== '') {
+    $path = SCANS_PATH . '/' . $project . '/' . $filename;
+} else {
+    $path = SCANS_PATH . '/' . $filename;
+}
+
 if (!file_exists($path)) {
     http_response_code(404);
     echo json_encode(['error' => 'Scan not found']);
