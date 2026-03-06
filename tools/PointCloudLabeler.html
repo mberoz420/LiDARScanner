@@ -408,64 +408,115 @@
             margin-left: 6px;
         }
 
-        /* ── Left Toolbar (rug-project circular style) ────────── */
+        /* ── Left Toolbar (rug-project square style) ─────────── */
         #left-toolbar {
-            width: 64px;
-            background: #12203a;
-            border-right: 1px solid #0f3460;
+            width: 112px;
+            background: #0d0d1f;
+            border-right: 1px solid #1a1a3a;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            padding: 6px 5px 12px;
+            flex-shrink: 0;
+            z-index: 10;
+            overflow-y: auto;
+        }
+        .tool-section-label {
+            font-size: 9px;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 7px 1px 3px;
+            border-top: 1px solid #1a1a3a;
+            margin-top: 4px;
+        }
+        .tool-section-label:first-child { border-top: none; margin-top: 0; padding-top: 3px; }
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 3px;
+        }
+        .tool-btn {
+            aspect-ratio: 1;
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 14px 0;
-            gap: 8px;
-            flex-shrink: 0;
-            z-index: 10;
-        }
-        .tool-btn {
-            width: 44px; height: 44px;
-            border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 20px;
+            justify-content: center;
+            background: #0f0f23;
+            border: 1px solid #2a2a4a;
+            border-radius: 4px;
             cursor: pointer;
-            background: #1a2744;
-            border: 3px solid #0f3460;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+            color: #888;
+            font-size: 8.5px;
+            padding: 3px 2px;
+            gap: 2px;
+            transition: background 0.12s, border-color 0.12s, color 0.12s;
             user-select: none;
-            transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
             position: relative;
+            min-height: 42px;
         }
-        .tool-btn:hover  { transform: scale(1.1); border-color: #3498db; box-shadow: 0 4px 12px rgba(52,152,219,0.3); }
-        .tool-btn.active { border-color: #e94560; transform: scale(1.15); box-shadow: 0 4px 14px rgba(233,69,96,0.45); }
+        .tool-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+        .tool-btn:hover { background: #1e3a5f; border-color: #00d9ff; color: #fff; }
+        .tool-btn.active { background: rgba(0,217,255,0.12); color: #00d9ff; border-color: #00d9ff; }
         .tool-btn::after {
             content: attr(title);
             position: absolute;
-            left: 52px; top: 50%;
+            left: calc(100% + 8px); top: 50%;
             transform: translateY(-50%);
-            background: rgba(0,0,0,0.88);
+            background: rgba(0,0,0,0.92);
             color: #fff;
             font-size: 11px;
             padding: 4px 9px;
-            border-radius: 6px;
+            border-radius: 5px;
             white-space: nowrap;
             pointer-events: none;
             opacity: 0;
             transition: opacity 0.15s;
-            z-index: 100;
+            z-index: 1000;
+            border: 1px solid rgba(0,217,255,0.3);
         }
         .tool-btn:hover::after { opacity: 1; }
-        .tool-separator { width: 36px; height: 1px; background: #0f3460; margin: 2px 0; }
-        /* Paint label swatches — circular, like rug-project color palette */
-        #paint-palette { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-        .paint-swatch {
-            width: 30px; height: 30px;
-            border-radius: 50%;
-            border: 3px solid transparent;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        .tool-separator { height: 1px; background: #1a1a3a; margin: 5px 0; }
+        /* Snap section */
+        .snap-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            color: #888;
+            padding: 2px 1px;
             cursor: pointer;
-            transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+            margin-bottom: 3px;
         }
-        .paint-swatch:hover  { transform: scale(1.12); }
-        .paint-swatch.active { border-color: #fff; transform: scale(1.2); box-shadow: 0 3px 10px rgba(255,255,255,0.25); }
+        .snap-row input { width: 11px; height: 11px; accent-color: #00d9ff; cursor: pointer; flex-shrink: 0; }
+        .snap-opts { display: flex; gap: 2px; }
+        .snap-opt {
+            flex: 1;
+            padding: 3px 1px;
+            background: #0f0f23;
+            border: 1px solid #2a2a4a;
+            border-radius: 3px;
+            font-size: 7.5px;
+            color: #777;
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s, color 0.12s;
+            user-select: none;
+        }
+        .snap-opt:hover { background: #1e3a5f; border-color: #00d9ff; color: #fff; }
+        .snap-opt.active { background: #003344; border-color: #00d9ff; color: #00d9ff; }
+        /* Paint label swatches — 2-col grid, square with rounded corners */
+        #paint-palette { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-top: 2px; }
+        .paint-swatch {
+            aspect-ratio: 1;
+            border-radius: 4px;
+            border: 2px solid transparent;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+            cursor: pointer;
+            transition: transform 0.12s, border-color 0.12s;
+        }
+        .paint-swatch:hover  { transform: scale(1.08); }
+        .paint-swatch.active { border-color: #fff; transform: scale(1.1); box-shadow: 0 2px 8px rgba(255,255,255,0.25); }
 
         /* ── Collapsible Cards ─────────────────────────────────── */
         #sidebar {
@@ -516,19 +567,76 @@
     <div id="container">
         <!-- Left Toolbar -->
         <div id="left-toolbar">
-            <div class="tool-btn active" id="tool-select"    onclick="setTool('select')"    title="Select (V)">🖱️</div>
-            <div class="tool-btn"        id="tool-construct" onclick="setTool('construct')" title="Construction Line (C)">📐</div>
-            <div class="tool-btn"        id="tool-paint"     onclick="setTool('paint')"     title="Paint Label (P)">🖌️</div>
-            <div class="tool-btn"        id="tool-erase"     onclick="setTool('erase')"     title="Erase (E)">🗑️</div>
+            <!-- Draw Tools -->
+            <div class="tool-section-label">Draw</div>
+            <div class="tools-grid">
+                <div class="tool-btn active" id="tool-select" onclick="setTool('select')" title="Select (V)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-7 1-4 7z"/></svg>
+                    Select
+                </div>
+                <div class="tool-btn" id="tool-construct" onclick="setTool('construct')" title="Boundary (C)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12,2 22,8 22,16 12,22 2,16 2,8"/></svg>
+                    Boundary
+                </div>
+                <div class="tool-btn" id="tool-polygon" onclick="setTool('polygon')" title="Guide Polygon (G)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12,3 20,9 17,19 7,19 4,9"/><circle cx="12" cy="3" r="1.5" fill="currentColor"/><circle cx="20" cy="9" r="1.5" fill="currentColor"/><circle cx="4" cy="9" r="1.5" fill="currentColor"/></svg>
+                    Polygon
+                </div>
+                <div class="tool-btn" id="tool-polyline" onclick="setTool('polyline')" title="Guide Line (L)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,18 8,10 14,14 21,6"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/><circle cx="8" cy="10" r="1.5" fill="currentColor"/><circle cx="14" cy="14" r="1.5" fill="currentColor"/><circle cx="21" cy="6" r="1.5" fill="currentColor"/></svg>
+                    Polyline
+                </div>
+            </div>
+
             <div class="tool-separator"></div>
+
+            <!-- Edit Tools -->
+            <div class="tool-section-label">Edit</div>
+            <div class="tools-grid">
+                <div class="tool-btn" id="tool-trim" onclick="setTool('trim')" title="Trim Guide (T)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+                    Trim
+                </div>
+                <div class="tool-btn" id="tool-extend" onclick="setTool('extend')" title="Extend Guide (X)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="14,5 19,5 19,10"/><polyline points="5,14 5,19 10,19"/></svg>
+                    Extend
+                </div>
+                <div class="tool-btn" id="tool-paint" onclick="setTool('paint')" title="Paint Label (P)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.37 2.63 14 7l-1.59-1.59a2 2 0 0 0-2.82 0L8 7l9 9 1.59-1.59a2 2 0 0 0 0-2.82L17 10l4.37-4.37a2.121 2.121 0 1 0-3-3z"/><path d="M9 8c-2 3-4 3.5-7 4l8 10c2-1 6-5 6-7"/></svg>
+                    Paint
+                </div>
+                <div class="tool-btn" id="tool-erase" onclick="setTool('erase')" title="Erase (E)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16l13-13 6 6-2 2Z"/><path d="m6.5 17.5 3-3"/></svg>
+                    Erase
+                </div>
+            </div>
+
+            <div class="tool-separator"></div>
+
+            <!-- Snap -->
+            <div class="tool-section-label">Snap</div>
+            <label class="snap-row">
+                <input type="checkbox" id="snap-toggle" checked onchange="snapEnabled=this.checked">
+                <span>Enable Snap</span>
+            </label>
+            <div class="snap-opts">
+                <div class="snap-opt active" id="snap-vertex"    onclick="toggleSnapType('vertex')"    title="Snap to point cloud vertices">Vtx</div>
+                <div class="snap-opt active" id="snap-midpoint"  onclick="toggleSnapType('midpoint')"  title="Snap to guide line midpoints">Mid</div>
+                <div class="snap-opt active" id="snap-intersect" onclick="toggleSnapType('intersect')" title="Snap to guide intersections">Int</div>
+            </div>
+
+            <div class="tool-separator"></div>
+
+            <!-- Paint Palette -->
+            <div class="tool-section-label">Label</div>
             <div id="paint-palette">
-                <div class="paint-swatch"        data-label="0" style="background:#2ecc71" title="Floor"></div>
-                <div class="paint-swatch"        data-label="1" style="background:#f1c40f" title="Ceiling"></div>
-                <div class="paint-swatch active" data-label="2" style="background:#3498db" title="Wall"></div>
-                <div class="paint-swatch"        data-label="3" style="background:#e74c3c" title="Object"></div>
-                <div class="paint-swatch"        data-label="4" style="background:#9b59b6" title="Noise"></div>
-                <div class="paint-swatch"        data-label="5" style="background:#e68080" title="Obj Top"></div>
-                <div class="paint-swatch"        data-label="6" style="background:#ff00ff" title="Back Refl"></div>
+                <div class="paint-swatch"        data-label="0" style="background:#2ecc71" title="Floor (0)"></div>
+                <div class="paint-swatch"        data-label="1" style="background:#f1c40f" title="Ceiling (1)"></div>
+                <div class="paint-swatch active" data-label="2" style="background:#3498db" title="Wall (2)"></div>
+                <div class="paint-swatch"        data-label="3" style="background:#e74c3c" title="Object (3)"></div>
+                <div class="paint-swatch"        data-label="4" style="background:#9b59b6" title="Noise (4)"></div>
+                <div class="paint-swatch"        data-label="5" style="background:#e68080" title="Obj Top (5)"></div>
+                <div class="paint-swatch"        data-label="6" style="background:#ff00ff" title="Back Refl (6)"></div>
             </div>
         </div>
 
@@ -829,22 +937,53 @@
         let paintLabel = 2;         // wall by default
         let isMouseDown = false;
 
+        // Guide Lines state
+        let guideLines = [];        // [{type:'polygon'|'polyline', points:[{x,y,z}...], closed:bool}]
+        let guideLinesGroup = null;
+        let activeGuidePoints = []; // vertices being placed for current polygon/polyline
+        let isDrawingGuide = false;
+        let snapEnabled = true;
+        let snapTypes = { vertex: true, midpoint: true, intersect: true };
+
+        function toggleSnapType(type) {
+            snapTypes[type] = !snapTypes[type];
+            const el = document.getElementById('snap-' + type);
+            if (el) el.classList.toggle('active', snapTypes[type]);
+        }
+
         function setTool(name) {
+            // Cancel active guide draw when switching away
+            if (activeTool !== name && isDrawingGuide) cancelGuideDraw();
+
             activeTool = name;
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             document.getElementById('tool-' + name)?.classList.add('active');
-            const isConstruct = (name === 'construct');
+
+            const isConstruct   = (name === 'construct');
+            const isGuideDraw   = (name === 'polygon' || name === 'polyline');
+            const isTrimExtend  = (name === 'trim'    || name === 'extend');
+
             drawMode = isConstruct;
-            if (controls) controls.enableRotate = !isConstruct;
+            if (controls) controls.enableRotate = !(isConstruct || isGuideDraw || isTrimExtend);
             if (!isConstruct) exitDrawMode();
+
             if (renderer) {
                 renderer.domElement.style.cursor =
-                    name === 'paint' || name === 'erase' ? 'crosshair' :
-                    name === 'construct' ? 'cell' : 'default';
+                    name === 'paint' || name === 'erase' || isTrimExtend ? 'crosshair' :
+                    isConstruct || isGuideDraw ? 'cell' : 'default';
             }
-            // Show/hide paint palette hint
             const palette = document.getElementById('paint-palette');
             if (palette) palette.style.opacity = (name === 'paint') ? '1' : '0.45';
+
+            // Status hints
+            const info = document.getElementById('selection-info');
+            if (info) {
+                if (name === 'polygon')   info.textContent = 'Guide Polygon: click vertices — click near 1st point or Esc to close';
+                else if (name === 'polyline') info.textContent = 'Guide Line: click to place points — right-click or Esc to finish';
+                else if (name === 'trim')     info.textContent = 'Trim: click on a guide line segment to trim at intersection';
+                else if (name === 'extend')   info.textContent = 'Extend: click near a guide line endpoint to extend to nearest guide';
+                else if (name === 'construct') info.textContent = 'Boundary: click vertices — Esc to close & apply as room boundary';
+            }
         }
 
         function applyBrushAt(event) {
@@ -879,6 +1018,305 @@
                     setTool('paint');
                 });
             });
+        }
+
+        // ── Guide Lines System ──────────────────────────────────────────────────
+
+        function rebuildGuideLines() {
+            if (guideLinesGroup) scene.remove(guideLinesGroup);
+            guideLinesGroup = new THREE.Group();
+
+            // Draw committed guide lines
+            guideLines.forEach(guide => {
+                const pts = guide.points;
+                if (pts.length < 2) return;
+                const verts = [];
+                for (let i = 0; i < pts.length - 1; i++) {
+                    verts.push(pts[i].x, pts[i].y, pts[i].z, pts[i+1].x, pts[i+1].y, pts[i+1].z);
+                }
+                if (guide.closed && pts.length >= 3) {
+                    const l = pts[pts.length-1], f = pts[0];
+                    verts.push(l.x, l.y, l.z, f.x, f.y, f.z);
+                }
+                const geo = new THREE.BufferGeometry();
+                geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+                const color = guide.type === 'polygon' ? 0x00d9ff : 0x5faacc;
+                guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, linewidth: 2 })));
+                // Vertex dots
+                const dv = pts.flatMap(p => [p.x, p.y, p.z]);
+                const dg = new THREE.BufferGeometry();
+                dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
+                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({ color: 0x00d9ff, size: 0.06 })));
+            });
+
+            // Draw active (in-progress) guide
+            if (activeGuidePoints.length >= 1) {
+                const pts = activeGuidePoints;
+                if (pts.length >= 2 || drawSnapTarget) {
+                    const verts = [];
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        verts.push(pts[i].x, pts[i].y, pts[i].z, pts[i+1].x, pts[i+1].y, pts[i+1].z);
+                    }
+                    if (drawSnapTarget && pts.length >= 1) {
+                        const last = pts[pts.length-1];
+                        verts.push(last.x, last.y, last.z, drawSnapTarget.x, drawSnapTarget.y, drawSnapTarget.z);
+                    }
+                    if (verts.length >= 6) {
+                        const geo = new THREE.BufferGeometry();
+                        geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+                        guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffcc00, linewidth: 2 })));
+                    }
+                }
+                const dv = pts.flatMap(p => [p.x, p.y, p.z]);
+                const dg = new THREE.BufferGeometry();
+                dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
+                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({ color: 0xffcc00, size: 0.08 })));
+            }
+
+            scene.add(guideLinesGroup);
+        }
+
+        // Find snap point from guide line vertices/midpoints
+        function findGuideSnapPoint(event) {
+            if (!snapEnabled) return null;
+            const rect = renderer.domElement.getBoundingClientRect();
+            const ex = event.clientX - rect.left;
+            const ey = event.clientY - rect.top;
+            const W = rect.width, H = rect.height;
+            const SNAP_PX = 18;
+            let bestDist2 = SNAP_PX * SNAP_PX;
+            let bestPt = null;
+            const proj = new THREE.Vector3();
+
+            const checkPt = (pt) => {
+                proj.set(pt.x, pt.y, pt.z).project(camera);
+                const sx = (proj.x * 0.5 + 0.5) * W;
+                const sy = (1 - (proj.y * 0.5 + 0.5)) * H;
+                const d2 = (sx-ex)**2 + (sy-ey)**2;
+                if (d2 < bestDist2) { bestDist2 = d2; bestPt = pt; }
+            };
+
+            guideLines.forEach(guide => {
+                const pts = guide.points;
+                if (snapTypes.vertex) pts.forEach(p => checkPt(p));
+                if (snapTypes.midpoint) {
+                    const segCount = pts.length - 1 + (guide.closed && pts.length >= 3 ? 1 : 0);
+                    for (let i = 0; i < segCount; i++) {
+                        const a = pts[i % pts.length], b = pts[(i+1) % pts.length];
+                        checkPt({ x:(a.x+b.x)/2, y:(a.y+b.y)/2, z:(a.z+b.z)/2 });
+                    }
+                }
+            });
+
+            // Intersection snapping
+            if (snapTypes.intersect && guideLines.length >= 2) {
+                for (let gi = 0; gi < guideLines.length; gi++) {
+                    for (let gj = gi+1; gj < guideLines.length; gj++) {
+                        const a = guideLines[gi].points, b = guideLines[gj].points;
+                        const acnt = a.length - 1, bcnt = b.length - 1;
+                        for (let ai = 0; ai < acnt; ai++) {
+                            for (let bi = 0; bi < bcnt; bi++) {
+                                const int = lineLineIntersectXZ(a[ai], a[ai+1], b[bi], b[bi+1]);
+                                if (int && int.t1 >= 0 && int.t1 <= 1 && int.t2 >= 0 && int.t2 <= 1) {
+                                    const y = (a[ai].y + a[ai+1].y + b[bi].y + b[bi+1].y) / 4;
+                                    checkPt({ x: int.x, y, z: int.z });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return bestPt;
+        }
+
+        // Line-line intersection in XZ plane — returns {x, z, t1, t2} or null
+        function lineLineIntersectXZ(p1, p2, p3, p4) {
+            const x1=p1.x, z1=p1.z, x2=p2.x, z2=p2.z;
+            const x3=p3.x, z3=p3.z, x4=p4.x, z4=p4.z;
+            const denom = (x1-x2)*(z3-z4) - (z1-z2)*(x3-x4);
+            if (Math.abs(denom) < 1e-8) return null;
+            const t = ((x1-x3)*(z3-z4) - (z1-z3)*(x3-x4)) / denom;
+            const u = -((x1-x2)*(z1-z3) - (z1-z2)*(x1-x3)) / denom;
+            return { x: x1+t*(x2-x1), z: z1+t*(z2-z1), t1: t, t2: u };
+        }
+
+        function getParamOnSegXZ(px, pz, p1, p2) {
+            const dx = p2.x-p1.x, dz = p2.z-p1.z;
+            const len2 = dx*dx + dz*dz;
+            if (len2 < 1e-8) return 0;
+            return ((px-p1.x)*dx + (pz-p1.z)*dz) / len2;
+        }
+
+        // Find closest guide line segment to a world position (XZ plane)
+        function findClosestGuideSegment(worldPt) {
+            let bestDist = 0.6;
+            let bestGuide = null, bestGuideIdx = -1, bestSegIdx = -1;
+            guideLines.forEach((guide, gi) => {
+                const pts = guide.points;
+                const segCount = pts.length - 1 + (guide.closed && pts.length >= 3 ? 1 : 0);
+                for (let si = 0; si < segCount; si++) {
+                    const p1 = pts[si % pts.length], p2 = pts[(si+1) % pts.length];
+                    const dx = p2.x-p1.x, dz = p2.z-p1.z;
+                    const len2 = dx*dx + dz*dz;
+                    if (len2 < 1e-8) continue;
+                    const t = Math.max(0, Math.min(1, ((worldPt.x-p1.x)*dx + (worldPt.z-p1.z)*dz) / len2));
+                    const nx = p1.x+t*dx-worldPt.x, nz = p1.z+t*dz-worldPt.z;
+                    const dist = Math.sqrt(nx*nx + nz*nz);
+                    if (dist < bestDist) { bestDist = dist; bestGuide = guide; bestGuideIdx = gi; bestSegIdx = si; }
+                }
+            });
+            return bestGuide ? { guide: bestGuide, guideIdx: bestGuideIdx, segIdx: bestSegIdx } : null;
+        }
+
+        // Handle click for polygon/polyline/trim/extend tools
+        function handleGuideToolClick(event) {
+            const pos = drawSnapTarget || getClickWorldPos(event);
+            if (!pos) return;
+
+            if (activeTool === 'polygon' || activeTool === 'polyline') {
+                // Close polygon if clicking near first point
+                if (activeTool === 'polygon' && activeGuidePoints.length >= 3) {
+                    const first = activeGuidePoints[0];
+                    const dist = Math.sqrt((pos.x-first.x)**2 + (pos.z-first.z)**2);
+                    if (dist < 0.3) {
+                        guideLines.push({ type: 'polygon', points: [...activeGuidePoints], closed: true });
+                        activeGuidePoints = [];
+                        isDrawingGuide = false;
+                        rebuildGuideLines();
+                        document.getElementById('selection-info').textContent = `Guide polygon closed (${guideLines[guideLines.length-1].points.length} vertices).`;
+                        return;
+                    }
+                }
+                activeGuidePoints.push({ x: pos.x, y: pos.y, z: pos.z });
+                isDrawingGuide = true;
+                rebuildGuideLines();
+                const n = activeGuidePoints.length;
+                if (n === 1) {
+                    document.getElementById('selection-info').textContent =
+                        activeTool === 'polygon'
+                            ? 'Guide Polygon: click to add vertices — click near 1st point or Esc to close'
+                            : 'Guide Line: click to add points — right-click or Esc to finish';
+                } else {
+                    document.getElementById('selection-info').textContent =
+                        `${activeTool === 'polygon' ? 'Polygon' : 'Polyline'}: ${n} point${n===1?'':'s'}`;
+                }
+            } else if (activeTool === 'trim') {
+                const seg = findClosestGuideSegment(pos);
+                if (!seg) { document.getElementById('selection-info').textContent = 'No guide line nearby.'; return; }
+                applyTrimAt(seg, pos);
+            } else if (activeTool === 'extend') {
+                const seg = findClosestGuideSegment(pos);
+                if (!seg) { document.getElementById('selection-info').textContent = 'No guide line nearby.'; return; }
+                applyExtendAt(seg, pos);
+            }
+        }
+
+        function finishGuidePolyline() {
+            if (activeGuidePoints.length < 2) { cancelGuideDraw(); return; }
+            guideLines.push({ type: 'polyline', points: [...activeGuidePoints], closed: false });
+            activeGuidePoints = [];
+            isDrawingGuide = false;
+            rebuildGuideLines();
+            document.getElementById('selection-info').textContent = `Guide line added (${guideLines[guideLines.length-1].points.length} points).`;
+        }
+
+        function cancelGuideDraw() {
+            activeGuidePoints = [];
+            isDrawingGuide = false;
+            if (scene && guideLinesGroup) rebuildGuideLines();
+        }
+
+        function clearAllGuideLines() {
+            guideLines = [];
+            cancelGuideDraw();
+            document.getElementById('selection-info').textContent = 'All guide lines cleared.';
+        }
+
+        function applyTrimAt(seg, clickPt) {
+            const { guide, guideIdx, segIdx } = seg;
+            const pts = guide.points;
+            const p1 = pts[segIdx % pts.length], p2 = pts[(segIdx+1) % pts.length];
+
+            const allInts = [];
+            guideLines.forEach((other, oi) => {
+                if (oi === guideIdx) return;
+                const op = other.points;
+                const oSegCount = op.length - 1 + (other.closed ? 1 : 0);
+                for (let si = 0; si < oSegCount; si++) {
+                    const q1 = op[si % op.length], q2 = op[(si+1) % op.length];
+                    const int = lineLineIntersectXZ(p1, p2, q1, q2);
+                    if (int && int.t2 >= 0 && int.t2 <= 1) {
+                        allInts.push({ x: int.x, y: (p1.y+p2.y)/2, z: int.z, t: int.t1 });
+                    }
+                }
+            });
+
+            const validInts = allInts.filter(i => i.t > 0.001 && i.t < 0.999);
+            if (!validInts.length) { document.getElementById('selection-info').textContent = 'No intersections found to trim.'; return; }
+
+            const clickT = getParamOnSegXZ(clickPt.x, clickPt.z, p1, p2);
+            validInts.sort((a, b) => a.t - b.t);
+            const before = validInts.filter(i => i.t <= clickT);
+            const after  = validInts.filter(i => i.t > clickT);
+
+            if (pts.length === 2) {
+                // Simple 2-point line
+                const newGuides = [];
+                if (before.length) { const bi = before[before.length-1]; newGuides.push({ ...guide, points: [{...pts[0]}, {x:bi.x,y:bi.y,z:bi.z}], closed:false }); }
+                if (after.length)  { const ai = after[0];                newGuides.push({ ...guide, points: [{x:ai.x,y:ai.y,z:ai.z}, {...pts[1]}], closed:false }); }
+                guideLines.splice(guideIdx, 1, ...newGuides);
+            } else {
+                // Polyline: insert split point and remove segment near click
+                const trimPt = before.length ? before[before.length-1] : after[0];
+                const newPts = [...pts];
+                newPts.splice(segIdx+1, 0, { x:trimPt.x, y:trimPt.y, z:trimPt.z });
+                const part1 = newPts.slice(0, segIdx+2);
+                const part2 = newPts.slice(segIdx+1);
+                const newGuides = [];
+                if (part1.length >= 2) newGuides.push({ ...guide, points: part1, closed: false });
+                if (part2.length >= 2) newGuides.push({ ...guide, points: part2, closed: false });
+                guideLines.splice(guideIdx, 1, ...newGuides);
+            }
+            rebuildGuideLines();
+            document.getElementById('selection-info').textContent = 'Guide trimmed.';
+        }
+
+        function applyExtendAt(seg, clickPt) {
+            const { guide, guideIdx } = seg;
+            const pts = guide.points;
+            const firstPt = pts[0], lastPt = pts[pts.length-1];
+            const distFirst = Math.sqrt((clickPt.x-firstPt.x)**2 + (clickPt.z-firstPt.z)**2);
+            const distLast  = Math.sqrt((clickPt.x-lastPt.x)**2  + (clickPt.z-lastPt.z)**2);
+            const extendFromEnd = distLast < distFirst;
+
+            const fixedPt = extendFromEnd ? (pts[pts.length-2] || pts[0]) : (pts[1] || pts[pts.length-1]);
+            const extPt   = extendFromEnd ? lastPt : firstPt;
+            const dx = extPt.x - fixedPt.x, dz = extPt.z - fixedPt.z;
+            const farPt = { x: extPt.x + dx*1000, y: extPt.y, z: extPt.z + dz*1000 };
+
+            const allInts = [];
+            guideLines.forEach((other, oi) => {
+                if (oi === guideIdx) return;
+                const op = other.points;
+                const oSegCount = op.length - 1 + (other.closed ? 1 : 0);
+                for (let si = 0; si < oSegCount; si++) {
+                    const q1 = op[si % op.length], q2 = op[(si+1) % op.length];
+                    const int = lineLineIntersectXZ(fixedPt, farPt, q1, q2);
+                    if (int && int.t1 > 1.001 && int.t2 >= 0 && int.t2 <= 1) {
+                        allInts.push({ x: int.x, y: extPt.y, z: int.z, t: int.t1 });
+                    }
+                }
+            });
+
+            if (!allInts.length) { document.getElementById('selection-info').textContent = 'No boundary found to extend to.'; return; }
+            allInts.sort((a, b) => a.t - b.t);
+            const nearest = allInts[0];
+            const newPts = [...pts];
+            const newPt = { x: nearest.x, y: nearest.y, z: nearest.z };
+            if (extendFromEnd) newPts[newPts.length-1] = newPt; else newPts[0] = newPt;
+            guideLines[guideIdx] = { ...guide, points: newPts };
+            rebuildGuideLines();
+            document.getElementById('selection-info').textContent = 'Guide extended.';
         }
 
         function toggleCard(id) {
@@ -1132,18 +1570,29 @@
             return bestPt;
         }
 
-        /** Mouse move handler — draw mode snap + paint/erase drag. */
+        /** Mouse move handler — draw mode snap + paint/erase drag + guide tool preview. */
         function onMouseMoveForDraw(event) {
             // Paint / Erase drag
             if ((activeTool === 'paint' || activeTool === 'erase') && isMouseDown) {
                 applyBrushAt(event);
                 return;
             }
-            if (!drawMode) return;
-            const snap = findSnapPoint(event);
-            drawSnapTarget = snap ? {x: snap.x, y: snap.y, z: snap.z}
-                                  : getClickWorldPos(event);
-            // Reuse / create snap indicator mesh
+
+            const isGuideActive = (activeTool === 'polygon' || activeTool === 'polyline'
+                                || activeTool === 'trim'    || activeTool === 'extend');
+
+            if (!drawMode && !isGuideActive) return;
+
+            // Pick snap target: guide vertices/midpoints/intersections first, then point cloud
+            const guideSnap = isGuideActive ? findGuideSnapPoint(event) : null;
+            const pcSnap    = (snapEnabled && snapTypes.vertex) ? findSnapPoint(event) : null;
+            const bestSnap  = guideSnap || pcSnap;
+
+            drawSnapTarget = bestSnap
+                ? { x: bestSnap.x, y: bestSnap.y, z: bestSnap.z }
+                : getClickWorldPos(event);
+
+            // Snap indicator sphere
             if (!snapIndicatorMesh) {
                 const geo = new THREE.SphereGeometry(0.04, 8, 8);
                 const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
@@ -1151,12 +1600,16 @@
                 scene.add(snapIndicatorMesh);
             }
             if (drawSnapTarget) {
-                snapIndicatorMesh.material.color.setHex(snap ? 0x00ff88 : 0xffcc00);
+                const snapColor = guideSnap ? 0x00d9ff : (bestSnap ? 0x00ff88 : 0xffcc00);
+                snapIndicatorMesh.material.color.setHex(snapColor);
                 snapIndicatorMesh.position.set(drawSnapTarget.x, drawSnapTarget.y, drawSnapTarget.z);
                 snapIndicatorMesh.visible = true;
             } else {
                 snapIndicatorMesh.visible = false;
             }
+
+            // Live preview line for guide draw tools
+            if (isGuideActive && isDrawingGuide) rebuildGuideLines();
         }
 
         /** Rebuild the yellow construction line group from drawnPoints3D. */
@@ -1636,10 +2089,18 @@
             raycaster.params.Points.threshold = 0.1;
             mouse = new THREE.Vector2();
 
+            // Initialize empty guide lines group
+            rebuildGuideLines();
+
             renderer.domElement.addEventListener('click', onMouseClick);
             renderer.domElement.addEventListener('mousemove', onMouseMoveForDraw);
             renderer.domElement.addEventListener('mousedown', () => { isMouseDown = true; });
             renderer.domElement.addEventListener('mouseup',   () => { isMouseDown = false; });
+            renderer.domElement.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                if (activeTool === 'polyline' && isDrawingGuide) finishGuidePolyline();
+                else if (activeTool === 'polygon' && isDrawingGuide) finishGuidePolyline(); // right-click = open polyline fallback
+            });
             window.addEventListener('resize', onWindowResize);
             window.addEventListener('keydown', onKeyDown);
             initPaintPalette();
@@ -1818,7 +2279,14 @@
                 return;
             }
 
-            // ── Draw mode intercept ──────────────────────────────────────────
+            // ── Guide tools intercept (polygon, polyline, trim, extend) ───────
+            if (activeTool === 'polygon' || activeTool === 'polyline'
+             || activeTool === 'trim'    || activeTool === 'extend') {
+                handleGuideToolClick(event);
+                return;
+            }
+
+            // ── Draw mode intercept (boundary construct tool) ─────────────────
             if (drawMode) {
                 const pos = drawSnapTarget || getClickWorldPos(event);
                 if (pos) {
@@ -1826,7 +2294,7 @@
                     updateDrawGroup();
                     const n = drawnPoints3D.length;
                     document.getElementById('selection-info').textContent =
-                        `Draw Mode: ${n} point${n===1?'':'s'} placed — Esc to close & apply, click to add more`;
+                        `Boundary: ${n} point${n===1?'':'s'} placed — Esc to close & apply`;
                 }
                 return;
             }
@@ -1980,6 +2448,21 @@
             } else if (event.key === 'Delete' || event.key === 'Backspace') {
                 deleteSelected();
             } else if (event.key === 'Escape') {
+                if (isDrawingGuide) {
+                    if (activeTool === 'polygon' && activeGuidePoints.length >= 3) {
+                        guideLines.push({ type: 'polygon', points: [...activeGuidePoints], closed: true });
+                        activeGuidePoints = [];
+                        isDrawingGuide = false;
+                        rebuildGuideLines();
+                        document.getElementById('selection-info').textContent = 'Guide polygon closed.';
+                    } else if (activeTool === 'polyline' && activeGuidePoints.length >= 2) {
+                        finishGuidePolyline();
+                    } else {
+                        cancelGuideDraw();
+                        document.getElementById('selection-info').textContent = 'Guide draw cancelled.';
+                    }
+                    return;
+                }
                 if (drawMode) {
                     if (drawnPoints3D.length >= 3) {
                         applyDrawnBoundary();
@@ -1994,6 +2477,14 @@
                 setTool('select');
             } else if (event.key === 'c' || event.key === 'C') {
                 setTool('construct');
+            } else if (event.key === 'g' || event.key === 'G') {
+                setTool('polygon');
+            } else if (event.key === 'l' || event.key === 'L') {
+                setTool('polyline');
+            } else if (event.key === 't' || event.key === 'T') {
+                setTool('trim');
+            } else if ((event.key === 'x' || event.key === 'X') && !event.ctrlKey) {
+                setTool('extend');
             } else if (event.key === 'p' || event.key === 'P') {
                 setTool('paint');
             } else if ((event.key === 'e' || event.key === 'E') && !event.ctrlKey) {
