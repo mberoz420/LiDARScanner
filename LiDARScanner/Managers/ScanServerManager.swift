@@ -8,21 +8,61 @@ class ScanServerManager: ObservableObject {
     static let shared = ScanServerManager()
 
     // ── Configuration — must match UPLOAD_API_KEY in server/includes/config.php ──
+    private let baseURL        = "https://scanwizard.robo-wizard.com"
     private let serverURL      = "https://scanwizard.robo-wizard.com/upload.php"
     private let photosURL      = "https://scanwizard.robo-wizard.com/upload_photos.php"
     private let apiKey         = "ScanWizard2025Secret"  // ← must match UPLOAD_API_KEY in config.php
 
     @Published var isUploading = false
     @Published var lastError: String?
+    @Published var availableProjects: [String] = []
 
     private init() {}
 
+    // MARK: - Project Management
+
+    /// Fetch the list of project folders from the server.
+    @discardableResult
+    func fetchProjects() async -> [String] {
+        guard let url = URL(string: "\(baseURL)/list_projects.php") else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let projects = json["projects"] as? [String] {
+                availableProjects = projects
+                return projects
+            }
+        } catch {}
+        return availableProjects
+    }
+
+    /// Create a new project folder on the server.
+    func createProject(name: String) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/list_projects.php") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["action": "create", "name": name])
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["success"] as? Bool == true {
+                await fetchProjects()
+                return true
+            }
+        } catch {}
+        return false
+    }
+
     /// Upload a local JSON file to the ScanWizard server.
     /// Returns the remote filename on success, nil on failure.
-    func uploadFile(at url: URL) async -> String? {
+    func uploadFile(at url: URL, project: String? = nil) async -> String? {
         do {
             let data = try Data(contentsOf: url)
-            return await uploadScan(data: data)
+            return await uploadScan(data: data, project: project)
         } catch {
             lastError = "Could not read file: \(error.localizedDescription)"
             return nil
@@ -31,12 +71,17 @@ class ScanServerManager: ObservableObject {
 
     /// Upload raw scan JSON data (from a LiDAR mesh / point cloud) to the scan endpoint.
     /// Returns the remote filename (e.g. "scan_1234567890_1234.json") on success, nil on failure.
-    func uploadScan(data: Data) async -> String? {
+    /// If `project` is provided, the scan is stored in that project subfolder on the server.
+    func uploadScan(data: Data, project: String? = nil) async -> String? {
         isUploading = true
         lastError   = nil
         defer { isUploading = false }
 
-        var request = URLRequest(url: URL(string: serverURL)!)
+        var urlStr = serverURL
+        if let proj = project, !proj.isEmpty {
+            urlStr += "?project=\(proj.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? proj)"
+        }
+        var request = URLRequest(url: URL(string: urlStr)!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey,             forHTTPHeaderField: "X-API-Key")

@@ -12,7 +12,92 @@
             color: #fff;
             overflow: hidden;
         }
-        #container { display: flex; height: 100vh; }
+        #container { display: flex; height: calc(100vh - 32px); }
+
+        /* ── Top Menu Bar ─────────────────────────────────────────── */
+        #top-menu-bar {
+            height: 32px;
+            background: #0d1117;
+            border-bottom: 1px solid #21262d;
+            display: flex;
+            align-items: center;
+            padding: 0 4px;
+            font-size: 13px;
+            user-select: none;
+            z-index: 600;
+        }
+        .menu-item {
+            position: relative;
+            padding: 4px 12px;
+            color: #c9d1d9;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .menu-item:hover, .menu-item.open {
+            background: #21262d;
+            color: #fff;
+        }
+        .menu-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            min-width: 220px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 4px 0;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 700;
+        }
+        .menu-item.open .menu-dropdown { display: block; }
+        .menu-dropdown-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 16px;
+            color: #c9d1d9;
+            cursor: pointer;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .menu-dropdown-item:hover { background: #1f6feb; color: #fff; }
+        .menu-dropdown-item:active { background: #1a5ccf; }
+        .menu-dropdown-item .shortcut { color: #6e7681; font-size: 11px; margin-left: 24px; }
+        .menu-dropdown-item:hover .shortcut { color: rgba(255,255,255,0.7); }
+        .menu-sep { height: 1px; background: #21262d; margin: 4px 0; }
+        .menu-dropdown-item.disabled { color: #484f58; pointer-events: none; }
+
+        /* ── Drawing context menu ─────────────────────────────────── */
+        #draw-ctx-menu {
+            display: none;
+            position: fixed;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 4px 0;
+            z-index: 800;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+            min-width: 160px;
+        }
+        #draw-ctx-menu .ctx-item {
+            padding: 7px 16px;
+            font-size: 12px;
+            color: #c9d1d9;
+            cursor: pointer;
+        }
+        #draw-ctx-menu .ctx-item:hover { background: #1f6feb; color: #fff; }
+        #draw-ctx-menu .ctx-sep { height: 1px; background: #21262d; margin: 3px 0; }
+
+        /* ── Window zoom rectangle ─────────────────────────────────── */
+        #wz-rect {
+            display: none;
+            position: fixed;
+            border: 2px dashed #00d9ff;
+            background: rgba(0,217,255,0.08);
+            pointer-events: none;
+            z-index: 500;
+        }
         #viewer { flex: 1; position: relative; }
         #sidebar {
             width: 300px;
@@ -509,7 +594,7 @@
 
         /* ── Left Toolbar (rug-project square style) ─────────── */
         #left-toolbar {
-            width: 112px;
+            width: 140px;
             background: #0d0d1f;
             border-right: 1px solid #1a1a3a;
             display: flex;
@@ -663,6 +748,51 @@
     </style>
 </head>
 <body>
+    <!-- Top Menu Bar -->
+    <div id="top-menu-bar">
+        <div class="menu-item" onclick="toggleMenu(this)">
+            Project
+            <div class="menu-dropdown" onclick="event.stopPropagation()">
+                <div class="menu-dropdown-item" onclick="closeMenus(); closeProject()">
+                    <span>New / Close</span>
+                </div>
+                <div class="menu-sep"></div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); document.getElementById('open-file-input').click()">
+                    <span>Open Local…</span><span class="shortcut">Ctrl+O</span>
+                </div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); showOpenFromServer()">
+                    <span>Open from Server…</span>
+                </div>
+                <div class="menu-sep"></div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); saveLocal()">
+                    <span>Save Local</span><span class="shortcut">Ctrl+S</span>
+                </div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); saveToServer()">
+                    <span>Save to Server</span><span class="shortcut">Ctrl+Shift+S</span>
+                </div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); saveToServerAs()">
+                    <span>Save to Server As…</span>
+                </div>
+                <div class="menu-sep"></div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); exportGLB()">
+                    <span>Export Mesh (.glb)</span>
+                </div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); exportLabeled()">
+                    <span>Export Labeled JSON</span>
+                </div>
+                <div class="menu-dropdown-item" onclick="closeMenus(); exportForTraining()">
+                    <span>Export for ML Training</span>
+                </div>
+            </div>
+        </div>
+        <div style="flex:1"></div>
+        <div id="top-filename" style="font-size:11px;color:#6e7681;padding-right:12px;"></div>
+    </div>
+    <input type="file" id="open-file-input" accept=".json" style="display:none" />
+    <!-- Drawing right-click context menu -->
+    <div id="draw-ctx-menu"></div>
+    <!-- Window zoom selection rectangle -->
+    <div id="wz-rect"></div>
     <div id="container">
         <!-- Left Toolbar -->
         <div id="left-toolbar">
@@ -684,6 +814,10 @@
                 <div class="tool-btn" id="tool-polyline" onclick="setTool('polyline')" title="Guide Line (L)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,18 8,10 14,14 21,6"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/><circle cx="8" cy="10" r="1.5" fill="currentColor"/><circle cx="14" cy="14" r="1.5" fill="currentColor"/><circle cx="21" cy="6" r="1.5" fill="currentColor"/></svg>
                     Polyline
+                </div>
+                <div class="tool-btn" id="tool-windowzoom" onclick="setTool('windowzoom')" title="Window Zoom (W) — drag a rectangle to zoom in">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="12" height="12" stroke-dasharray="3,2"/><circle cx="19" cy="19" r="4"/><line x1="21.5" y1="21.5" x2="23" y2="23"/><line x1="17" y1="19" x2="21" y2="19"/><line x1="19" y1="17" x2="19" y2="21"/></svg>
+                    W.Zoom
                 </div>
             </div>
 
@@ -764,6 +898,28 @@
                 </div>
             </div>
             <input type="file" id="insert-file-input" accept=".json" style="display:none" />
+
+            <!-- Visibility (collapsible) -->
+            <div class="tool-separator"></div>
+            <div class="tool-section-label" onclick="toggleVisPanel()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+                <span>Visibility</span>
+                <span id="vis-toggle-icon" style="font-size:8px;color:#555;">&#x25BC;</span>
+            </div>
+            <div id="vis-panel" style="padding:4px 2px;display:flex;flex-direction:column;gap:3px;font-size:10px;">
+                <div style="display:flex;gap:3px;margin-bottom:2px;">
+                    <button onclick="toggleAllVisibility(true)" style="flex:1;padding:2px 4px;font-size:9px;background:#1a2744;color:#fff;border:1px solid #3498db;border-radius:3px;cursor:pointer;">All On</button>
+                    <button onclick="toggleAllVisibility(false)" style="flex:1;padding:2px 4px;font-size:9px;background:#1a2744;color:#fff;border:1px solid #e94560;border-radius:3px;cursor:pointer;">All Off</button>
+                </div>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-floors" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#2ecc71"></span>Floors</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-ceilings" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#f1c40f"></span>Ceilings</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-walls" checked onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#3498db"></span>Walls</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-objects" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#e74c3c"></span>Objects</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-objecttops" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#e68080"></span>Obj Tops</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-backreflections" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#ff00ff"></span>Back Refl</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-doors" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#A0522D"></span>Doors</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-windows" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#00BCD4"></span>Windows</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-covings" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#FF8C42"></span>Covings</label>
+            </div>
         </div>
 
         <div id="viewer">
@@ -851,7 +1007,8 @@
             <!-- Insert options popup (From File / From Server) -->
             <div id="insert-options-popup" style="display:none;position:absolute;
                 background:rgba(8,12,28,0.97);border:1px solid #0f3460;border-radius:8px;
-                padding:6px;z-index:300;min-width:150px;box-shadow:0 4px 20px rgba(0,0,0,0.6);">
+                padding:6px;z-index:300;min-width:150px;box-shadow:0 4px 20px rgba(0,0,0,0.6);"
+                onclick="event.stopPropagation()">
                 <div onclick="document.getElementById('insert-file-input').click(); hideInsertOptions()"
                      style="padding:8px 12px;cursor:pointer;border-radius:5px;font-size:12px;color:#ccc;
                             display:flex;align-items:center;gap:8px;"
@@ -1052,32 +1209,14 @@
                     </div>
                     <div style="margin:8px 0;padding:6px 8px;background:#0f3460;border-radius:6px;">
                         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;">
-                            <input type="checkbox" id="show-outline" checked style="width:16px;height:16px;cursor:pointer;" onchange="if(roomOutlineGroup) roomOutlineGroup.visible = this.checked;">
+                            <input type="checkbox" id="show-outline" style="width:16px;height:16px;cursor:pointer;" onchange="if(roomOutlineGroup) roomOutlineGroup.visible = this.checked;">
                             <span>Show boundary outline lines</span>
                         </label>
                     </div>
                 </div>
             </div>
 
-            <!-- VISIBILITY -->
-            <div class="card">
-                <div class="card-header" onclick="toggleCard('visibility')">
-                    <span>👁️ Visibility</span><span class="card-icon" id="card-icon-visibility">▶</span>
-                </div>
-                <div class="card-body" id="card-body-visibility" style="display:none">
-                    <div style="display:flex;flex-direction:column;gap:7px;">
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-floors" onchange="updateVisibility()"><span class="color-dot" style="background:#2ecc71"></span>Floors</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-ceilings" onchange="updateVisibility()"><span class="color-dot" style="background:#f1c40f"></span>Ceilings</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-walls" checked onchange="updateVisibility()"><span class="color-dot" style="background:#3498db"></span>Walls</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-objects" onchange="updateVisibility()"><span class="color-dot" style="background:#e74c3c"></span>Objects</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-objecttops" onchange="updateVisibility()"><span class="color-dot" style="background:#e68080"></span>Object Tops</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-backreflections" onchange="updateVisibility()"><span class="color-dot" style="background:#ff00ff"></span>Back Reflections</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-doors" onchange="updateVisibility()"><span class="color-dot" style="background:#A0522D"></span>Doors</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-windows" onchange="updateVisibility()"><span class="color-dot" style="background:#00BCD4"></span>Windows</label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;"><input type="checkbox" id="show-covings" onchange="updateVisibility()"><span class="color-dot" style="background:#FF8C42"></span>Covings</label>
-                    </div>
-                </div>
-            </div>
+            <!-- VISIBILITY moved to left overlay panel -->
 
             <!-- STATISTICS -->
             <div class="card">
@@ -1151,15 +1290,18 @@
                 </div>
             </div>
 
-            <!-- EXPORT -->
-            <div class="card">
-                <div class="card-header" onclick="toggleCard('export')">
-                    <span>💾 Export</span><span class="card-icon" id="card-icon-export">▼</span>
-                </div>
-                <div class="card-body" id="card-body-export">
-                    <button class="btn btn-file" onclick="exportLabeled()">Export Labeled JSON</button>
-                    <button class="btn btn-action" onclick="exportForTraining()">Export for ML Training</button>
-                    <button class="btn btn-action" style="background:#27ae60;border-color:#2ecc71" onclick="exportGLB()">&#x1F4E6; Export Colored Mesh (.glb)</button>
+            <!-- Open-from-server modal -->
+            <div id="open-server-modal" style="display:none;position:fixed;inset:0;
+                background:rgba(0,0,0,0.6);z-index:500;align-items:center;justify-content:center;">
+                <div style="background:#0d1a2e;border:1px solid #00d9ff;border-radius:12px;
+                            padding:20px;width:400px;max-height:70vh;display:flex;flex-direction:column;
+                            box-shadow:0 8px 40px rgba(0,0,0,0.8);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                        <span style="font-weight:700;color:#00d9ff;font-size:14px;">🌐 Open from Server</span>
+                        <span onclick="hideOpenFromServer()" style="cursor:pointer;color:#666;font-size:20px;line-height:1;">✕</span>
+                    </div>
+                    <div id="open-server-status" style="font-size:12px;color:#888;margin-bottom:10px;">Loading…</div>
+                    <div id="open-server-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;"></div>
                 </div>
             </div>
         </div>
@@ -1168,6 +1310,62 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script>
+        // ── Top Menu Bar ─────────────────────────────────────────────────────────
+        function toggleMenu(el) {
+            const wasOpen = el.classList.contains('open');
+            document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+            if (!wasOpen) el.classList.add('open');
+        }
+        function closeMenus() {
+            document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+        }
+        function toggleVisPanel() {
+            const panel = document.getElementById('vis-panel');
+            const icon  = document.getElementById('vis-toggle-icon');
+            if (panel.style.display === 'none') {
+                panel.style.display = 'flex';
+                icon.innerHTML = '&#x25BC;';
+            } else {
+                panel.style.display = 'none';
+                icon.innerHTML = '&#x25B6;';
+            }
+        }
+        // Close menu on click outside
+        document.addEventListener('mousedown', e => {
+            if (!e.target.closest('.menu-item')) {
+                document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+            }
+        });
+        // Hover-open siblings when one menu is already open
+        document.addEventListener('mouseover', e => {
+            const item = e.target.closest('.menu-item');
+            if (item && document.querySelector('.menu-item.open') && !item.classList.contains('open')) {
+                document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+                item.classList.add('open');
+            }
+        });
+
+        function updateFilenameDisplay() {
+            const el = document.getElementById('top-filename');
+            if (el) el.textContent = currentFilename || '';
+        }
+
+        function closeProject() {
+            if (points && points.length > 0) {
+                if (!confirm('Close current project? Unsaved changes will be lost.')) return;
+            }
+            points = []; labels = []; normals = []; rgbColors = []; scanIds = [];
+            deletedIndices.clear(); selectedIndices.clear();
+            numScans = 0; currentFilename = null; originalData = null;
+            guideLines = [];
+            if (guideLinesGroup) { scene.remove(guideLinesGroup); guideLinesGroup = null; }
+            if (pointCloud) { scene.remove(pointCloud); pointCloud = null; }
+            if (roomOutlineGroup) { scene.remove(roomOutlineGroup); roomOutlineGroup = null; }
+            updateFilenameDisplay();
+            updateStats();
+            document.getElementById('selection-info').textContent = 'Project closed.';
+        }
+
         // ── Left Toolbar Tool System ───────────────────────────────────────────
         let activeTool = 'select';
         let paintLabel = 2;         // wall by default
@@ -1297,15 +1495,18 @@
             const isConstruct   = (name === 'construct');
             const isGuideDraw   = (name === 'polygon' || name === 'polyline');
             const isTrimExtend  = (name === 'trim'    || name === 'extend');
+            const isWindowZoom  = (name === 'windowzoom');
 
             drawMode = isConstruct;
-            if (controls) controls.enableRotate = !(isConstruct || isGuideDraw || isTrimExtend || viewLocked);
+            // Keep orbit controls enabled during drawing — panning/zooming/rotating stay active
+            if (controls) controls.enableRotate = !viewLocked;
             if (!isConstruct) exitDrawMode();
 
             if (renderer) {
                 renderer.domElement.style.cursor =
                     name === 'paint' || name === 'erase' || isTrimExtend ? 'crosshair' :
-                    isConstruct || isGuideDraw ? 'cell' : 'default';
+                    isWindowZoom ? 'zoom-in' :
+                    isConstruct || isGuideDraw ? 'none' : 'default';
             }
             const palette = document.getElementById('paint-palette');
             if (palette) palette.style.opacity = (name === 'paint') ? '1' : '0.45';
@@ -1679,6 +1880,7 @@
         let selectionRadius = 0.3;
         let raycaster, mouse;
         let originalData = null;
+        let currentFilename = null;       // tracks name for re-saves
         let colorMode = 'normal';
         let minY = 0, maxY = 1;
         let sceneCenter = {x: 0, y: 0, z: 0};
@@ -1693,7 +1895,7 @@
         let drawMode = false;
         let drawnPoints3D = [];             // [{x,y,z}] polygon vertices
         let drawGroup = null;               // THREE.Group — yellow construction lines
-        let snapIndicatorMesh = null;       // sphere shown at snap target
+        let snapIndicatorMesh = null;       // crosshair group shown at snap target
         let drawSnapTarget = null;          // current world-space snap/hover pos
 
         // Custom labels (start from index 10 to avoid conflicts)
@@ -1845,7 +2047,7 @@
                 btn.style.color = '#000';
                 drawnPoints3D = [];
                 updateDrawGroup();
-                controls.enableRotate = false;  // lock orbit so clicks place points
+                // Orbit stays enabled — drag detection distinguishes clicks from navigation
                 document.getElementById('selection-info').textContent =
                     'Draw Mode: click to place boundary points — Esc to close & apply';
             } else {
@@ -1863,7 +2065,7 @@
             }
             controls.enableRotate = !viewLocked;
             if (drawGroup) { scene.remove(drawGroup); drawGroup = null; }
-            if (snapIndicatorMesh) { scene.remove(snapIndicatorMesh); snapIndicatorMesh = null; }
+            if (snapIndicatorMesh) { snapIndicatorMesh.children.forEach(c => { c.geometry?.dispose(); c.material?.dispose(); }); scene.remove(snapIndicatorMesh); snapIndicatorMesh = null; }
             drawnPoints3D = [];
             drawSnapTarget = null;
         }
@@ -1942,16 +2144,26 @@
                 ? { x: bestSnap.x, y: bestSnap.y, z: bestSnap.z }
                 : getClickWorldPos(event);
 
-            // Snap indicator sphere
+            // Snap indicator — AutoCAD-style crosshair
             if (!snapIndicatorMesh) {
-                const geo = new THREE.SphereGeometry(0.04, 8, 8);
-                const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
-                snapIndicatorMesh = new THREE.Mesh(geo, mat);
+                snapIndicatorMesh = new THREE.Group();
+                const S = 0.12; // half-length of each arm
+                const makeLine = (v1, v2) => {
+                    const g = new THREE.BufferGeometry().setFromPoints([v1, v2]);
+                    return new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x00ff88, linewidth: 2, depthTest: false }));
+                };
+                // horizontal (X)
+                snapIndicatorMesh.add(makeLine(new THREE.Vector3(-S, 0, 0), new THREE.Vector3(S, 0, 0)));
+                // vertical (Y)
+                snapIndicatorMesh.add(makeLine(new THREE.Vector3(0, -S, 0), new THREE.Vector3(0, S, 0)));
+                // depth (Z)
+                snapIndicatorMesh.add(makeLine(new THREE.Vector3(0, 0, -S), new THREE.Vector3(0, 0, S)));
+                snapIndicatorMesh.renderOrder = 999;
                 scene.add(snapIndicatorMesh);
             }
             if (drawSnapTarget) {
                 const snapColor = guideSnap ? 0x00d9ff : (bestSnap ? 0x00ff88 : 0xffcc00);
-                snapIndicatorMesh.material.color.setHex(snapColor);
+                snapIndicatorMesh.children.forEach(l => l.material.color.setHex(snapColor));
                 snapIndicatorMesh.position.set(drawSnapTarget.x, drawSnapTarget.y, drawSnapTarget.z);
                 snapIndicatorMesh.visible = true;
             } else {
@@ -2238,6 +2450,14 @@
         let showObjectTops = false, showBackReflections = false;
         let showDoors = false, showWindows = false, showCovings = false;
 
+        function toggleAllVisibility(on) {
+            ['show-floors','show-ceilings','show-walls','show-objects','show-objecttops',
+             'show-backreflections','show-doors','show-windows','show-covings'].forEach(id => {
+                document.getElementById(id).checked = on;
+            });
+            updateVisibility();
+        }
+
         function updateVisibility() {
             showFloors = document.getElementById('show-floors').checked;
             showCeilings = document.getElementById('show-ceilings').checked;
@@ -2473,26 +2693,45 @@
 
             renderer.domElement.addEventListener('click', onMouseClick);
             renderer.domElement.addEventListener('mousemove', onMouseMoveForDraw);
-            renderer.domElement.addEventListener('mousedown', () => {
+
+            // Track mousedown position to distinguish clicks from drags
+            let _mdx = 0, _mdy = 0;
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                _mdx = e.clientX; _mdy = e.clientY;
                 isMouseDown = true;
                 if (activeTool === 'paint' || activeTool === 'erase') {
                     pendingUndoChanges  = [];
                     pendingUndoIndexSet = new Set();
                     pendingUndoType     = activeTool;
                 }
+                // Window zoom drag start
+                if (activeTool === 'windowzoom' && e.button === 0) {
+                    startWindowZoom(e);
+                }
             });
-            renderer.domElement.addEventListener('mouseup', () => {
+            renderer.domElement.addEventListener('mouseup', (e) => {
                 isMouseDown = false;
                 if (pendingUndoChanges.length > 0) {
                     pushUndo({ type: 'stroke', strokeType: pendingUndoType, changes: pendingUndoChanges });
                     pendingUndoChanges  = [];
                     pendingUndoIndexSet = new Set();
                 }
+                // Window zoom drag end
+                if (activeTool === 'windowzoom' && _wzDragging) {
+                    finishWindowZoom(e);
+                }
+                // Was this a click (not a drag)? Store for onMouseClick
+                const dx = e.clientX - _mdx, dy = e.clientY - _mdy;
+                window._lastClickWasDrag = (Math.abs(dx) + Math.abs(dy)) > 5;
             });
             renderer.domElement.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
-                if (activeTool === 'polyline' && isDrawingGuide) finishGuidePolyline();
-                else if (activeTool === 'polygon' && isDrawingGuide) finishGuidePolyline(); // right-click = open polyline fallback
+                // Show context menu during drawing sessions
+                const isGuideDrawing = (activeTool === 'polygon' || activeTool === 'polyline') && isDrawingGuide;
+                const isBoundaryDrawing = drawMode && drawnPoints3D.length > 0;
+                if (isGuideDrawing || isBoundaryDrawing) {
+                    showDrawContextMenu(e, isGuideDrawing, isBoundaryDrawing);
+                }
             });
             window.addEventListener('resize', onWindowResize);
             window.addEventListener('keydown', onKeyDown);
@@ -2600,6 +2839,12 @@
                         scanIds.push(0);
                     }
                 });
+            }
+
+            // Restore guide lines if saved
+            if (data.guide_lines && Array.isArray(data.guide_lines)) {
+                guideLines = data.guide_lines;
+                rebuildGuideLines();
             }
 
             if (points.length === 0) {
@@ -3130,8 +3375,15 @@
         }
 
         function onMouseClick(event) {
+            // Skip if mouse was dragged (pan/rotate/zoom) — not a true click
+            const wasDrag = window._lastClickWasDrag;
+            window._lastClickWasDrag = false;
+
+            // Window zoom tool handles its own mousedown/mouseup
+            if (activeTool === 'windowzoom') return;
+
             // ── Align mode intercept ──────────────────────────────────────────
-            if (alignMode) { handleAlignClick(event); return; }
+            if (alignMode) { if (!wasDrag) handleAlignClick(event); return; }
 
             // ── Paint / Erase tool intercept ─────────────────────────────────
             if (activeTool === 'paint' || activeTool === 'erase') {
@@ -3142,12 +3394,12 @@
             // ── Guide tools intercept (polygon, polyline, trim, extend) ───────
             if (activeTool === 'polygon' || activeTool === 'polyline'
              || activeTool === 'trim'    || activeTool === 'extend') {
-                handleGuideToolClick(event);
+                if (!wasDrag) handleGuideToolClick(event);
                 return;
             }
 
             // ── Draw mode intercept (boundary construct tool) ─────────────────
-            if (drawMode) {
+            if (drawMode && !wasDrag) {
                 const pos = drawSnapTarget || getClickWorldPos(event);
                 if (pos) {
                     drawnPoints3D.push({x: pos.x, y: pos.y, z: pos.z});
@@ -3284,6 +3536,25 @@
         }
 
         function onKeyDown(event) {
+            // ── Top menu keyboard shortcuts ──
+            if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+                if (event.key === 'o' || event.key === 'O') {
+                    event.preventDefault();
+                    document.getElementById('open-file-input').click();
+                    return;
+                }
+                if (event.shiftKey && (event.key === 's' || event.key === 'S')) {
+                    event.preventDefault();
+                    saveToServer();
+                    return;
+                }
+                if (event.key === 's' || event.key === 'S') {
+                    event.preventDefault();
+                    saveLocal();
+                    return;
+                }
+            }
+
             if (event.key >= '0' && event.key <= '9') {
                 const keyNum = parseInt(event.key);
                 // Key mapping: 0=clear, 1=floor, 2=ceiling, 3=wall, 4=object, 5=objecttop, 6=backreflection, 7=noise
@@ -3735,6 +4006,237 @@
             URL.revokeObjectURL(url);
         }
 
+        // ── Save / Open ──────────────────────────────────────────────────────
+
+        function buildSaveData() {
+            const pts = [];
+            points.forEach((p, i) => {
+                if (deletedIndices.has(i)) return;
+                const entry = { x: p.x, y: p.y, z: p.z,
+                    nx: normals[i]?.x || 0, ny: normals[i]?.y || 0, nz: normals[i]?.z || 0,
+                    label: labels[i] };
+                if (rgbColors[i]) { entry.r = rgbColors[i].r; entry.g = rgbColors[i].g; entry.b = rgbColors[i].b; }
+                if (scanIds[i] > 0) entry.scan = scanIds[i];
+                pts.push(entry);
+            });
+            const data = {
+                points: pts,
+                num_points: pts.length,
+                custom_labels: customLabels.map(l => ({ id: l.id, name: l.name })),
+                guide_lines: guideLines,
+                saved_at: new Date().toISOString()
+            };
+            if (meshFaces) data.faces = meshFaces;
+            if (scanRoomPlanes) data.room_planes = scanRoomPlanes;
+            return data;
+        }
+
+        function saveLocal() {
+            if (points.length === 0) { alert('No data to save'); return; }
+            const name = currentFilename || 'pointcloud.json';
+            downloadJSON(buildSaveData(), name);
+            document.getElementById('selection-info').textContent = `Saved locally as ${name}`;
+        }
+
+        async function saveToServer(nameOverride) {
+            if (points.length === 0) { alert('No data to save'); return; }
+            const info = document.getElementById('selection-info');
+            const saveName = nameOverride || currentFilename || '';
+            info.textContent = saveName ? `Saving as ${saveName}…` : 'Saving to server…';
+            try {
+                const body = JSON.stringify(buildSaveData());
+                let url = SERVER_BASE + '/upload.php';
+                if (saveName) url += '?filename=' + encodeURIComponent(saveName);
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body
+                });
+                if (!res.ok) throw new Error('Server error ' + res.status);
+                const result = await res.json();
+                if (!result.success) throw new Error(result.error || 'Unknown error');
+                currentFilename = result.filename;
+                updateFilenameDisplay();
+                info.textContent = `Saved to server as ${result.filename}`;
+            } catch (err) {
+                alert('Save to server failed: ' + err.message);
+                info.textContent = 'Server save failed.';
+            }
+        }
+
+        function saveToServerAs() {
+            if (points.length === 0) { alert('No data to save'); return; }
+            const defaultName = currentFilename || 'my_scan.json';
+            const name = prompt('Save to server as:', defaultName);
+            if (!name) return;
+            saveToServer(name);
+        }
+
+        async function showOpenFromServer() {
+            const modal    = document.getElementById('open-server-modal');
+            const statusEl = document.getElementById('open-server-status');
+            const listEl   = document.getElementById('open-server-list');
+            modal.style.display = 'flex';
+            statusEl.textContent = 'Loading scans…';
+            listEl.innerHTML = '';
+            try {
+                const res = await fetch(SERVER_BASE + '/list_scans.php', {
+                    headers: { 'X-API-Key': API_KEY }
+                });
+                if (!res.ok) throw new Error('Server error ' + res.status);
+                const { scans } = await res.json();
+                if (!scans || scans.length === 0) { statusEl.textContent = 'No scans found.'; return; }
+                statusEl.textContent = `${scans.length} scan${scans.length > 1 ? 's' : ''} available`;
+                listEl.innerHTML = scans.map(s => {
+                    const date = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
+                    const pts  = s.num_points ? Number(s.num_points).toLocaleString() + ' pts' : '';
+                    return `<div onclick="openServerScan('${s.filename}')"
+                        style="padding:10px 12px;background:#1a2744;border:1px solid #0f3460;border-radius:7px;
+                               cursor:pointer;transition:border-color 0.15s;"
+                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
+                        <div style="font-size:12px;color:#fff;font-weight:600;">${s.filename}</div>
+                        <div style="font-size:10px;color:#888;margin-top:3px;">${date}${pts ? ' · ' + pts : ''}</div>
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                statusEl.textContent = 'Error: ' + err.message;
+            }
+        }
+
+        function hideOpenFromServer() {
+            document.getElementById('open-server-modal').style.display = 'none';
+        }
+
+        async function openServerScan(filename) {
+            hideOpenFromServer();
+            document.getElementById('selection-info').textContent = `Opening ${filename}…`;
+            try {
+                const res = await fetch(SERVER_BASE + '/get_scan.php?filename=' + encodeURIComponent(filename), {
+                    headers: { 'X-API-Key': API_KEY }
+                });
+                if (!res.ok) throw new Error('Server error ' + res.status);
+                const data = await res.json();
+                currentFilename = filename;
+                updateFilenameDisplay();
+                loadJSON(data);
+            } catch (err) {
+                alert('Failed to open scan: ' + err.message);
+                document.getElementById('selection-info').textContent = 'Open failed.';
+            }
+        }
+
+        // ── Drawing right-click context menu ──────────────────────────────────
+        function showDrawContextMenu(e, isGuide, isBoundary) {
+            const menu = document.getElementById('draw-ctx-menu');
+            let html = '';
+            if (isGuide) {
+                const canFinish = activeGuidePoints.length >= 2;
+                const canClose  = activeTool === 'polygon' && activeGuidePoints.length >= 3;
+                if (canClose) html += `<div class="ctx-item" onclick="hideDrawCtx(); finishGuidePolygonClosed()">Finish &amp; Close Polygon</div>`;
+                if (canFinish) html += `<div class="ctx-item" onclick="hideDrawCtx(); finishGuidePolyline()">Finish (open)</div>`;
+                html += `<div class="ctx-item" onclick="hideDrawCtx(); performUndo()">Undo Last Point</div>`;
+                html += `<div class="ctx-sep"></div>`;
+                html += `<div class="ctx-item" onclick="hideDrawCtx(); cancelGuideDraw(); document.getElementById('selection-info').textContent='Draw cancelled.'">Cancel</div>`;
+            } else if (isBoundary) {
+                const canApply = drawnPoints3D.length >= 3;
+                if (canApply) html += `<div class="ctx-item" onclick="hideDrawCtx(); applyDrawnBoundary()">Finish &amp; Apply Boundary</div>`;
+                html += `<div class="ctx-item" onclick="hideDrawCtx(); performUndo()">Undo Last Point</div>`;
+                html += `<div class="ctx-sep"></div>`;
+                html += `<div class="ctx-item" onclick="hideDrawCtx(); exitDrawMode(); document.getElementById('selection-info').textContent='Draw cancelled.'">Cancel</div>`;
+            }
+            menu.innerHTML = html;
+            menu.style.left = e.clientX + 'px';
+            menu.style.top  = e.clientY + 'px';
+            menu.style.display = 'block';
+            setTimeout(() => document.addEventListener('mousedown', hideDrawCtx, { once: true }), 0);
+        }
+        function hideDrawCtx() {
+            document.getElementById('draw-ctx-menu').style.display = 'none';
+        }
+        function finishGuidePolygonClosed() {
+            if (activeGuidePoints.length < 3) return;
+            pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
+            guideLines.push({ type: 'polygon', points: [...activeGuidePoints], closed: true });
+            activeGuidePoints = [];
+            isDrawingGuide = false;
+            rebuildGuideLines();
+            document.getElementById('selection-info').textContent = `Guide polygon closed (${guideLines[guideLines.length-1].points.length} vertices).`;
+        }
+
+        // ── Window Zoom ─────────────────────────────────────────────────────────
+        let _wzDragging = false, _wzStartX = 0, _wzStartY = 0;
+
+        function startWindowZoom(e) {
+            _wzDragging = true;
+            _wzStartX = e.clientX;
+            _wzStartY = e.clientY;
+            const rect = document.getElementById('wz-rect');
+            rect.style.left = e.clientX + 'px';
+            rect.style.top  = e.clientY + 'px';
+            rect.style.width = '0px';
+            rect.style.height = '0px';
+            rect.style.display = 'block';
+
+            const onMove = (ev) => {
+                if (!_wzDragging) return;
+                const x = Math.min(_wzStartX, ev.clientX);
+                const y = Math.min(_wzStartY, ev.clientY);
+                const w = Math.abs(ev.clientX - _wzStartX);
+                const h = Math.abs(ev.clientY - _wzStartY);
+                rect.style.left = x + 'px';
+                rect.style.top  = y + 'px';
+                rect.style.width = w + 'px';
+                rect.style.height = h + 'px';
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', () => {
+                document.removeEventListener('mousemove', onMove);
+            }, { once: true });
+        }
+
+        function finishWindowZoom(e) {
+            _wzDragging = false;
+            const rect = document.getElementById('wz-rect');
+            rect.style.display = 'none';
+
+            const x1 = Math.min(_wzStartX, e.clientX);
+            const y1 = Math.min(_wzStartY, e.clientY);
+            const x2 = Math.max(_wzStartX, e.clientX);
+            const y2 = Math.max(_wzStartY, e.clientY);
+            const w = x2 - x1, h = y2 - y1;
+            if (w < 10 || h < 10) return; // too small
+
+            // Convert rectangle center to NDC and zoom camera
+            const canvasRect = renderer.domElement.getBoundingClientRect();
+            const cx = ((x1 + x2) / 2 - canvasRect.left) / canvasRect.width  * 2 - 1;
+            const cy = -((y1 + y2) / 2 - canvasRect.top)  / canvasRect.height * 2 + 1;
+
+            // Zoom factor based on how much of the screen the rectangle covers
+            const screenFraction = Math.max(w / canvasRect.width, h / canvasRect.height);
+            const zoomFactor = screenFraction;
+
+            // Raycast to center of rectangle to find new target
+            const ray = new THREE.Raycaster();
+            ray.setFromCamera(new THREE.Vector2(cx, cy), camera);
+
+            // Move camera closer to target along ray
+            const target = controls.target.clone();
+            const camPos = camera.position.clone();
+            const dist = camPos.distanceTo(target);
+
+            // New target: point along ray at current target distance
+            const newTarget = ray.ray.at(dist, new THREE.Vector3());
+            // Lerp between old and new target
+            const lerpedTarget = target.clone().lerp(newTarget, 0.7);
+
+            controls.target.copy(lerpedTarget);
+            // Move camera closer by zoom factor
+            const dir = camPos.clone().sub(lerpedTarget).normalize();
+            const newDist = dist * zoomFactor;
+            camera.position.copy(lerpedTarget).add(dir.multiplyScalar(Math.max(newDist, 0.1)));
+            controls.update();
+        }
+
         // ── GLB (binary GLTF) export ──────────────────────────────────────────
         // Exports a triangle mesh with per-vertex RGB colors (if faces available),
         // or a colored point cloud when faces are not present (old scans).
@@ -3872,6 +4374,8 @@
         document.getElementById('file-input').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
+                currentFilename = file.name;
+                updateFilenameDisplay();
                 const reader = new FileReader();
                 reader.onload = function(e) {
                     try {
@@ -3883,6 +4387,25 @@
                 };
                 reader.readAsText(file);
             }
+        });
+
+        // Open local file (from top menu Project > Open Local)
+        document.getElementById('open-file-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                currentFilename = file.name;
+                updateFilenameDisplay();
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    try {
+                        loadJSON(JSON.parse(ev.target.result));
+                    } catch (err) {
+                        alert('Error parsing JSON: ' + err.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+            this.value = '';
         });
 
         // Drag and drop
@@ -5095,6 +5618,7 @@
             // Draw solid outline at floor (blue) and ceiling (red)
             // Use smoothed[] so the lines reflect the averaged boundary shape
             drawRoomOutline(cx, cz, smoothed, floorY, ceilingY);
+            if (roomOutlineGroup) roomOutlineGroup.visible = !!document.getElementById('show-outline')?.checked;
 
             rebuildPointCloud();
             updateStats();

@@ -80,6 +80,7 @@ class AppSettings: ObservableObject {
     @AppStorage("defaultExportDestination") var defaultDestination: ExportDestination = .googleDrive
     @AppStorage("defaultExportFormat") var defaultFormat: DefaultExportFormat = .ask
     @AppStorage("autoSaveAfterScan") var autoSaveAfterScan: Bool = true
+    @AppStorage("selectedProject") var selectedProject: String = ""  // Server project folder — empty = root
     @AppStorage("includeColorsInExport") var includeColors: Bool = true
     @AppStorage("googleDriveFolderName") var googleDriveFolderName: String = "LidarScans"
 

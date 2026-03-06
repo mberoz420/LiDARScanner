@@ -28,7 +28,7 @@ define('INCLUDES_PATH', __DIR__);
 define('SCANS_PATH',    ROOT_PATH . '/scans');
 
 // ── Anthropic API Key (for AI door/window detection) ─────────────────────────
-define('ANTHROPIC_API_KEY', 'sk-ant-api03-3Cy...0wAA');  // fill in your key at https://console.anthropic.com
+define('ANTHROPIC_API_KEY', '');  // fill in your key at https://console.anthropic.com
 
 // ── Error reporting ──────────────────────────────────────────────────────────
 error_reporting(0);

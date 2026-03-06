@@ -7,6 +7,8 @@ struct ScannerView: View {
     @State private var showExport = false
     @State private var showModeSelector = false
     @State private var capturedScan: CapturedScan?
+    @State private var showProjectPicker = false
+    @State private var pendingScanFileURL: URL?
 
     // Auto-save state
     @State private var autoSaveStatus: AutoSaveStatus = .idle
@@ -254,12 +256,21 @@ struct ScannerView: View {
         .sheet(isPresented: $showModeSelector) {
             ModeSelectorView(selectedMode: $meshManager.currentMode)
         }
+        .sheet(isPresented: $showProjectPicker) {
+            ProjectPickerView { project in
+                showProjectPicker = false
+                Task { await uploadToProject(project) }
+            } onSkip: {
+                showProjectPicker = false
+                pendingScanFileURL = nil
+            }
+        }
     }
 
     private func toggleScanning() {
         if meshManager.isScanning {
             capturedScan = meshManager.stopScanning()
-            Task { await autoSaveToServer() }
+            Task { await prepareScanForUpload() }
         } else {
             capturedScan = nil
             meshManager.startScanning()
@@ -267,14 +278,8 @@ struct ScannerView: View {
     }
 
     @MainActor
-    private func autoSaveToServer() async {
-        guard let scan = capturedScan else {
-            autoSaveStatus = .failed("No scan data")
-            dismissStatusAfterDelay()
-            return
-        }
-
-        autoSaveStatus = .saving
+    private func prepareScanForUpload() async {
+        guard let scan = capturedScan else { return }
 
         let exporter = TrainingDataExporter()
         guard let fileURL = await exporter.exportAsNumpyFormat(scan, classifier: meshManager.surfaceClassifier) else {
@@ -283,12 +288,22 @@ struct ScannerView: View {
             return
         }
 
+        pendingScanFileURL = fileURL
+        showProjectPicker = true
+    }
+
+    @MainActor
+    func uploadToProject(_ project: String) async {
+        guard let fileURL = pendingScanFileURL else { return }
+        autoSaveStatus = .saving
+
         let server = ScanServerManager.shared
-        let filename = await server.uploadFile(at: fileURL)
+        let filename = await server.uploadFile(at: fileURL, project: project)
 
         autoSaveStatus = filename != nil
             ? .success
             : .failed(server.lastError ?? "Upload failed")
+        pendingScanFileURL = nil
         dismissStatusAfterDelay()
     }
 
