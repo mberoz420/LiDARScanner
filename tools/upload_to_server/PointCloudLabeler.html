@@ -3137,7 +3137,10 @@
                 const hd = Math.sqrt(dx * dx + dz * dz);
                 const ang = Math.atan2(dz, dx);
                 const bin = ((Math.round(ang * 180 / Math.PI) % ABINS) + ABINS) % ABINS;
-                const wb  = filled[bin];
+                // Use boundary[] (real confirmed data only) not filled[] (gap-fill).
+                // Interpolated values in empty directions pull the boundary inward
+                // and cause interior objects to be mislabeled as walls.
+                const wb  = boundary[bin];
                 const nearWall = wb > 0 && hd >= wb - WALL_TOL;
 
                 // 1. Coving: near the wall boundary AND in the top zone below ceiling.
