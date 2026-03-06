@@ -656,6 +656,36 @@
         </div>
 
         <div id="viewer">
+            <!-- Alignment Panel -->
+            <div id="align-panel" style="display:none;position:absolute;top:60px;left:20px;
+                background:rgba(8,12,28,0.96);border:1px solid #00d9ff;border-radius:10px;
+                padding:14px 16px;min-width:270px;z-index:200;font-size:12px;pointer-events:auto;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <span style="font-weight:700;color:#00d9ff;font-size:13px;">📐 Align Scans</span>
+                    <span onclick="exitAlignMode()" style="cursor:pointer;color:#888;font-size:18px;line-height:1;">✕</span>
+                </div>
+                <div style="font-size:10px;color:#666;margin-bottom:8px;line-height:1.5;">
+                    Pick matching edge points: 2 on the <span style="color:#2ecc71">reference</span>,
+                    then 2 on the <span style="color:#f39c12">scan to align</span>.<br>
+                    Repeat for 2–3 edges for best accuracy.
+                </div>
+                <div id="align-step-text" style="color:#fff;font-weight:600;margin-bottom:8px;padding:6px 8px;
+                    background:#0f1a30;border-radius:5px;line-height:1.4;min-height:36px;"></div>
+                <div id="align-edge-list" style="margin-bottom:8px;max-height:120px;overflow-y:auto;"></div>
+                <div style="display:flex;gap:6px;margin-top:4px;">
+                    <button id="align-apply-btn" onclick="computeAndApplyAlignment()"
+                        style="flex:1;padding:7px;background:rgba(0,217,255,0.12);border:1px solid #00d9ff;
+                               color:#00d9ff;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;">
+                        ✓ Apply
+                    </button>
+                    <button onclick="exitAlignMode()"
+                        style="flex:1;padding:7px;background:#1a2744;border:1px solid #e94560;
+                               color:#e94560;border-radius:5px;cursor:pointer;font-size:12px;">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+
             <div id="selection-info">Select points with mouse. Hold Shift for multi-select.</div>
             <div id="ortho-badge" onclick="toggleViewLock()" title="Click to toggle rotation lock">
                 <span id="ortho-view-name">ORTHOGRAPHIC</span>
@@ -688,6 +718,11 @@
                         ➕ Insert Scan
                     </button>
                     <input type="file" id="insert-file-input" accept=".json" style="display:none" />
+                    <button class="btn btn-action btn-small" style="width:100%;margin-top:4px;border-color:#00d9ff;color:#00d9ff;"
+                            onclick="enterAlignMode()"
+                            title="Align inserted scan to reference by picking matching edge points">
+                        📐 Align Scans
+                    </button>
                 </div>
             </div>
 
@@ -713,7 +748,10 @@
                             <option value="normal" selected>By Normal</option>
                             <option value="height">By Height</option>
                             <option value="rgb">Original Colors</option>
+                            <option value="scan">By Scan</option>
                         </select>
+                        <!-- Per-scan color swatches — shown when "By Scan" is active -->
+                        <div id="scan-color-list" style="display:none;margin-top:8px;"></div>
                     </div>
                 </div>
             </div>
@@ -961,6 +999,16 @@
         let paintLabel = 2;         // wall by default
         let isMouseDown = false;
 
+        // Multi-scan tracking
+        let scanIds   = [];   // same length as points[] — which scan each point belongs to
+        let numScans  = 0;    // how many distinct scans are loaded
+        // Default palette for "By Scan" color mode — up to 8 scans
+        const SCAN_COLOR_DEFAULTS = [
+            '#ffffff', '#ff7700', '#00d9ff', '#f1c40f',
+            '#e74c3c', '#9b59b6', '#2ecc71', '#e91e63'
+        ];
+        let scanColors = [...SCAN_COLOR_DEFAULTS];  // user-editable hex strings
+
         // Guide Lines state
         let guideLines = [];        // [{type:'polygon'|'polyline', points:[{x,y,z}...], closed:bool}]
         let guideLinesGroup = null;
@@ -1032,6 +1080,15 @@
                 }
                 classifyByFarthestPlanes();
                 document.getElementById('selection-info').textContent = 'Undo: boundary change';
+            } else if (action.type === 'align') {
+                action.changes.forEach(({ index, prev }) => {
+                    points[index].x = prev.x;
+                    points[index].y = prev.y;
+                    points[index].z = prev.z;
+                });
+                rebuildPointCloud(); updateStats();
+                document.getElementById('selection-info').textContent =
+                    `Undo: alignment (${action.changes.length} pts moved)`;
             }
         }
 
@@ -1979,7 +2036,27 @@
 
         function updateColorMode(mode) {
             colorMode = mode;
+            document.getElementById('scan-color-list').style.display =
+                (mode === 'scan') ? 'block' : 'none';
+            if (mode === 'scan') updateScanColorList();
             rebuildPointCloud();
+        }
+
+        /** Renders per-scan color pickers inside #scan-color-list. */
+        function updateScanColorList() {
+            const el = document.getElementById('scan-color-list');
+            const names = ['Reference', 'Scan 2', 'Scan 3', 'Scan 4', 'Scan 5', 'Scan 6', 'Scan 7', 'Scan 8'];
+            let html = '';
+            for (let s = 0; s < numScans; s++) {
+                const hex = scanColors[s] || SCAN_COLOR_DEFAULTS[s % SCAN_COLOR_DEFAULTS.length];
+                html += `<div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;">
+                    <input type="color" value="${hex}"
+                           oninput="scanColors[${s}]=this.value; if(colorMode==='scan') rebuildPointCloud();"
+                           style="width:28px;height:22px;border:none;padding:0;cursor:pointer;border-radius:3px;background:none;">
+                    <span style="font-size:11px;color:#aaa;">${names[s] || ('Scan '+(s+1))}</span>
+                </div>`;
+            }
+            el.innerHTML = html || '<span style="font-size:10px;color:#666;">Load scans first.</span>';
         }
 
         // Visibility filters
@@ -2148,6 +2225,12 @@
                     }
                     return new THREE.Color(0x95a5a6);
 
+                case 'scan': {
+                    const sid = scanIds[index] ?? 0;
+                    const hex = scanColors[sid % scanColors.length] || '#ffffff';
+                    return new THREE.Color(hex);
+                }
+
                 case 'label':
                 default:
                     const labelColor = LABEL_COLORS[labels[index].toString()];
@@ -2303,6 +2386,9 @@
             labels = [];
             normals = [];
             rgbColors = [];
+            scanIds    = [];
+            numScans   = 1;
+            scanColors = [...SCAN_COLOR_DEFAULTS];   // reset colors on new load
             meshFaces = data.faces || null;
             scanRoomPlanes = (data.room_planes && data.room_planes.length) ? data.room_planes : null;
             deletedIndices.clear();
@@ -2321,16 +2407,13 @@
                         points.push({ x: p[0], y: p[1], z: p[2] });
                         normals.push({ x: p[3] || 0, y: p[4] || 0, z: p[5] || 0 });
                         labels.push(data.labels ? data.labels[i] : -1);
-                        rgbColors.push(null);
+                        rgbColors.push(null); scanIds.push(0);
                     } else if (p.x !== undefined) {
                         points.push({ x: p.x, y: p.y, z: p.z });
                         normals.push({ x: p.nx || 0, y: p.ny || 0, z: p.nz || 0 });
                         labels.push(p.label !== undefined ? p.label : -1);
-                        if (p.r !== undefined) {
-                            rgbColors.push({ r: p.r, g: p.g, b: p.b });
-                        } else {
-                            rgbColors.push(null);
-                        }
+                        rgbColors.push(p.r !== undefined ? { r: p.r, g: p.g, b: p.b } : null);
+                        scanIds.push(0);
                     }
                 });
             } else if (Array.isArray(data)) {
@@ -2339,11 +2422,8 @@
                         points.push({ x: p.x, y: p.y, z: p.z });
                         normals.push({ x: p.nx || 0, y: p.ny || 0, z: p.nz || 0 });
                         labels.push(p.label !== undefined ? p.label : -1);
-                        if (p.r !== undefined) {
-                            rgbColors.push({ r: p.r, g: p.g, b: p.b });
-                        } else {
-                            rgbColors.push(null);
-                        }
+                        rgbColors.push(p.r !== undefined ? { r: p.r, g: p.g, b: p.b } : null);
+                        scanIds.push(0);
                     }
                 });
             }
@@ -2407,6 +2487,7 @@
             const prevCount = points.length;
 
             // Parse new points using same logic as loadJSON
+            const newScanId = numScans;   // assign next scan ID to all inserted points
             const parsePoints = (src, labelsArr) => {
                 src.forEach((p, i) => {
                     if (Array.isArray(p)) {
@@ -2414,11 +2495,13 @@
                         normals.push({ x: p[3] || 0, y: p[4] || 0, z: p[5] || 0 });
                         labels.push(labelsArr ? labelsArr[i] : -1);
                         rgbColors.push(null);
+                        scanIds.push(newScanId);
                     } else if (p.x !== undefined) {
                         points.push({ x: p.x, y: p.y, z: p.z });
                         normals.push({ x: p.nx || 0, y: p.ny || 0, z: p.nz || 0 });
                         labels.push(p.label !== undefined ? p.label : -1);
                         rgbColors.push(p.r !== undefined ? { r: p.r, g: p.g, b: p.b } : null);
+                        scanIds.push(newScanId);
                     }
                 });
             };
@@ -2428,6 +2511,8 @@
             } else if (Array.isArray(data)) {
                 parsePoints(data, null);
             }
+
+            numScans++;   // next insert will get a new ID
 
             const addedCount = points.length - prevCount;
             if (addedCount === 0) { alert('No valid points found in file'); return; }
@@ -2453,10 +2538,215 @@
             }
             document.getElementById('y-range').textContent = `${minY.toFixed(2)} to ${maxY.toFixed(2)} m`;
 
+            // Auto-switch to "By Scan" so the user immediately sees the two clouds distinguished
+            colorMode = 'scan';
+            document.getElementById('color-mode').value = 'scan';
+            document.getElementById('scan-color-list').style.display = 'block';
+            updateScanColorList();
+
             rebuildPointCloud();
             updateStats();
             document.getElementById('selection-info').textContent =
                 `Inserted ${addedCount.toLocaleString()} points — total: ${points.length.toLocaleString()}`;
+        }
+
+        // ── Alignment Tool ─────────────────────────────────────────────────────
+        let alignMode         = false;
+        let alignEdges        = [];        // committed pairs [{ref0,ref1,mov0,mov1}]
+        let alignCurrent      = { ref: [], mov: [] };  // points being picked for current edge
+        let alignStep         = 'ref';     // 'ref' | 'mov'
+        let alignTargetScanId = 1;         // which scan is being moved
+        let alignMarkerGroup  = null;
+
+        function enterAlignMode() {
+            if (numScans < 2) {
+                alert('Insert a second scan first (➕ Insert Scan), then align.');
+                return;
+            }
+            alignMode    = true;
+            alignEdges   = [];
+            alignCurrent = { ref: [], mov: [] };
+            alignStep    = 'ref';
+            alignTargetScanId = numScans - 1;   // most recently inserted scan
+
+            // Disable orbit while picking
+            if (controls) controls.enableRotate = false;
+            document.getElementById('align-panel').style.display = 'block';
+            buildAlignMarkers();
+            updateAlignUI();
+        }
+
+        function exitAlignMode() {
+            alignMode = false;
+            if (controls) controls.enableRotate = !viewLocked;
+            document.getElementById('align-panel').style.display = 'none';
+            // Remove marker spheres
+            if (alignMarkerGroup) { scene.remove(alignMarkerGroup); alignMarkerGroup = null; }
+        }
+
+        function updateAlignUI() {
+            const stepEl = document.getElementById('align-step-text');
+            const applyBtn = document.getElementById('align-apply-btn');
+            let stepMsg = '';
+            if (alignStep === 'ref') {
+                const need = 2 - alignCurrent.ref.length;
+                stepMsg = need > 0
+                    ? `🟢 Click ${need} more point${need>1?'s':''} on the <b style="color:#2ecc71">reference scan</b>`
+                    : `🟢 Reference edge set. Now pick <b style="color:#f39c12">scan to align</b> edge.`;
+            } else {
+                const need = 2 - alignCurrent.mov.length;
+                stepMsg = need > 0
+                    ? `🟠 Click ${need} more point${need>1?'s':''} on the <b style="color:#f39c12">scan to align</b>`
+                    : `🟠 Pair ready — adding edge.`;
+            }
+            stepEl.innerHTML = stepMsg;
+
+            // Edge list
+            const listEl = document.getElementById('align-edge-list');
+            listEl.innerHTML = alignEdges.map((e, i) =>
+                `<div style="font-size:10px;color:#aaa;padding:2px 0;border-bottom:1px solid #1a2744;">
+                    Edge ${i+1}: ref (${e.ref0.x.toFixed(2)},${e.ref0.z.toFixed(2)})→(${e.ref1.x.toFixed(2)},${e.ref1.z.toFixed(2)})
+                </div>`
+            ).join('');
+
+            applyBtn.disabled = (alignEdges.length < 1);
+            applyBtn.style.opacity = alignEdges.length >= 1 ? '1' : '0.4';
+        }
+
+        function buildAlignMarkers() {
+            if (alignMarkerGroup) scene.remove(alignMarkerGroup);
+            alignMarkerGroup = new THREE.Group();
+            const mkSphere = (pos, color) => {
+                const m = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.04, 8, 8),
+                    new THREE.MeshBasicMaterial({ color })
+                );
+                m.position.set(pos.x, pos.y, pos.z);
+                return m;
+            };
+            // Committed edges — green (ref) and orange (mov)
+            alignEdges.forEach(e => {
+                [e.ref0, e.ref1].forEach(p => alignMarkerGroup.add(mkSphere(p, 0x2ecc71)));
+                [e.mov0, e.mov1].forEach(p => alignMarkerGroup.add(mkSphere(p, 0xf39c12)));
+            });
+            // Pending current edge
+            alignCurrent.ref.forEach(p => alignMarkerGroup.add(mkSphere(p, 0x2ecc71)));
+            alignCurrent.mov.forEach(p => alignMarkerGroup.add(mkSphere(p, 0xf39c12)));
+            scene.add(alignMarkerGroup);
+        }
+
+        function handleAlignClick(event) {
+            if (!pointCloud) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width)  *  2 - 1;
+            mouse.y = -((event.clientY - rect.top)  / rect.height) *  2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObject(pointCloud);
+            if (!hits.length) return;
+
+            const visIdx  = hits[0].index;
+            const origIdx = pointCloud.userData.visibleIndices[visIdx];
+            const pt      = { x: points[origIdx].x, y: points[origIdx].y, z: points[origIdx].z };
+            const isRef   = (scanIds[origIdx] === 0);
+            const isMov   = (scanIds[origIdx] === alignTargetScanId);
+
+            if (alignStep === 'ref') {
+                if (!isRef) {
+                    document.getElementById('align-step-text').innerHTML =
+                        '<span style="color:#e74c3c">⚠ Please click on the <b>reference</b> (original) scan point.</span>';
+                    return;
+                }
+                alignCurrent.ref.push(pt);
+                if (alignCurrent.ref.length === 2) alignStep = 'mov';
+            } else {
+                if (!isMov) {
+                    document.getElementById('align-step-text').innerHTML =
+                        '<span style="color:#e74c3c">⚠ Please click on the <b>scan to align</b> (inserted) point.</span>';
+                    return;
+                }
+                alignCurrent.mov.push(pt);
+                if (alignCurrent.mov.length === 2) {
+                    // Commit this edge pair
+                    alignEdges.push({
+                        ref0: alignCurrent.ref[0], ref1: alignCurrent.ref[1],
+                        mov0: alignCurrent.mov[0], mov1: alignCurrent.mov[1]
+                    });
+                    alignCurrent = { ref: [], mov: [] };
+                    alignStep = 'ref';
+                }
+            }
+            buildAlignMarkers();
+            updateAlignUI();
+        }
+
+        /**
+         * Kabsch 2D: finds rotation (XZ plane) + full translation from N point pairs.
+         * refPts and movPts are arrays of {x,z} (Y is handled separately as mean offset).
+         * Returns { cos, sin, tx, ty, tz } where ty is applied to Y axis.
+         */
+        function kabsch2D(refPts, movPts, refPts3, movPts3) {
+            const n = refPts.length;
+            // Centroids in XZ
+            let cx1=0, cz1=0, cx2=0, cz2=0;
+            for (let i=0;i<n;i++) { cx1+=refPts[i].x; cz1+=refPts[i].z; cx2+=movPts[i].x; cz2+=movPts[i].z; }
+            cx1/=n; cz1/=n; cx2/=n; cz2/=n;
+            // Cross-covariance H = sum (ref_demean * mov_demean^T) in 2D
+            let h00=0,h01=0,h10=0,h11=0;
+            for (let i=0;i<n;i++) {
+                const rx=refPts[i].x-cx1, rz=refPts[i].z-cz1;
+                const mx=movPts[i].x-cx2, mz=movPts[i].z-cz2;
+                h00+=mx*rx; h01+=mx*rz; h10+=mz*rx; h11+=mz*rz;
+            }
+            const theta = Math.atan2(h10 - h01, h00 + h11);
+            const cos = Math.cos(theta), sin = Math.sin(theta);
+            // Translation: t = ref_centroid - R * mov_centroid
+            const tx = cx1 - (cos*cx2 - sin*cz2);
+            const tz = cz1 - (sin*cx2 + cos*cz2);
+            // Y offset: mean Y difference
+            let cy1=0, cy2=0;
+            for (let i=0;i<n;i++) { cy1+=refPts3[i].y; cy2+=movPts3[i].y; }
+            const ty = (cy1 - cy2) / n;
+            return { cos, sin, tx, ty, tz };
+        }
+
+        function computeAndApplyAlignment() {
+            if (alignEdges.length === 0) return;
+
+            // Collect matching point pairs (edge endpoints)
+            const refPts  = [], movPts  = [];
+            const refPts3 = [], movPts3 = [];
+            alignEdges.forEach(e => {
+                refPts.push({x:e.ref0.x, z:e.ref0.z}); movPts.push({x:e.mov0.x, z:e.mov0.z});
+                refPts.push({x:e.ref1.x, z:e.ref1.z}); movPts.push({x:e.mov1.x, z:e.mov1.z});
+                refPts3.push(e.ref0); movPts3.push(e.mov0);
+                refPts3.push(e.ref1); movPts3.push(e.mov1);
+            });
+
+            const { cos, sin, tx, ty, tz } = kabsch2D(refPts, movPts, refPts3, movPts3);
+
+            // Save undo snapshot for aligned points
+            const alignChanges = [];
+            points.forEach((p, i) => {
+                if (scanIds[i] !== alignTargetScanId) return;
+                alignChanges.push({ index: i, prev: { x: p.x, y: p.y, z: p.z } });
+            });
+            pushUndo({ type: 'align', changes: alignChanges });
+
+            // Apply rotation + translation
+            points.forEach((p, i) => {
+                if (scanIds[i] !== alignTargetScanId) return;
+                const nx =  cos * p.x - sin * p.z + tx;
+                const nz =  sin * p.x + cos * p.z + tz;
+                p.x = nx;
+                p.z = nz;
+                p.y += ty;
+            });
+
+            rebuildPointCloud();
+            updateStats();
+            document.getElementById('selection-info').textContent =
+                `Alignment applied (${alignEdges.length} edge pair${alignEdges.length>1?'s':''}).`;
+            exitAlignMode();
         }
 
         function centerCamera() {
@@ -2470,6 +2760,9 @@
         }
 
         function onMouseClick(event) {
+            // ── Align mode intercept ──────────────────────────────────────────
+            if (alignMode) { handleAlignClick(event); return; }
+
             // ── Paint / Erase tool intercept ─────────────────────────────────
             if (activeTool === 'paint' || activeTool === 'erase') {
                 applyBrushAt(event);
