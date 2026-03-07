@@ -690,17 +690,17 @@
         .snap-opt:hover { background: #1e3a5f; border-color: #00d9ff; color: #fff; }
         .snap-opt.active { background: #003344; border-color: #00d9ff; color: #00d9ff; }
         /* Paint label swatches — 2-col grid, square with rounded corners */
-        #paint-palette { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-top: 2px; }
+        #paint-palette { display: flex; gap: 3px; margin-top: 2px; flex-wrap: wrap; }
         .paint-swatch {
-            aspect-ratio: 1;
-            border-radius: 4px;
-            border: 2px solid transparent;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+            width: 18px; height: 18px;
+            border-radius: 3px;
+            border: 1.5px solid transparent;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.4);
             cursor: pointer;
             transition: transform 0.12s, border-color 0.12s;
         }
-        .paint-swatch:hover  { transform: scale(1.08); }
-        .paint-swatch.active { border-color: #fff; transform: scale(1.1); box-shadow: 0 2px 8px rgba(255,255,255,0.25); }
+        .paint-swatch:hover  { transform: scale(1.15); }
+        .paint-swatch.active { border-color: #fff; transform: scale(1.2); box-shadow: 0 1px 6px rgba(255,255,255,0.3); }
 
         /* ── Collapsible Cards ─────────────────────────────────── */
         #sidebar {
