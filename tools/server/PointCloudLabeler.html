@@ -873,18 +873,6 @@
 
             <div class="tool-separator"></div>
 
-            <!-- Paint Palette -->
-            <div class="tool-section-label">Label</div>
-            <div id="paint-palette">
-                <div class="paint-swatch"        data-label="0" style="background:#2ecc71" title="Floor (0)"></div>
-                <div class="paint-swatch"        data-label="1" style="background:#f1c40f" title="Ceiling (1)"></div>
-                <div class="paint-swatch active" data-label="2" style="background:#3498db" title="Wall (2)"></div>
-                <div class="paint-swatch"        data-label="3" style="background:#e74c3c" title="Object (3)"></div>
-                <div class="paint-swatch"        data-label="4" style="background:#9b59b6" title="Noise (4)"></div>
-                <div class="paint-swatch"        data-label="5" style="background:#e68080" title="Obj Top (5)"></div>
-                <div class="paint-swatch"        data-label="6" style="background:#ff00ff" title="Back Refl (6)"></div>
-            </div>
-
             <!-- Scans -->
             <div class="tool-section-label">Scans</div>
             <div class="tools-grid">
@@ -1126,6 +1114,18 @@
                     <span>🏷️ Labels</span><span class="card-icon" id="card-icon-labels">▼</span>
                 </div>
                 <div class="card-body" id="card-body-labels">
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:10px;color:#666;margin-bottom:4px;">Paint Palette</div>
+                        <div id="paint-palette">
+                            <div class="paint-swatch"        data-label="0" style="background:#2ecc71" title="Floor (0)"></div>
+                            <div class="paint-swatch"        data-label="1" style="background:#f1c40f" title="Ceiling (1)"></div>
+                            <div class="paint-swatch active" data-label="2" style="background:#3498db" title="Wall (2)"></div>
+                            <div class="paint-swatch"        data-label="3" style="background:#e74c3c" title="Object (3)"></div>
+                            <div class="paint-swatch"        data-label="4" style="background:#9b59b6" title="Noise (4)"></div>
+                            <div class="paint-swatch"        data-label="5" style="background:#e68080" title="Obj Top (5)"></div>
+                            <div class="paint-swatch"        data-label="6" style="background:#ff00ff" title="Back Refl (6)"></div>
+                        </div>
+                    </div>
                     <button class="btn btn-floor" onclick="labelSelected(0)"><span class="color-dot" style="background:#2ecc71"></span>Floor (1)</button>
                     <button class="btn btn-ceiling" onclick="labelSelected(1)"><span class="color-dot" style="background:#f1c40f"></span>Ceiling (2)</button>
                     <button class="btn btn-wall" onclick="labelSelected(2)"><span class="color-dot" style="background:#3498db"></span>Wall (3)</button>
