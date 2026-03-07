@@ -1310,7 +1310,8 @@
                 <div style="display:flex;gap:6px;margin-bottom:10px;">
                     <button onclick="fmNewFolder()" style="padding:4px 10px;background:#1a2744;color:#00d9ff;border:1px solid #0f3460;border-radius:5px;font-size:11px;cursor:pointer;">+ Folder</button>
                     <button onclick="fmRefresh()" style="padding:4px 10px;background:#1a2744;color:#aaa;border:1px solid #0f3460;border-radius:5px;font-size:11px;cursor:pointer;">Refresh</button>
-                    <div style="flex:1"></div>
+                    <input id="fm-search" type="text" placeholder="Search files…" oninput="fmFilter(this.value)"
+                        style="flex:1;padding:4px 8px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:5px;font-size:11px;min-width:80px;">
                     <span id="fm-status" style="font-size:10px;color:#666;align-self:center;"></span>
                 </div>
                 <!-- File list -->
@@ -4231,7 +4232,22 @@
             document.getElementById('fm-modal').style.display = 'none';
         }
 
-        function fmRefresh() { fmLoadDir(fmCurrentPath); }
+        let fmAllItems = []; // cached items for search filtering
+
+        function fmRefresh() {
+            document.getElementById('fm-search').value = '';
+            fmLoadDir(fmCurrentPath);
+        }
+
+        function fmFilter(query) {
+            const q = query.toLowerCase().trim();
+            if (!q) {
+                fmRenderItems(fmAllItems);
+                return;
+            }
+            const filtered = fmAllItems.filter(item => item.name.toLowerCase().includes(q));
+            fmRenderItems(filtered);
+        }
 
         async function fmLoadDir(path) {
             fmCurrentPath = path;
@@ -4245,50 +4261,57 @@
                 const res = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const { items } = await res.json();
-
-                if (!items || items.length === 0) {
-                    listEl.innerHTML = '<div style="color:#666;font-size:11px;padding:10px;">Empty folder</div>';
-                    statusEl.textContent = '0 items';
-                    return;
-                }
-
-                const folders = items.filter(i => i.type === 'folder');
-                const files = items.filter(i => i.type === 'file');
-                statusEl.textContent = `${folders.length} folders, ${files.length} files`;
-
-                listEl.innerHTML = items.map(item => {
-                    const isFolder = item.type === 'folder';
-                    const icon = isFolder ? '📁' : (item.name.endsWith('.json') ? '📄' : '📎');
-                    const size = isFolder ? '' : fmFormatSize(item.size);
-                    const pts = item.num_points ? ` · ${Number(item.num_points).toLocaleString()} pts` : '';
-                    const date = item.modified ? new Date(item.modified).toLocaleDateString() : '';
-                    const itemPath = path ? path + '/' + item.name : item.name;
-
-                    return `<div style="display:flex;align-items:center;padding:6px 8px;background:#1a2744;border:1px solid #0f3460;border-radius:6px;font-size:11px;gap:8px;"
-                        onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
-                        <span style="cursor:${isFolder ? 'pointer' : 'default'};flex:1;display:flex;align-items:center;gap:6px;"
-                            ${isFolder ? `onclick="fmLoadDir('${itemPath.replace(/'/g, "\\'")}')"` : ''}>
-                            <span>${icon}</span>
-                            <span style="color:#fff;${isFolder ? 'font-weight:600;' : ''}">${item.name}</span>
-                            <span style="color:#555;font-size:9px;">${size}${pts}</span>
-                            <span style="color:#444;font-size:9px;margin-left:auto;">${date}</span>
-                        </span>
-                        <span style="display:flex;gap:4px;">
-                            ${!isFolder ? `<button onclick="fmOpenScan('${itemPath.replace(/'/g, "\\'")}')" title="Open in labeler"
-                                style="padding:2px 6px;background:#0f3460;color:#00d9ff;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">Open</button>` : ''}
-                            <button onclick="fmRename('${itemPath.replace(/'/g, "\\'")}')" title="Rename"
-                                style="padding:2px 6px;background:#0f3460;color:#aaa;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">✏️</button>
-                            ${!isFolder ? `<button onclick="fmCopy('${itemPath.replace(/'/g, "\\'")}')" title="Copy"
-                                style="padding:2px 6px;background:#0f3460;color:#aaa;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">📋</button>` : ''}
-                            <button onclick="fmDelete('${itemPath.replace(/'/g, "\\'")}')" title="Delete"
-                                style="padding:2px 6px;background:#3a1010;color:#f55;border:1px solid #5a2020;border-radius:3px;font-size:9px;cursor:pointer;">🗑</button>
-                        </span>
-                    </div>`;
-                }).join('');
-
+                fmAllItems = items || [];
+                fmRenderItems(fmAllItems);
             } catch (err) {
                 listEl.innerHTML = `<div style="color:#f55;font-size:11px;padding:10px;">Error: ${err.message}</div>`;
             }
+        }
+
+        function fmRenderItems(items) {
+            const listEl = document.getElementById('fm-list');
+            const statusEl = document.getElementById('fm-status');
+            const path = fmCurrentPath;
+
+            if (!items || items.length === 0) {
+                listEl.innerHTML = '<div style="color:#666;font-size:11px;padding:10px;">No matches</div>';
+                statusEl.textContent = '0 items';
+                return;
+            }
+
+            const folders = items.filter(i => i.type === 'folder');
+            const files = items.filter(i => i.type === 'file');
+            statusEl.textContent = `${folders.length} folders, ${files.length} files`;
+
+            listEl.innerHTML = items.map(item => {
+                const isFolder = item.type === 'folder';
+                const icon = isFolder ? '📁' : (item.name.endsWith('.json') ? '📄' : '📎');
+                const size = isFolder ? '' : fmFormatSize(item.size);
+                const pts = item.num_points ? ` · ${Number(item.num_points).toLocaleString()} pts` : '';
+                const date = item.modified ? new Date(item.modified).toLocaleDateString() : '';
+                const itemPath = path ? path + '/' + item.name : item.name;
+
+                return `<div style="display:flex;align-items:center;padding:6px 8px;background:#1a2744;border:1px solid #0f3460;border-radius:6px;font-size:11px;gap:8px;"
+                    onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
+                    <span style="cursor:${isFolder ? 'pointer' : 'default'};flex:1;display:flex;align-items:center;gap:6px;"
+                        ${isFolder ? `onclick="fmLoadDir('${itemPath.replace(/'/g, "\\'")}')"` : ''}>
+                        <span>${icon}</span>
+                        <span style="color:#fff;${isFolder ? 'font-weight:600;' : ''}">${item.name}</span>
+                        <span style="color:#555;font-size:9px;">${size}${pts}</span>
+                        <span style="color:#444;font-size:9px;margin-left:auto;">${date}</span>
+                    </span>
+                    <span style="display:flex;gap:4px;">
+                        ${!isFolder ? `<button onclick="fmOpenScan('${itemPath.replace(/'/g, "\\'")}')" title="Open in labeler"
+                            style="padding:2px 6px;background:#0f3460;color:#00d9ff;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">Open</button>` : ''}
+                        <button onclick="fmRename('${itemPath.replace(/'/g, "\\'")}')" title="Rename"
+                            style="padding:2px 6px;background:#0f3460;color:#aaa;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">✏️</button>
+                        ${!isFolder ? `<button onclick="fmCopy('${itemPath.replace(/'/g, "\\'")}')" title="Copy"
+                            style="padding:2px 6px;background:#0f3460;color:#aaa;border:1px solid #0f3460;border-radius:3px;font-size:9px;cursor:pointer;">📋</button>` : ''}
+                        <button onclick="fmDelete('${itemPath.replace(/'/g, "\\'")}')" title="Delete"
+                            style="padding:2px 6px;background:#3a1010;color:#f55;border:1px solid #5a2020;border-radius:3px;font-size:9px;cursor:pointer;">🗑</button>
+                    </span>
+                </div>`;
+            }).join('');
         }
 
         function fmUpdateBreadcrumb(path) {
