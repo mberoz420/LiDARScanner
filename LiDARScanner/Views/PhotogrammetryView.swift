@@ -4,6 +4,7 @@ import ARKit
 import RealityKit
 import CoreImage
 import CoreMedia
+import PhotosUI
 
 // MARK: - Geometry Analyzer
 
@@ -415,11 +416,15 @@ struct PhotogrammetryView: View {
     @State private var isCapturing = false
     /// Project picker state
     @State private var showProjectPicker = false
+    /// Photo import picker
+    @State private var showPhotoPicker = false
+    @State private var importedPhotoDir: URL?
+    @State private var importProgress: String?
 
     @ObservedObject private var settings = AppSettings.shared
 
     enum Phase { case capturing, processing, done, failed }
-    enum CaptureMode { case cube, free, photoOnly, lidarOnly }
+    enum CaptureMode { case cube, free, photoOnly, lidarOnly, importPhotos }
 
     /// Standard init — launches with ARKit scanning + auto-capture.
     init() {
@@ -436,7 +441,7 @@ struct PhotogrammetryView: View {
     // MARK: - Helpers
 
     var capturedCount: Int {
-        if let dir = preloadedPhotoDir {
+        if let dir = importedPhotoDir ?? preloadedPhotoDir {
             return (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
                 .filter { ["jpg","heic","png"].contains($0.pathExtension.lowercased()) }.count ?? 0
         }
@@ -444,7 +449,7 @@ struct PhotogrammetryView: View {
     }
 
     var inputPhotoDir: URL {
-        preloadedPhotoDir ?? meshManager.autoCapture.photoDir
+        importedPhotoDir ?? preloadedPhotoDir ?? meshManager.autoCapture.photoDir
     }
 
     var effectiveTarget: Int? { preset.targetCount }
@@ -464,7 +469,7 @@ struct PhotogrammetryView: View {
         return min(Double(capturedCount) / Double(target), 1)
     }
 
-    var canProcess: Bool { capturedCount >= preset.minToProcess }
+    var canProcess: Bool { capturedCount >= preset.minToProcess || importedPhotoDir != nil }
 
     /// True when the stop button should be enabled.
     /// For photo modes: need at least one photo.
@@ -563,7 +568,7 @@ struct PhotogrammetryView: View {
                     showProjectPicker = false
                     if captureMode == .lidarOnly {
                         sendScanOnly(project: project.isEmpty ? nil : project)
-                    } else if capturedCount > 0 {
+                    } else if capturedCount > 0 || importedPhotoDir != nil {
                         sendToLabeler(project: project.isEmpty ? nil : project)
                     }
                 },
@@ -571,6 +576,16 @@ struct PhotogrammetryView: View {
                     showProjectPicker = false
                 }
             )
+        }
+        .sheet(isPresented: $showPhotoPicker) {
+            PhotoImportPicker { images in
+                showPhotoPicker = false
+                guard !images.isEmpty else {
+                    captureMode = nil
+                    return
+                }
+                importPhotosToTempDir(images)
+            }
         }
     }
 
@@ -627,6 +642,15 @@ struct PhotogrammetryView: View {
                     if isCapturing {
                         Text("Walk around the room")
                             .font(.system(size: 9)).foregroundColor(.white.opacity(0.6))
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Color.black.opacity(0.55)).cornerRadius(10)
+            } else if captureMode == .importPhotos, let progress = importProgress {
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 4) {
+                        ProgressView().tint(.white)
+                        Text(progress).font(.caption2).foregroundColor(.white)
                     }
                 }
                 .padding(.horizontal, 8).padding(.vertical, 6)
@@ -851,6 +875,10 @@ struct PhotogrammetryView: View {
                 modeCard(icon: "cube.transparent", label: "LiDAR", color: .purple) {
                     selectMode(.lidarOnly)
                 }
+                modeCard(icon: "photo.on.rectangle.angled", label: "Import", color: .orange) {
+                    selectMode(.importPhotos)
+                    showPhotoPicker = true
+                }
             }
             .padding(.bottom, 140)
         }
@@ -1034,6 +1062,10 @@ struct PhotogrammetryView: View {
             break
         case .lidarOnly:
             break
+        case .importPhotos:
+            // AR not needed — stop scanning to save resources
+            if meshManager.isScanning { _ = meshManager.stopScanning() }
+            meshManager.arViewSession?.pause()
         }
     }
 
@@ -1124,7 +1156,7 @@ struct PhotogrammetryView: View {
     }
 
     func startProcessing() {
-        guard canProcess || preloadedPhotoDir != nil else { return }
+        guard canProcess || preloadedPhotoDir != nil || importedPhotoDir != nil else { return }
         meshManager.autoCapture.isEnabled = false
         isCapturing = false
         if meshManager.isScanning { _ = meshManager.stopScanning() }
@@ -1139,6 +1171,38 @@ struct PhotogrammetryView: View {
                 await MainActor.run { outputURL = output; phase = .done }
             } catch {
                 await MainActor.run { errorMessage = error.localizedDescription; phase = .failed }
+            }
+        }
+    }
+
+    func importPhotosToTempDir(_ images: [UIImage]) {
+        importProgress = "Preparing \(images.count) photos…"
+        phase = .capturing
+        isCapturing = false
+
+        Task {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("import_\(Int(Date().timeIntervalSince1970))")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+            for (i, img) in images.enumerated() {
+                let name = String(format: "photo_%04d.jpg", i)
+                let url = dir.appendingPathComponent(name)
+                if let data = img.jpegData(compressionQuality: 0.92) {
+                    try? data.write(to: url)
+                }
+                await MainActor.run {
+                    importProgress = "Saved \(i + 1)/\(images.count) photos"
+                    captureCount = i + 1
+                }
+            }
+
+            await MainActor.run {
+                importedPhotoDir = dir
+                importProgress = nil
+                // Go straight to done — user can process or upload
+                phase = .done
+                showProjectPicker = true
             }
         }
     }
@@ -1165,6 +1229,49 @@ struct PhotogrammetryView: View {
                 throw CancellationError()
             default:
                 break
+            }
+        }
+    }
+}
+
+// MARK: - Photo Import Picker
+
+struct PhotoImportPicker: UIViewControllerRepresentable {
+    let onComplete: ([UIImage]) -> Void
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.selectionLimit = 200
+        config.filter = .images
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ vc: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onComplete: onComplete) }
+
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let onComplete: ([UIImage]) -> Void
+        init(onComplete: @escaping ([UIImage]) -> Void) { self.onComplete = onComplete }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            guard !results.isEmpty else { onComplete([]); return }
+
+            var images: [UIImage] = []
+            let group = DispatchGroup()
+            for result in results {
+                guard result.itemProvider.canLoadObject(ofClass: UIImage.self) else { continue }
+                group.enter()
+                result.itemProvider.loadObject(ofClass: UIImage.self) { obj, _ in
+                    if let img = obj as? UIImage { images.append(img) }
+                    group.leave()
+                }
+            }
+            group.notify(queue: .main) { [weak self] in
+                self?.onComplete(images)
             }
         }
     }
