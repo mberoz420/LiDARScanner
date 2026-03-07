@@ -27,6 +27,9 @@ define('ROOT_PATH',     dirname(__DIR__));
 define('INCLUDES_PATH', __DIR__);
 define('SCANS_PATH',    ROOT_PATH . '/scans');
 
+// ── Admin ────────────────────────────────────────────────────────────────────
+define('ADMIN_EMAIL', 'mberoz42@gmail.com');  // receives registration notifications
+
 // ── Anthropic API Key (for AI door/window detection) ─────────────────────────
 define('ANTHROPIC_API_KEY', '');  // fill in your key at https://console.anthropic.com
 

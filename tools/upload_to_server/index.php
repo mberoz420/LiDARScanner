@@ -64,6 +64,14 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
             </button>
             <div class="user-dropdown" id="userDropdown">
                 <div class="dropdown-email"><?= htmlspecialchars($user['email'] ?? '') ?></div>
+                <?php if (!empty($user['is_admin'])): ?>
+                <a href="admin.php" class="dropdown-item">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197"/>
+                    </svg>
+                    Admin Panel
+                </a>
+                <?php endif; ?>
                 <a href="#" onclick="logout()" class="dropdown-item danger">
                     <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
@@ -162,7 +170,7 @@ $latestDate = $total > 0 ? date('M j', $scans[0]['timestamp'] ?? time()) : '—'
             <?php endif; ?>
 
             <div class="scan-actions">
-                <a href="PointCloudLabeler.html?v=2.0&scan=<?= $filename ?>" class="btn-view">
+                <a href="labeler.php?v=2.0&scan=<?= $filename ?>" class="btn-view">
                     Open in Labeler
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>

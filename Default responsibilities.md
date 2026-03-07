@@ -96,9 +96,16 @@
 - **file_manager.php** - Full CRUD file manager API: list, mkdir, delete, copy, rename, move. Path sanitized against traversal
 - **detect_features.php** - AI door/window detection via Anthropic API (Claude Vision)
 - **build_status.php** - Build/processing status
-- **index.php** - Web dashboard
-- **login.php** - Authentication
-- **includes/config.php** - DB credentials, API keys, paths, limits
+- **index.php** - Web dashboard (auth-protected, shows user menu with admin link)
+- **login.php** - Login/Register tabbed UI. New registrations go to 'pending' status
+- **labeler.php** - Session-checking wrapper that serves PointCloudLabeler.html to authenticated users
+- **admin.php** - Admin panel: view pending/approved/rejected users, approve/reject with email notifications
+- **setup_db.php** - One-time DB setup: creates users table + default admin account. DELETE after running
+- **api/auth.php** - Auth API: login, register, logout, approve, reject, list_users
+- **includes/config.php** - DB credentials, API keys, paths, limits, ADMIN_EMAIL
+- **includes/db.php** - PDO connection helper (singleton)
+- **includes/.htaccess** - Blocks direct web access to include files
+- **.htaccess** - Blocks direct access to PointCloudLabeler.html, config.php, setup_db.php
 
 ---
 

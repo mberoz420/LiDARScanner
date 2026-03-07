@@ -1,0 +1,17 @@
+# Block direct access to PointCloudLabeler.html — must go through labeler.php
+<Files "PointCloudLabeler.html">
+    Require all denied
+</Files>
+
+# Block access to config and setup files
+<Files "config.php">
+    Require all denied
+</Files>
+<Files "setup_db.php">
+    Require all denied
+</Files>
+
+# Block access to includes directory
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
