@@ -1053,19 +1053,9 @@
         <div id="sidebar">
             <div class="sidebar-title">⚡ Point Cloud Labeler <span style="font-size:10px;opacity:0.35;font-weight:400;">v2.0</span></div>
 
-            <!-- FILE -->
-            <div class="card">
-                <div class="card-header" onclick="toggleCard('file')">
-                    <span>📁 File</span><span class="card-icon" id="card-icon-file">▼</span>
-                </div>
-                <div class="card-body" id="card-body-file">
-                    <div id="dropzone" onclick="document.getElementById('file-input').click()">
-                        <p>Drop JSON file here</p>
-                        <p style="font-size:11px;color:#888;margin-top:4px;">or click to browse</p>
-                    </div>
-                    <input type="file" id="file-input" accept=".json" />
-                </div>
-            </div>
+            <!-- Hidden file input + dropzone kept for JS compatibility -->
+            <input type="file" id="file-input" accept=".json" style="display:none" />
+            <div id="dropzone" style="display:none"></div>
 
             <!-- DISPLAY -->
             <div class="card">
