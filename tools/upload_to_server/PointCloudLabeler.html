@@ -783,11 +783,7 @@
                 <div class="menu-dropdown-item" onclick="closeMenus(); exportForTraining()">
                     <span>Export for ML Training</span>
                 </div>
-            </div>
-        </div>
-        <div class="menu-item" onclick="toggleMenu(this)">
-            Files
-            <div class="menu-dropdown" onclick="event.stopPropagation()">
+                <div class="menu-sep"></div>
                 <div class="menu-dropdown-item" onclick="closeMenus(); showFileManager()">
                     <span>File Manager…</span>
                 </div>
@@ -1307,12 +1303,17 @@
                 <!-- Breadcrumb -->
                 <div id="fm-breadcrumb" style="font-size:11px;color:#888;margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap;"></div>
                 <!-- Toolbar -->
-                <div style="display:flex;gap:6px;margin-bottom:10px;">
+                <div style="display:flex;gap:6px;margin-bottom:6px;">
                     <button onclick="fmNewFolder()" style="padding:4px 10px;background:#1a2744;color:#00d9ff;border:1px solid #0f3460;border-radius:5px;font-size:11px;cursor:pointer;">+ Folder</button>
                     <button onclick="fmRefresh()" style="padding:4px 10px;background:#1a2744;color:#aaa;border:1px solid #0f3460;border-radius:5px;font-size:11px;cursor:pointer;">Refresh</button>
                     <input id="fm-search" type="text" placeholder="Search files…" oninput="fmFilter(this.value)"
                         style="flex:1;padding:4px 8px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:5px;font-size:11px;min-width:80px;">
                     <span id="fm-status" style="font-size:10px;color:#666;align-self:center;"></span>
+                </div>
+                <div style="display:flex;gap:6px;margin-bottom:10px;">
+                    <button onclick="fmSelectAll()" style="padding:3px 8px;background:#1a2744;color:#aaa;border:1px solid #0f3460;border-radius:4px;font-size:10px;cursor:pointer;">Select All</button>
+                    <button onclick="fmDeselectAll()" style="padding:3px 8px;background:#1a2744;color:#aaa;border:1px solid #0f3460;border-radius:4px;font-size:10px;cursor:pointer;">Deselect All</button>
+                    <button id="fm-bulk-delete" onclick="fmBulkDelete()" style="display:none;padding:3px 8px;background:#3a1010;color:#f55;border:1px solid #5a2020;border-radius:4px;font-size:10px;cursor:pointer;">Delete Selected (<span id="fm-sel-count">0</span>)</button>
                 </div>
                 <!-- File list -->
                 <div id="fm-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:3px;min-height:200px;"></div>
@@ -4233,10 +4234,59 @@
         }
 
         let fmAllItems = []; // cached items for search filtering
+        let fmSelected = new Set(); // selected item paths for bulk ops
 
         function fmRefresh() {
             document.getElementById('fm-search').value = '';
+            fmSelected.clear();
+            fmUpdateBulkUI();
             fmLoadDir(fmCurrentPath);
+        }
+
+        function fmToggleSelect(itemPath, checkbox) {
+            if (checkbox.checked) fmSelected.add(itemPath);
+            else fmSelected.delete(itemPath);
+            fmUpdateBulkUI();
+        }
+
+        function fmSelectAll() {
+            document.querySelectorAll('.fm-checkbox').forEach(cb => { cb.checked = true; fmSelected.add(cb.dataset.path); });
+            fmUpdateBulkUI();
+        }
+
+        function fmDeselectAll() {
+            document.querySelectorAll('.fm-checkbox').forEach(cb => cb.checked = false);
+            fmSelected.clear();
+            fmUpdateBulkUI();
+        }
+
+        function fmUpdateBulkUI() {
+            const btn = document.getElementById('fm-bulk-delete');
+            const cnt = document.getElementById('fm-sel-count');
+            cnt.textContent = fmSelected.size;
+            btn.style.display = fmSelected.size > 0 ? 'inline-block' : 'none';
+        }
+
+        async function fmBulkDelete() {
+            const count = fmSelected.size;
+            if (count === 0) return;
+            if (!confirm(`Delete ${count} selected item${count > 1 ? 's' : ''}?`)) return;
+            let errors = 0;
+            for (const path of fmSelected) {
+                try {
+                    const res = await fetch(SERVER_BASE + '/file_manager.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                        body: JSON.stringify({ action: 'delete', path })
+                    });
+                    const data = await res.json();
+                    if (!data.success) errors++;
+                } catch (e) { errors++; }
+            }
+            fmSelected.clear();
+            fmUpdateBulkUI();
+            if (errors > 0) alert(`${errors} item${errors > 1 ? 's' : ''} failed to delete`);
+            fmRefresh();
         }
 
         function fmFilter(query) {
@@ -4291,8 +4341,12 @@
                 const date = item.modified ? new Date(item.modified).toLocaleDateString() : '';
                 const itemPath = path ? path + '/' + item.name : item.name;
 
+                const checked = fmSelected.has(itemPath) ? 'checked' : '';
                 return `<div style="display:flex;align-items:center;padding:6px 8px;background:#1a2744;border:1px solid #0f3460;border-radius:6px;font-size:11px;gap:8px;"
                     onmouseover="this.style.borderColor='#00d9ff'" onmouseout="this.style.borderColor='#0f3460'">
+                    <input type="checkbox" class="fm-checkbox" data-path="${itemPath.replace(/"/g, '&quot;')}" ${checked}
+                        onchange="fmToggleSelect('${itemPath.replace(/'/g, "\\'")}', this)"
+                        style="width:14px;height:14px;cursor:pointer;flex-shrink:0;">
                     <span style="cursor:${isFolder ? 'pointer' : 'default'};flex:1;display:flex;align-items:center;gap:6px;"
                         ${isFolder ? `onclick="fmLoadDir('${itemPath.replace(/'/g, "\\'")}')"` : ''}>
                         <span>${icon}</span>
