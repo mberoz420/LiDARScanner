@@ -912,6 +912,28 @@
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-windows" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#00BCD4"></span>Windows</label>
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="show-covings" onchange="updateVisibility()" style="width:12px;height:12px;"><span class="color-dot" style="background:#FF8C42"></span>Covings</label>
             </div>
+
+            <!-- Display -->
+            <div class="tool-separator"></div>
+            <div class="tool-section-label">Display</div>
+            <div style="padding:2px 2px;font-size:10px;">
+                <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+                    <span style="color:#888;white-space:nowrap;">Size: <span id="size-value">0.5</span></span>
+                    <input type="range" id="size-slider" min="0.1" max="1" step="0.05" value="0.5" onchange="updatePointSize(this.value)" style="flex:1;height:14px;">
+                </div>
+                <div style="display:flex;gap:3px;margin-bottom:4px;">
+                    <button onclick="decreasePointSize()" style="flex:1;padding:2px 4px;font-size:9px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:3px;cursor:pointer;">− Smaller</button>
+                    <button onclick="increasePointSize()" style="flex:1;padding:2px 4px;font-size:9px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:3px;cursor:pointer;">+ Bigger</button>
+                </div>
+                <select id="color-mode" onchange="updateColorMode(this.value)" style="width:100%;padding:4px;background:#0f3460;color:#fff;border:1px solid #0f3460;border-radius:3px;font-size:10px;">
+                    <option value="label">By Label</option>
+                    <option value="normal" selected>By Normal</option>
+                    <option value="height">By Height</option>
+                    <option value="rgb">Original Colors</option>
+                    <option value="scan">By Scan</option>
+                </select>
+                <div id="scan-color-list" style="display:none;margin-top:4px;"></div>
+            </div>
         </div>
 
         <div id="viewer">
@@ -1045,35 +1067,7 @@
             <input type="file" id="file-input" accept=".json" style="display:none" />
             <div id="dropzone" style="display:none"></div>
 
-            <!-- DISPLAY -->
-            <div class="card">
-                <div class="card-header" onclick="toggleCard('display')">
-                    <span>🎨 Display</span><span class="card-icon" id="card-icon-display">▶</span>
-                </div>
-                <div class="card-body" id="card-body-display" style="display:none">
-                    <div class="input-group">
-                        <label>Point size: <span id="size-value">0.5</span></label>
-                        <input type="range" id="size-slider" min="0.1" max="1" step="0.05" value="0.5" onchange="updatePointSize(this.value)">
-                        <div style="display:flex;gap:5px;margin-top:5px;">
-                            <button class="btn btn-action btn-small" onclick="decreasePointSize()">− Smaller</button>
-                            <button class="btn btn-action btn-small" onclick="increasePointSize()">+ Bigger</button>
-                        </div>
-                        <p class="keyboard-hint">[ ] keys to adjust size</p>
-                    </div>
-                    <div class="input-group">
-                        <label>Color Mode</label>
-                        <select id="color-mode" onchange="updateColorMode(this.value)" style="width:100%;padding:8px;background:#0f3460;color:#fff;border:1px solid #0f3460;border-radius:4px;">
-                            <option value="label">By Label</option>
-                            <option value="normal" selected>By Normal</option>
-                            <option value="height">By Height</option>
-                            <option value="rgb">Original Colors</option>
-                            <option value="scan">By Scan</option>
-                        </select>
-                        <!-- Per-scan color swatches — shown when "By Scan" is active -->
-                        <div id="scan-color-list" style="display:none;margin-top:8px;"></div>
-                    </div>
-                </div>
-            </div>
+            <!-- Display moved to left toolbar -->
 
             <!-- VIEWS -->
             <div class="card">
