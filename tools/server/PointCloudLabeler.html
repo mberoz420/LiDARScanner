@@ -1067,6 +1067,12 @@
                          onclick="alignByWallEdges()" title="Align selected scans to reference by matching wall edges from top view">⬡ Align by Wall Edges</div>
                 </div>
 
+                <!-- Density lines (horizontal plane detection) -->
+                <div style="margin-top:4px;">
+                    <div class="dpad-btn" style="width:100%;border-radius:6px;background:#1a2744;border-color:#7c3aed;color:#a78bfa;"
+                         onclick="toggleDensityLines()" title="Show/hide horizontal lines at dominant Y-density peaks (floors, ceilings, tables)">━ Density Lines</div>
+                </div>
+
                 <!-- Delete selected scans -->
                 <div style="margin-top:4px;">
                     <div class="dpad-btn" style="width:100%;border-radius:6px;background:#7f1d1d;border-color:#991b1b;color:#fca5a5;"
@@ -1963,6 +1969,7 @@
         let meshFaces = null;               // [[i0,i1,i2], ...] from pointcloud.json
         let scanRoomPlanes = null;          // ARKit plane anchors from room_planes[] in scan JSON
         let roomOutlineGroup = null;        // THREE.Group for floor/ceiling outline lines
+        let densityLinesGroup = null;       // THREE.Group for Y-density horizontal planes
 
         // ── Draw Mode ──────────────────────────────────────────────────────────
         let drawMode = false;
@@ -2564,6 +2571,140 @@
                 distanceFilterMax = parseFloat(slider.max);
                 document.getElementById('dist-value').textContent = distanceFilterMax.toFixed(1) + ' m';
             }
+        }
+
+        /**
+         * Density Lines — detect dominant Y levels and draw horizontal planes.
+         * Builds a Y-histogram, finds peaks, draws cross-hair rectangles in the scene.
+         */
+        function toggleDensityLines() {
+            if (densityLinesGroup) {
+                scene.remove(densityLinesGroup);
+                densityLinesGroup = null;
+                document.getElementById('selection-info').textContent = 'Density lines hidden.';
+                return;
+            }
+            if (points.length === 0) return;
+
+            // Build Y histogram (1 cm bins)
+            const binSize = 0.01;
+            const bins = {};
+            let totalVisible = 0;
+            for (let i = 0; i < points.length; i++) {
+                if (!isPointVisible(i)) continue;
+                totalVisible++;
+                const bin = Math.round(points[i].y / binSize);
+                bins[bin] = (bins[bin] || 0) + 1;
+            }
+            if (totalVisible === 0) return;
+
+            // Smooth histogram with a ±5 bin Gaussian kernel (~10 cm window)
+            const sortedBins = Object.keys(bins).map(Number).sort((a, b) => a - b);
+            const smoothed = {};
+            const radius = 5;
+            sortedBins.forEach(b => {
+                let sum = 0, wt = 0;
+                for (let d = -radius; d <= radius; d++) {
+                    const v = bins[b + d] || 0;
+                    const w = Math.exp(-0.5 * (d / 2.5) ** 2);
+                    sum += v * w;
+                    wt += w;
+                }
+                smoothed[b] = sum / wt;
+            });
+
+            // Find peaks: local maxima above 2% of max density
+            const maxDensity = Math.max(...Object.values(smoothed));
+            const threshold = maxDensity * 0.02;
+            const peakBins = [];
+            const halfWindow = 10; // ±10 bins = ±10 cm exclusion zone
+            sortedBins.forEach(b => {
+                if (smoothed[b] < threshold) return;
+                let isPeak = true;
+                for (let d = -halfWindow; d <= halfWindow; d++) {
+                    if (d === 0) continue;
+                    if ((smoothed[b + d] || 0) > smoothed[b]) { isPeak = false; break; }
+                }
+                if (isPeak) {
+                    // Merge with nearby peaks
+                    if (peakBins.length > 0 && (b - peakBins[peakBins.length - 1].bin) < halfWindow * 2) {
+                        const prev = peakBins[peakBins.length - 1];
+                        if (smoothed[b] > smoothed[prev.bin]) {
+                            prev.bin = b;
+                            prev.y = b * binSize;
+                            prev.count = smoothed[b];
+                        }
+                    } else {
+                        peakBins.push({ bin: b, y: b * binSize, count: smoothed[b] });
+                    }
+                }
+            });
+
+            if (peakBins.length === 0) {
+                document.getElementById('selection-info').textContent = 'No density peaks found.';
+                return;
+            }
+
+            // Sort by density descending, keep top 10
+            peakBins.sort((a, b) => b.count - a.count);
+            const topPeaks = peakBins.slice(0, 10);
+            topPeaks.sort((a, b) => a.y - b.y);
+
+            // Compute scene XZ bounds for the lines
+            let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+            for (let i = 0; i < points.length; i++) {
+                if (!isPointVisible(i)) continue;
+                const p = points[i];
+                if (p.x < xMin) xMin = p.x;
+                if (p.x > xMax) xMax = p.x;
+                if (p.z < zMin) zMin = p.z;
+                if (p.z > zMax) zMax = p.z;
+            }
+            const pad = (xMax - xMin) * 0.05;
+
+            // Draw lines
+            densityLinesGroup = new THREE.Group();
+            const colors = [0x22c55e, 0xeab308, 0x3b82f6, 0xef4444, 0xa855f7, 0x06b6d4, 0xf97316, 0xec4899, 0x14b8a6, 0x8b5cf6];
+
+            topPeaks.forEach((peak, idx) => {
+                const y = peak.y;
+                const color = colors[idx % colors.length];
+                const mat = new THREE.LineBasicMaterial({ color, linewidth: 2, transparent: true, opacity: 0.7 });
+
+                // Draw cross: two lines spanning the scene at this Y
+                const verts = new Float32Array([
+                    xMin - pad, y, zMin - pad,   xMax + pad, y, zMin - pad,
+                    xMax + pad, y, zMin - pad,   xMax + pad, y, zMax + pad,
+                    xMax + pad, y, zMax + pad,   xMin - pad, y, zMax + pad,
+                    xMin - pad, y, zMax + pad,   xMin - pad, y, zMin - pad,
+                    // Center cross
+                    xMin - pad, y, (zMin + zMax) / 2,  xMax + pad, y, (zMin + zMax) / 2,
+                    (xMin + xMax) / 2, y, zMin - pad,  (xMin + xMax) / 2, y, zMax + pad,
+                ]);
+                const geo = new THREE.BufferGeometry();
+                geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+                densityLinesGroup.add(new THREE.LineSegments(geo, mat));
+
+                // Label sprite
+                const canvas = document.createElement('canvas');
+                canvas.width = 256; canvas.height = 48;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+                ctx.font = 'bold 28px sans-serif';
+                ctx.fillText('Y=' + y.toFixed(2) + 'm', 4, 34);
+                const tex = new THREE.CanvasTexture(canvas);
+                const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+                const sprite = new THREE.Sprite(spriteMat);
+                sprite.position.set(xMax + pad + 0.3, y, (zMin + zMax) / 2);
+                sprite.scale.set(1.2, 0.22, 1);
+                densityLinesGroup.add(sprite);
+            });
+
+            scene.add(densityLinesGroup);
+
+            const desc = topPeaks.map((p, i) => `Y=${p.y.toFixed(2)}m`).join(', ');
+            document.getElementById('selection-info').textContent =
+                `Density lines: ${topPeaks.length} peaks — ${desc}`;
         }
 
         /** Renders per-scan color pickers inside #scan-color-list. */
