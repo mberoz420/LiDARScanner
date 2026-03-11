@@ -1742,26 +1742,22 @@
             if (closed && vec3s.length >= 3) vec3s.push(vec3s[0].clone());
             if (vec3s.length < 2) return;
 
-            let curve;
             if (useSpline && vec3s.length >= 3) {
-                curve = new THREE.CatmullRomCurve3(vec3s, false, 'centripetal', 0.5);
+                // Smooth spline curve
+                const curve = new THREE.CatmullRomCurve3(vec3s, false, 'centripetal', 0.5);
+                const tubeSeg = Math.max(32, vec3s.length * 12);
+                const tubeGeo = new THREE.TubeGeometry(curve, tubeSeg, radius, 6, false);
+                const tubeMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 });
+                group.add(new THREE.Mesh(tubeGeo, tubeMat));
             } else {
-                // Piecewise linear — use LineCurve3 segments joined
-                const curvePts = [];
-                const segs = Math.max(1, (vec3s.length - 1) * 4);
-                for (let i = 0; i <= segs; i++) {
-                    const t = i / segs;
-                    const idx = Math.min(Math.floor(t * (vec3s.length - 1)), vec3s.length - 2);
-                    const lt = t * (vec3s.length - 1) - idx;
-                    curvePts.push(new THREE.Vector3().lerpVectors(vec3s[idx], vec3s[idx + 1], lt));
+                // Piecewise straight segments — one tube per segment for sharp corners
+                for (let i = 0; i < vec3s.length - 1; i++) {
+                    const segCurve = new THREE.LineCurve3(vec3s[i], vec3s[i + 1]);
+                    const tubeGeo = new THREE.TubeGeometry(segCurve, 1, radius, 6, false);
+                    const tubeMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 });
+                    group.add(new THREE.Mesh(tubeGeo, tubeMat));
                 }
-                curve = new THREE.CatmullRomCurve3(curvePts, false, 'centripetal', 0);
             }
-
-            const tubeSeg = useSpline ? Math.max(32, vec3s.length * 12) : (vec3s.length - 1) * 4;
-            const tubeGeo = new THREE.TubeGeometry(curve, tubeSeg, radius, 6, false);
-            const tubeMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 });
-            group.add(new THREE.Mesh(tubeGeo, tubeMat));
         }
 
         function rebuildGuideLines() {
@@ -1877,7 +1873,10 @@
 
         // Find closest guide line segment to a world position (XZ plane)
         function findClosestGuideSegment(worldPt) {
-            let bestDist = 0.6;
+            // Dynamic tolerance based on camera distance for consistent clickability
+            const camDist = camera ? camera.position.distanceTo(
+                new THREE.Vector3(sceneCenter.x, sceneCenter.y, sceneCenter.z)) : 10;
+            let bestDist = Math.max(0.6, camDist * 0.04);
             let bestGuide = null, bestGuideIdx = -1, bestSegIdx = -1;
             guideLines.forEach((guide, gi) => {
                 const pts = guide.points;
@@ -2060,7 +2059,13 @@
                 }
             });
 
-            if (!allInts.length) { document.getElementById('selection-info').textContent = 'No boundary found to extend to.'; return; }
+            if (!allInts.length) {
+                document.getElementById('selection-info').textContent =
+                    guideLines.length < 2
+                        ? 'Extend needs at least 2 guide lines — draw another line to extend to.'
+                        : 'No intersection found in the extending direction.';
+                return;
+            }
             allInts.sort((a, b) => a.dist - b.dist);
             const nearest = allInts[0];
             const newPts = [...pts];
