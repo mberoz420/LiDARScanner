@@ -960,6 +960,9 @@
                     </div>
                     <div style="font-size:9px;color:#666;margin-top:2px;">Hide points farther than this from camera</div>
                 </div>
+                <button onclick="toggleDensityLines()" style="width:100%;margin-top:6px;padding:5px 4px;font-size:10px;
+                    background:#1a2744;color:#a78bfa;border:1px solid #7c3aed;border-radius:4px;cursor:pointer;"
+                    title="Detect wall/edge ridges from top-down density and draw vertical lines">━ Density Lines</button>
             </div>
         </div>
 
@@ -1065,12 +1068,6 @@
                 <div style="margin-top:8px;border-top:1px solid #1a2744;padding-top:8px;">
                     <div class="dpad-btn" style="width:100%;border-radius:6px;background:#1a2744;border-color:#2563eb;color:#60a5fa;"
                          onclick="alignByWallEdges()" title="Align selected scans to reference by matching wall edges from top view">⬡ Align by Wall Edges</div>
-                </div>
-
-                <!-- Density lines (horizontal plane detection) -->
-                <div style="margin-top:4px;">
-                    <div class="dpad-btn" style="width:100%;border-radius:6px;background:#1a2744;border-color:#7c3aed;color:#a78bfa;"
-                         onclick="toggleDensityLines()" title="Show/hide horizontal lines at dominant Y-density peaks (floors, ceilings, tables)">━ Density Lines</div>
                 </div>
 
                 <!-- Delete selected scans -->
