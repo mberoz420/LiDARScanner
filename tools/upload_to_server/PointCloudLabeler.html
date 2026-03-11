@@ -527,7 +527,8 @@
             margin-bottom: 8px;
         }
         #nudge-panel .np-scan-btn {
-            flex: 1;
+            flex: 1 0 auto;
+            min-width: 50px;
             padding: 4px 6px;
             font-size: 10px;
             border-radius: 4px;
@@ -536,6 +537,7 @@
             color: #888;
             cursor: pointer;
             text-align: center;
+            transition: all 0.15s;
         }
         #nudge-panel .np-scan-btn.active {
             border-color: #00d9ff;
@@ -561,6 +563,21 @@
         #nudge-panel .np-step-btn.active {
             border-color: #f39c12;
             color: #f39c12;
+        }
+        #nudge-panel .np-rot-btn {
+            flex: 1;
+            padding: 3px 4px;
+            font-size: 9px;
+            border-radius: 4px;
+            border: 1px solid #1a2744;
+            background: #0f1a30;
+            color: #666;
+            cursor: pointer;
+            text-align: center;
+        }
+        #nudge-panel .np-rot-btn.active {
+            border-color: #38bdf8;
+            color: #38bdf8;
         }
         /* D-pad */
         .dpad {
@@ -931,8 +948,18 @@
                     <option value="height">By Height</option>
                     <option value="rgb">Original Colors</option>
                     <option value="scan">By Scan</option>
+                    <option value="distance">By Camera Distance</option>
                 </select>
                 <div id="scan-color-list" style="display:none;margin-top:4px;"></div>
+                <div id="distance-controls" style="display:none;margin-top:4px;">
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="font-size:9px;color:#888;white-space:nowrap;">Max dist:</span>
+                        <input type="range" id="dist-slider" min="0" max="10" step="0.1" value="10"
+                               oninput="updateDistanceFilter(this.value)" style="flex:1;height:14px;">
+                        <span id="dist-value" style="font-size:10px;color:#00d9ff;min-width:36px;">10.0 m</span>
+                    </div>
+                    <div style="font-size:9px;color:#666;margin-top:2px;">Hide points farther than this from camera</div>
+                </div>
             </div>
         </div>
 
@@ -983,11 +1010,9 @@
             <div id="nudge-panel">
                 <div class="np-title">Fine Tune ↕↔</div>
 
-                <!-- Which scan to move -->
-                <div class="np-scan-row">
-                    <div class="np-scan-btn active" id="nudge-btn-ref" onclick="setNudgeScan(0)">Reference</div>
-                    <div class="np-scan-btn"        id="nudge-btn-ins" onclick="setNudgeScan(1)">Inserted</div>
-                </div>
+                <!-- Scan selector (dynamic, multi-select) -->
+                <div id="nudge-scan-list" class="np-scan-row" style="flex-wrap:wrap;"></div>
+                <div style="font-size:8px;color:#64748b;text-align:center;margin:2px 0;">Click to select &middot; Ctrl+click for multi-select</div>
 
                 <!-- Step size -->
                 <div class="np-step-row">
@@ -1015,6 +1040,37 @@
                          onclick="nudgeScan(0,1,0)" title="Raise Y (Page Up)">Y ▲</div>
                     <div class="dpad-btn" style="flex:1;border-radius:6px;"
                          onclick="nudgeScan(0,-1,0)" title="Lower Y (Page Down)">Y ▼</div>
+                </div>
+
+                <!-- Rotation row -->
+                <div style="margin-top:6px;">
+                    <div style="font-size:9px;color:#94a3b8;text-align:center;margin-bottom:3px;">Rotate (Home / End)</div>
+                    <div style="display:flex;gap:3px;">
+                        <div class="dpad-btn" style="flex:1;border-radius:6px;"
+                             onclick="rotateScan(-1)" title="Rotate Left (Home)">&#8634; CCW</div>
+                        <div class="dpad-btn" style="flex:1;border-radius:6px;"
+                             onclick="rotateScan(1)" title="Rotate Right (End)">CW &#8635;</div>
+                    </div>
+                </div>
+
+                <!-- Rotation step -->
+                <div class="np-step-row" style="margin-top:4px;">
+                    <div class="np-rot-btn active" data-rot="1" onclick="setRotateStep(1,this)">1&deg;</div>
+                    <div class="np-rot-btn" data-rot="5" onclick="setRotateStep(5,this)">5&deg;</div>
+                    <div class="np-rot-btn" data-rot="15" onclick="setRotateStep(15,this)">15&deg;</div>
+                    <div class="np-rot-btn" data-rot="45" onclick="setRotateStep(45,this)">45&deg;</div>
+                </div>
+
+                <!-- Align by wall edges -->
+                <div style="margin-top:8px;border-top:1px solid #1a2744;padding-top:8px;">
+                    <div class="dpad-btn" style="width:100%;border-radius:6px;background:#1a2744;border-color:#2563eb;color:#60a5fa;"
+                         onclick="alignByWallEdges()" title="Align selected scans to reference by matching wall edges from top view">⬡ Align by Wall Edges</div>
+                </div>
+
+                <!-- Delete selected scans -->
+                <div style="margin-top:4px;">
+                    <div class="dpad-btn" style="width:100%;border-radius:6px;background:#7f1d1d;border-color:#991b1b;color:#fca5a5;"
+                         onclick="deleteSelectedScans()" title="Delete selected scans">🗑 Delete Selected Scans</div>
                 </div>
             </div>
 
@@ -1462,6 +1518,13 @@
                 rebuildPointCloud(); updateStats();
                 document.getElementById('selection-info').textContent =
                     `Undo: alignment (${action.changes.length} pts moved)`;
+            } else if (action.type === 'delete-scan') {
+                action.changes.forEach(({ index }) => {
+                    deletedIndices.delete(index);
+                });
+                rebuildPointCloud(); updateStats(); updateNudgeScanList();
+                document.getElementById('selection-info').textContent =
+                    `Undo: restored ${action.changes.length} deleted points`;
             }
         }
 
@@ -1889,6 +1952,10 @@
         }
         let colorMode = 'normal';
         let minY = 0, maxY = 1;
+        let cameraTrack = [];          // [[x,y,z,t], ...] from scan export
+        let pointDistances = [];       // per-point distance to nearest camera pos (metres)
+        let maxCamDist = 0;            // max distance in current scan
+        let distanceFilterMax = Infinity; // slider threshold — hide points beyond this
         let sceneCenter = {x: 0, y: 0, z: 0};
         let sceneSize = 10;
         let grid;
@@ -2430,8 +2497,73 @@
             colorMode = mode;
             document.getElementById('scan-color-list').style.display =
                 (mode === 'scan') ? 'block' : 'none';
+            document.getElementById('distance-controls').style.display =
+                (mode === 'distance') ? 'block' : 'none';
             if (mode === 'scan') updateScanColorList();
             rebuildPointCloud();
+        }
+
+        function updateDistanceFilter(val) {
+            distanceFilterMax = parseFloat(val);
+            document.getElementById('dist-value').textContent = distanceFilterMax.toFixed(1) + ' m';
+            rebuildPointCloud();
+        }
+
+        function computePointDistances() {
+            if (!cameraTrack.length || !points.length) { pointDistances = []; return; }
+            // Build simple grid index over camera positions for fast lookup
+            const camPts = cameraTrack.map(c => ({ x: c[0], y: c[1], z: c[2] }));
+            const cellSize = 0.5;
+            const camGrid = {};
+            camPts.forEach((c, i) => {
+                const key = Math.floor(c.x / cellSize) + ',' + Math.floor(c.y / cellSize) + ',' + Math.floor(c.z / cellSize);
+                if (!camGrid[key]) camGrid[key] = [];
+                camGrid[key].push(i);
+            });
+
+            pointDistances = new Float32Array(points.length);
+            maxCamDist = 0;
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                const cx = Math.floor(p.x / cellSize);
+                const cy = Math.floor(p.y / cellSize);
+                const cz = Math.floor(p.z / cellSize);
+                let bestDist2 = Infinity;
+                // Search 3x3x3 neighborhood
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dz = -1; dz <= 1; dz++) {
+                            const key = (cx+dx) + ',' + (cy+dy) + ',' + (cz+dz);
+                            const bucket = camGrid[key];
+                            if (!bucket) continue;
+                            for (let j = 0; j < bucket.length; j++) {
+                                const c = camPts[bucket[j]];
+                                const d2 = (p.x-c.x)**2 + (p.y-c.y)**2 + (p.z-c.z)**2;
+                                if (d2 < bestDist2) bestDist2 = d2;
+                            }
+                        }
+                    }
+                }
+                // If no camera in neighborhood, brute-force (rare for dense tracks)
+                if (bestDist2 === Infinity) {
+                    for (let j = 0; j < camPts.length; j++) {
+                        const c = camPts[j];
+                        const d2 = (p.x-c.x)**2 + (p.y-c.y)**2 + (p.z-c.z)**2;
+                        if (d2 < bestDist2) bestDist2 = d2;
+                    }
+                }
+                const dist = Math.sqrt(bestDist2);
+                pointDistances[i] = dist;
+                if (dist > maxCamDist) maxCamDist = dist;
+            }
+            // Update slider range to match data
+            const slider = document.getElementById('dist-slider');
+            if (slider) {
+                slider.max = Math.ceil(maxCamDist * 10) / 10;
+                slider.value = slider.max;
+                distanceFilterMax = parseFloat(slider.max);
+                document.getElementById('dist-value').textContent = distanceFilterMax.toFixed(1) + ' m';
+            }
         }
 
         /** Renders per-scan color pickers inside #scan-color-list. */
@@ -2441,14 +2573,58 @@
             let html = '';
             for (let s = 0; s < numScans; s++) {
                 const hex = scanColors[s] || SCAN_COLOR_DEFAULTS[s % SCAN_COLOR_DEFAULTS.length];
-                html += `<div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;">
+                const isSelected = selectedScanIds.has(s);
+                const isHidden = hiddenScanIds.has(s);
+                const deleted = isEntireScanDeleted(s);
+                if (deleted) continue;
+                const selBorder = isSelected ? 'border:1px solid #00d9ff;background:rgba(0,217,255,0.06);' : 'border:1px solid transparent;';
+                const dimStyle = isHidden ? 'opacity:0.35;' : '';
+                html += `<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;padding:3px 5px;border-radius:5px;cursor:pointer;${selBorder}${dimStyle}"
+                              onclick="toggleScanSelection(${s}, event)" title="Click=select, Ctrl+click=multi, right-click=show/hide"
+                              oncontextmenu="event.preventDefault(); toggleScanVisibility(${s}); updateScanColorList();">
                     <input type="color" value="${hex}"
-                           oninput="scanColors[${s}]=this.value; if(colorMode==='scan') rebuildPointCloud();"
-                           style="width:28px;height:22px;border:none;padding:0;cursor:pointer;border-radius:3px;background:none;">
-                    <span style="font-size:11px;color:#aaa;">${names[s] || ('Scan '+(s+1))}</span>
+                           oninput="event.stopPropagation(); scanColors[${s}]=this.value; if(colorMode==='scan') rebuildPointCloud();"
+                           onclick="event.stopPropagation();"
+                           style="width:24px;height:20px;border:none;padding:0;cursor:pointer;border-radius:3px;background:none;">
+                    <span style="font-size:11px;color:${isSelected ? '#00d9ff' : '#aaa'};flex:1;">${names[s] || ('Scan '+(s+1))}</span>
+                    <span onclick="event.stopPropagation(); toggleScanVisibility(${s}); updateScanColorList();"
+                          style="font-size:12px;cursor:pointer;opacity:0.6;" title="${isHidden ? 'Show' : 'Hide'}">${isHidden ? '👁‍🗨' : '👁'}</span>
+                    ${s > 0 ? `<span onclick="event.stopPropagation(); deleteSingleScan(${s});"
+                          style="font-size:11px;cursor:pointer;opacity:0.4;color:#f87171;" title="Delete scan">✕</span>` : ''}
                 </div>`;
             }
             el.innerHTML = html || '<span style="font-size:10px;color:#666;">Load scans first.</span>';
+        }
+
+        function toggleScanSelection(scanId, event) {
+            if (event.ctrlKey || event.metaKey) {
+                if (selectedScanIds.has(scanId)) selectedScanIds.delete(scanId);
+                else selectedScanIds.add(scanId);
+            } else {
+                selectedScanIds.clear();
+                selectedScanIds.add(scanId);
+            }
+            updateScanColorList();
+            updateNudgeScanList();
+        }
+
+        function deleteSingleScan(scanId) {
+            const name = scanId === 0 ? 'Reference' : `Scan ${scanId + 1}`;
+            if (!confirm(`Delete all points from ${name}?`)) return;
+            const changes = [];
+            points.forEach((p, i) => {
+                if (scanIds[i] === scanId && !deletedIndices.has(i)) {
+                    changes.push({ index: i, prev: { deleted: false } });
+                    deletedIndices.add(i);
+                }
+            });
+            if (!changes.length) return;
+            pushUndo({ type: 'delete-scan', changes });
+            selectedScanIds.delete(scanId);
+            rebuildPointCloud();
+            updateStats();
+            updateScanColorList();
+            updateNudgeScanList();
         }
 
         // Visibility filters
@@ -2522,6 +2698,9 @@
 
         function isPointVisible(index) {
             if (deletedIndices.has(index)) return false;
+            if (hiddenScanIds.has(scanIds[index])) return false;
+            if (colorMode === 'distance' && pointDistances.length > index
+                && pointDistances[index] > distanceFilterMax) return false;
 
             const type = getSurfaceType(index);
             switch (type) {
@@ -2629,6 +2808,16 @@
                     const sid = scanIds[index] ?? 0;
                     const hex = scanColors[sid % scanColors.length] || '#ffffff';
                     return new THREE.Color(hex);
+                }
+
+                case 'distance': {
+                    if (pointDistances.length > index && maxCamDist > 0) {
+                        const d = pointDistances[index];
+                        const t = Math.min(d / Math.max(maxCamDist, 0.01), 1);
+                        // green (close) → yellow → red (far)
+                        return new THREE.Color().setHSL(0.33 - t * 0.33, 1, 0.45);
+                    }
+                    return new THREE.Color(0x555555);
                 }
 
                 case 'label':
@@ -2847,6 +3036,16 @@
                 });
             }
 
+            // Parse camera track if present
+            cameraTrack = [];
+            pointDistances = [];
+            maxCamDist = 0;
+            distanceFilterMax = Infinity;
+            if (data.camera_track && Array.isArray(data.camera_track)) {
+                cameraTrack = data.camera_track; // [[x,y,z,t], ...]
+                computePointDistances();
+            }
+
             // Restore guide lines if saved
             if (data.guide_lines && Array.isArray(data.guide_lines)) {
                 guideLines = data.guide_lines;
@@ -2894,6 +3093,14 @@
 
             colorMode = 'normal';
             document.getElementById('color-mode').value = 'normal';
+            // Enable/disable distance color mode based on camera track availability
+            const distOpt = document.querySelector('#color-mode option[value="distance"]');
+            if (distOpt) {
+                distOpt.disabled = !cameraTrack.length;
+                distOpt.textContent = cameraTrack.length
+                    ? 'By Camera Distance' : 'By Camera Distance (no data)';
+            }
+            document.getElementById('distance-controls').style.display = 'none';
 
             rebuildPointCloud();
             updateStats();
@@ -3066,10 +3273,10 @@
 
             rebuildPointCloud();
             updateStats();
-            // Update nudge panel scan buttons to reflect current scan count
-            document.getElementById('nudge-btn-ins').textContent = numScans > 2 ? `Scan ${newScanId+1}` : 'Inserted';
-            nudgeScanId = newScanId;   // default to moving the freshly inserted scan
-            setNudgeScan(newScanId);
+            // Select the freshly inserted scan and rebuild scan list
+            selectedScanIds.clear();
+            selectedScanIds.add(newScanId);
+            updateNudgeScanList();
             showNudgePanel();
             document.getElementById('selection-info').textContent =
                 `Inserted ${addedCount.toLocaleString()} points — auto-aligned to reference`;
@@ -3077,9 +3284,9 @@
 
         /**
          * Auto-align an inserted scan to the reference scan (scan 0).
-         * 1. Elevation: match floor Y (using labeled floor points or 5th-percentile Y)
-         * 2. XZ centroid: translate inserted scan centroid to reference centroid
-         * 3. Orientation: match primary XZ axis via PCA
+         * 1. Elevation: match floor Y
+         * 2. Coarse: PCA orientation + centroid alignment
+         * 3. Fine: ICP (Iterative Closest Point) refinement
          * Pushes an undo record so Ctrl+Z reverses it.
          */
         function autoAlignInserted(newScanId) {
@@ -3091,7 +3298,7 @@
             });
             if (!refIdx.length || !movIdx.length) return;
 
-            // Floor Y: prefer labeled floor points (label 0), fall back to 5th-percentile Y
+            // Floor Y alignment
             const floorY = (indices) => {
                 const fy = indices.filter(i => labels[i] === 0).map(i => points[i].y);
                 if (fy.length > 10) {
@@ -3101,56 +3308,283 @@
                 const all = indices.map(i => points[i].y).sort((a, b) => a - b);
                 return all[Math.floor(all.length * 0.05)];
             };
-            const ty = floorY(refIdx) - floorY(movIdx);
+            const elevOffset = floorY(refIdx) - floorY(movIdx);
 
-            // XZ centroids
-            let rcx = 0, rcz = 0, mcx = 0, mcz = 0;
-            refIdx.forEach(i => { rcx += points[i].x; rcz += points[i].z; });
-            movIdx.forEach(i => { mcx += points[i].x; mcz += points[i].z; });
-            rcx /= refIdx.length; rcz /= refIdx.length;
-            mcx /= movIdx.length; mcz /= movIdx.length;
+            // Centroids
+            let rcx = 0, rcy = 0, rcz = 0, mcx = 0, mcy = 0, mcz = 0;
+            refIdx.forEach(i => { rcx += points[i].x; rcy += points[i].y; rcz += points[i].z; });
+            movIdx.forEach(i => { mcx += points[i].x; mcy += points[i].y; mcz += points[i].z; });
+            rcx /= refIdx.length; rcy /= refIdx.length; rcz /= refIdx.length;
+            mcx /= movIdx.length; mcy /= movIdx.length; mcz /= movIdx.length;
 
-            // PCA: find primary axis angle in XZ for each scan
-            const pcaAngle = (indices, cx, cz) => {
-                let c00 = 0, c01 = 0, c11 = 0;
-                indices.forEach(i => {
-                    const dx = points[i].x - cx, dz = points[i].z - cz;
-                    c00 += dx * dx; c01 += dx * dz; c11 += dz * dz;
-                });
-                return 0.5 * Math.atan2(2 * c01, c00 - c11);
-            };
-            const theta = pcaAngle(refIdx, rcx, rcz) - pcaAngle(movIdx, mcx, mcz);
-            const cos = Math.cos(theta), sin = Math.sin(theta);
-
-            // Translation: rotate mov centroid then shift to ref centroid
-            const tx = rcx - (cos * mcx - sin * mcz);
-            const tz = rcz - (sin * mcx + cos * mcz);
-
-            // Save undo record before modifying
+            // Save undo
             pushUndo({
                 type: 'align',
                 changes: movIdx.map(i => ({ index: i, prev: { x: points[i].x, y: points[i].y, z: points[i].z } }))
             });
 
-            // Apply rotation + translation + elevation
-            movIdx.forEach(i => {
-                const p = points[i];
-                const nx = cos * p.x - sin * p.z + tx;
-                const nz = sin * p.x + cos * p.z + tz;
-                p.x = nx;
-                p.z = nz;
-                p.y += ty;
-            });
+            // ── 3D ICP with multi-orientation search ──────────────────────────
+            const maxPts = 10000;
+            const subsample = (indices) => {
+                if (indices.length <= maxPts) return indices;
+                // Random subsample for better coverage
+                const shuffled = indices.slice();
+                for (let i = shuffled.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                }
+                return shuffled.slice(0, maxPts);
+            };
+            const refSub = subsample(refIdx);
+
+            // Build 3D spatial index for reference (using XYZ)
+            const cellSize = 0.08; // 8cm cells — finer for better matches
+            function buildRefIndex(indices) {
+                const grid = new Map();
+                indices.forEach(i => {
+                    const p = points[i];
+                    const key = Math.floor(p.x / cellSize) + ',' + Math.floor(p.y / cellSize) + ',' + Math.floor(p.z / cellSize);
+                    if (!grid.has(key)) grid.set(key, []);
+                    grid.get(key).push(i);
+                });
+                return grid;
+            }
+            const refGrid3D = buildRefIndex(refSub);
+
+            function findNearest3D(px, py, pz) {
+                const gx = Math.floor(px / cellSize), gy = Math.floor(py / cellSize), gz = Math.floor(pz / cellSize);
+                let bestDist = Infinity, bestIdx = -1;
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dz = -1; dz <= 1; dz++) {
+                            const cell = refGrid3D.get((gx+dx) + ',' + (gy+dy) + ',' + (gz+dz));
+                            if (!cell) continue;
+                            for (const ri of cell) {
+                                const rp = points[ri];
+                                const d = (rp.x-px)**2 + (rp.y-py)**2 + (rp.z-pz)**2;
+                                if (d < bestDist) { bestDist = d; bestIdx = ri; }
+                            }
+                        }
+                    }
+                }
+                return { idx: bestIdx, dist: Math.sqrt(bestDist) };
+            }
+
+            // Save original positions for trying multiple orientations
+            const origPositions = movIdx.map(i => ({ x: points[i].x, y: points[i].y, z: points[i].z }));
+
+            function restoreOriginal() {
+                movIdx.forEach((idx, j) => {
+                    points[idx].x = origPositions[j].x;
+                    points[idx].y = origPositions[j].y;
+                    points[idx].z = origPositions[j].z;
+                });
+            }
+
+            function applyCoarse(angleDeg) {
+                restoreOriginal();
+                const rad = angleDeg * Math.PI / 180;
+                const c = Math.cos(rad), s = Math.sin(rad);
+                movIdx.forEach(i => {
+                    const p = points[i];
+                    // Rotate around mov centroid, then translate to ref centroid + Y offset
+                    const dx = p.x - mcx, dz = p.z - mcz;
+                    p.x = rcx + c * dx - s * dz;
+                    p.z = rcz + s * dx + c * dz;
+                    p.y += elevOffset;
+                });
+            }
+
+            // Multi-scale ICP: run with decreasing reject thresholds
+            function runICP3D(movSubset) {
+                const scales = [
+                    { iters: 15, reject: 0.8 },  // coarse: allow 80cm matches
+                    { iters: 15, reject: 0.3 },  // medium: 30cm
+                    { iters: 15, reject: 0.15 }, // fine: 15cm
+                ];
+
+                for (const { iters, reject } of scales) {
+                    for (let iter = 0; iter < iters; iter++) {
+                        // Find 3D correspondences
+                        const pairs = [];
+                        movSubset.forEach(i => {
+                            const p = points[i];
+                            const nn = findNearest3D(p.x, p.y, p.z);
+                            if (nn.idx < 0 || nn.dist > reject) return;
+                            const rp = points[nn.idx];
+                            pairs.push({ mx: p.x, my: p.y, mz: p.z, rx: rp.x, ry: rp.y, rz: rp.z });
+                        });
+                        if (pairs.length < 20) break;
+
+                        // Centroids
+                        let cmx=0, cmy=0, cmz=0, crx=0, cry=0, crz=0;
+                        pairs.forEach(p => {
+                            cmx+=p.mx; cmy+=p.my; cmz+=p.mz;
+                            crx+=p.rx; cry+=p.ry; crz+=p.rz;
+                        });
+                        const n = pairs.length;
+                        cmx/=n; cmy/=n; cmz/=n; crx/=n; cry/=n; crz/=n;
+
+                        // For room scans: rotation around Y axis only (yaw) + 3D translation
+                        // Cross-covariance for XZ rotation
+                        let sxx=0, sxz=0, szx=0, szz=0;
+                        pairs.forEach(p => {
+                            const dmx=p.mx-cmx, dmz=p.mz-cmz;
+                            const drx=p.rx-crx, drz=p.rz-crz;
+                            sxx+=dmx*drx; sxz+=dmx*drz;
+                            szx+=dmz*drx; szz+=dmz*drz;
+                        });
+
+                        const angle = Math.atan2(sxz-szx, sxx+szz);
+                        const c = Math.cos(angle), s = Math.sin(angle);
+
+                        // Translation (3D: includes Y adjustment)
+                        const dtx = crx - (c*cmx - s*cmz);
+                        const dty = cry - cmy;
+                        const dtz = crz - (s*cmx + c*cmz);
+
+                        if (Math.abs(angle) < 0.00002 &&
+                            Math.abs(dtx) < 0.0002 &&
+                            Math.abs(dty) < 0.0002 &&
+                            Math.abs(dtz) < 0.0002) break;
+
+                        // Apply to ALL moved points
+                        movIdx.forEach(i => {
+                            const p = points[i];
+                            const nx = c*p.x - s*p.z + dtx;
+                            const nz = s*p.x + c*p.z + dtz;
+                            p.x = nx;
+                            p.y += dty;
+                            p.z = nz;
+                        });
+                    }
+                }
+            }
+
+            function computeAlignmentError(movSubset) {
+                let totalDist = 0, matchCount = 0;
+                movSubset.forEach(i => {
+                    const p = points[i];
+                    const nn = findNearest3D(p.x, p.y, p.z);
+                    if (nn.idx >= 0 && nn.dist < 0.3) {
+                        totalDist += nn.dist;
+                        matchCount++;
+                    }
+                });
+                const avgErr = matchCount > 0 ? totalDist / matchCount : Infinity;
+                const coverage = matchCount / movSubset.length;
+                return { avgErr, coverage, score: coverage * 100 - avgErr * 1000 };
+            }
+
+            // Try 4 orientations: 0°, 90°, 180°, 270°
+            let bestAngle = 0, bestScore = -Infinity;
+            let bestPositions = null;
+
+            const movSub = subsample(movIdx);
+
+            for (const angleDeg of [0, 90, 180, 270]) {
+                applyCoarse(angleDeg);
+                runICP3D(movSub);
+
+                const result = computeAlignmentError(movSub);
+                if (result.score > bestScore) {
+                    bestScore = result.score;
+                    bestAngle = angleDeg;
+                    bestPositions = movIdx.map(i => ({ x: points[i].x, y: points[i].y, z: points[i].z }));
+                }
+            }
+
+            // Also try PCA-based angle
+            const pcaAngle = (indices, cx, cz) => {
+                let c00=0, c01=0, c11=0;
+                // Use original positions for movable
+                const getX = (i) => indices === refIdx ? points[i].x : origPositions[movIdx.indexOf(i)]?.x || points[i].x;
+                const getZ = (i) => indices === refIdx ? points[i].z : origPositions[movIdx.indexOf(i)]?.z || points[i].z;
+                indices.forEach(i => {
+                    const dx = getX(i)-cx, dz = getZ(i)-cz;
+                    c00+=dx*dx; c01+=dx*dz; c11+=dz*dz;
+                });
+                return 0.5*Math.atan2(2*c01, c00-c11);
+            };
+            const pcaRef = pcaAngle(refIdx, rcx, rcz);
+            const pcaMov = pcaAngle(movIdx, mcx, mcz);
+            const pcaDeg = (pcaRef - pcaMov) * 180 / Math.PI;
+
+            // Try PCA angle and PCA+180
+            for (const extra of [0, 180]) {
+                const tryAngle = pcaDeg + extra;
+                applyCoarse(tryAngle);
+                runICP3D(movSub);
+                const result = computeAlignmentError(movSub);
+                if (result.score > bestScore) {
+                    bestScore = result.score;
+                    bestAngle = tryAngle;
+                    bestPositions = movIdx.map(i => ({ x: points[i].x, y: points[i].y, z: points[i].z }));
+                }
+            }
+
+            // Apply the best result
+            if (bestPositions) {
+                movIdx.forEach((idx, j) => {
+                    points[idx].x = bestPositions[j].x;
+                    points[idx].y = bestPositions[j].y;
+                    points[idx].z = bestPositions[j].z;
+                });
+            }
         }
 
         // ── Fine Nudge ─────────────────────────────────────────────────────────
-        let nudgeScanId = 1;     // which scan to move (0=reference, 1=inserted)
-        let nudgeStep   = 0.02;  // metres per key/button press
+        let selectedScanIds = new Set([1]); // which scans to move/rotate (multi-select)
+        let hiddenScanIds   = new Set();    // which scans are hidden
+        let nudgeStep       = 0.02;         // metres per key/button press
 
-        function setNudgeScan(id) {
-            nudgeScanId = id;
-            document.getElementById('nudge-btn-ref').classList.toggle('active', id === 0);
-            document.getElementById('nudge-btn-ins').classList.toggle('active', id === 1);
+        /** Build dynamic scan selector buttons in the nudge panel */
+        function updateNudgeScanList() {
+            const container = document.getElementById('nudge-scan-list');
+            if (!container) return;
+            container.innerHTML = '';
+            for (let s = 0; s < numScans; s++) {
+                const btn = document.createElement('div');
+                btn.className = 'np-scan-btn' + (selectedScanIds.has(s) ? ' active' : '');
+                btn.textContent = s === 0 ? 'Reference' : (numScans === 2 ? 'Inserted' : `Scan ${s + 1}`);
+                btn.dataset.scanId = s;
+
+                // Dim if hidden
+                if (hiddenScanIds.has(s)) btn.style.opacity = '0.35';
+
+                btn.onclick = (e) => {
+                    const id = parseInt(btn.dataset.scanId);
+                    if (e.ctrlKey || e.metaKey) {
+                        // Multi-select toggle
+                        if (selectedScanIds.has(id)) selectedScanIds.delete(id);
+                        else selectedScanIds.add(id);
+                    } else {
+                        // Single select
+                        selectedScanIds.clear();
+                        selectedScanIds.add(id);
+                    }
+                    updateNudgeScanList();
+                };
+
+                // Right-click to toggle visibility
+                btn.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    const id = parseInt(btn.dataset.scanId);
+                    toggleScanVisibility(id);
+                };
+                btn.title = `Click to select · Ctrl+click multi · Right-click to show/hide`;
+                container.appendChild(btn);
+            }
+        }
+
+        function toggleScanVisibility(scanId) {
+            if (hiddenScanIds.has(scanId)) {
+                hiddenScanIds.delete(scanId);
+            } else {
+                hiddenScanIds.add(scanId);
+            }
+            rebuildPointCloud();
+            updateNudgeScanList();
         }
 
         function setNudgeStep(val, btn) {
@@ -3159,16 +3593,20 @@
             btn.classList.add('active');
         }
 
+        /** Check if a point belongs to a selected scan */
+        function isSelectedScan(i) {
+            return selectedScanIds.has(scanIds[i]) && !deletedIndices.has(i);
+        }
+
         /**
-         * Nudge the selected scan by dx/dy/dz (unit vectors) × nudgeStep.
-         * Pushes one undo record per call.
+         * Nudge the selected scans by dx/dy/dz (unit vectors) × nudgeStep.
          */
         function nudgeScan(dx, dy, dz) {
-            if (numScans < 2) return;
+            if (numScans < 2 || selectedScanIds.size === 0) return;
             const tx = dx * nudgeStep, ty = dy * nudgeStep, tz = dz * nudgeStep;
             const changes = [];
             points.forEach((p, i) => {
-                if (scanIds[i] !== nudgeScanId || deletedIndices.has(i)) return;
+                if (!isSelectedScan(i)) return;
                 changes.push({ index: i, prev: { x: p.x, y: p.y, z: p.z } });
                 p.x += tx; p.y += ty; p.z += tz;
             });
@@ -3177,8 +3615,366 @@
             rebuildPointCloud();
         }
 
+        let rotateStep = 1; // degrees per click
+
+        function setRotateStep(deg, btn) {
+            rotateStep = deg;
+            document.querySelectorAll('.np-rot-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        /**
+         * Rotate the selected scans around their combined centroid in the XZ plane.
+         * dir: +1 = clockwise, -1 = counter-clockwise
+         */
+        function rotateScan(dir) {
+            if (numScans < 2 || selectedScanIds.size === 0) return;
+            const angle = dir * rotateStep * Math.PI / 180;
+            const cos = Math.cos(angle), sin = Math.sin(angle);
+
+            // Compute combined centroid of all selected scans
+            let cx = 0, cz = 0, count = 0;
+            points.forEach((p, i) => {
+                if (!isSelectedScan(i)) return;
+                cx += p.x; cz += p.z; count++;
+            });
+            if (!count) return;
+            cx /= count; cz /= count;
+
+            // Rotate around centroid
+            const changes = [];
+            points.forEach((p, i) => {
+                if (!isSelectedScan(i)) return;
+                changes.push({ index: i, prev: { x: p.x, y: p.y, z: p.z } });
+                const dx = p.x - cx, dz = p.z - cz;
+                p.x = cx + cos * dx - sin * dz;
+                p.z = cz + sin * dx + cos * dz;
+            });
+            if (!changes.length) return;
+            pushUndo({ type: 'align', changes });
+            rebuildPointCloud();
+        }
+
+        /**
+         * Delete all points belonging to the selected scans (not reference unless explicitly selected).
+         */
+        function deleteSelectedScans() {
+            if (selectedScanIds.size === 0) return;
+            const names = [...selectedScanIds].map(s => s === 0 ? 'Reference' : `Scan ${s + 1}`).join(', ');
+            if (!confirm(`Delete all points from: ${names}?`)) return;
+
+            const changes = [];
+            points.forEach((p, i) => {
+                if (!selectedScanIds.has(scanIds[i]) || deletedIndices.has(i)) return;
+                changes.push({ index: i, prev: { deleted: false } });
+                deletedIndices.add(i);
+            });
+            if (!changes.length) return;
+            pushUndo({ type: 'delete-scan', changes });
+
+            // Remove from selection
+            selectedScanIds.clear();
+            // Select next available scan
+            for (let s = 0; s < numScans; s++) {
+                if (!isEntireScanDeleted(s)) { selectedScanIds.add(s); break; }
+            }
+            updateNudgeScanList();
+            rebuildPointCloud();
+            updateStats();
+        }
+
+        /** Check if all points in a scan are deleted */
+        function isEntireScanDeleted(scanId) {
+            for (let i = 0; i < points.length; i++) {
+                if (scanIds[i] === scanId && !deletedIndices.has(i)) return false;
+            }
+            return true;
+        }
+
+        /**
+         * Align by Wall Edges — top-down density alignment.
+         * 1. Project both scans to XZ grid, find high-density cells (walls/edges)
+         * 2. Run ICP on only the high-density ridge points
+         * 3. Try 4 orientations (0°, 90°, 180°, 270°) to handle PCA ambiguity
+         */
+        function alignByWallEdges() {
+            if (numScans < 2 || selectedScanIds.size === 0) return;
+
+            // Collect reference (scan 0) and selected scan indices
+            const refIdx = [], movIdx = [];
+            points.forEach((p, i) => {
+                if (deletedIndices.has(i)) return;
+                if (scanIds[i] === 0) refIdx.push(i);
+                else if (selectedScanIds.has(scanIds[i])) movIdx.push(i);
+            });
+            if (refIdx.length < 50 || movIdx.length < 50) return;
+
+            document.getElementById('selection-info').textContent = 'Aligning by wall edges...';
+
+            // Save undo
+            pushUndo({
+                type: 'align',
+                changes: movIdx.map(i => ({ index: i, prev: { x: points[i].x, y: points[i].y, z: points[i].z } }))
+            });
+
+            // ── Step 1: Build top-down density grids ──
+            const cellSize = 0.03; // 3cm cells — fine enough for wall edges
+
+            function buildDensityGrid(indices) {
+                const grid = new Map();
+                indices.forEach(i => {
+                    const p = points[i];
+                    const gx = Math.floor(p.x / cellSize);
+                    const gz = Math.floor(p.z / cellSize);
+                    const key = gx + ',' + gz;
+                    grid.set(key, (grid.get(key) || 0) + 1);
+                });
+                return grid;
+            }
+
+            function extractRidgePoints(grid) {
+                // Find density threshold: top 15% of occupied cells
+                const counts = [...grid.values()].sort((a, b) => b - a);
+                const threshold = counts[Math.floor(counts.length * 0.15)] || 2;
+
+                const pts = [];
+                grid.forEach((count, key) => {
+                    if (count >= threshold) {
+                        const [gx, gz] = key.split(',').map(Number);
+                        pts.push({ x: (gx + 0.5) * cellSize, z: (gz + 0.5) * cellSize });
+                    }
+                });
+                return pts;
+            }
+
+            const refGrid = buildDensityGrid(refIdx);
+            const refRidge = extractRidgePoints(refGrid);
+
+            // ── Step 2: Build spatial index for reference ridge ──
+            const ridgeCellSize = 0.15;
+            const ridgeIndex = new Map();
+            refRidge.forEach((p, i) => {
+                const key = Math.floor(p.x / ridgeCellSize) + ',' + Math.floor(p.z / ridgeCellSize);
+                if (!ridgeIndex.has(key)) ridgeIndex.set(key, []);
+                ridgeIndex.get(key).push(i);
+            });
+
+            function findNearestRidge(px, pz) {
+                const gx = Math.floor(px / ridgeCellSize), gz = Math.floor(pz / ridgeCellSize);
+                let bestDist = Infinity, bestIdx = -1;
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        const cell = ridgeIndex.get((gx + dx) + ',' + (gz + dz));
+                        if (!cell) continue;
+                        for (const ri of cell) {
+                            const rp = refRidge[ri];
+                            const d = (rp.x - px) ** 2 + (rp.z - pz) ** 2;
+                            if (d < bestDist) { bestDist = d; bestIdx = ri; }
+                        }
+                    }
+                }
+                return { idx: bestIdx, dist: Math.sqrt(bestDist) };
+            }
+
+            // ── Step 3: Try multiple orientations and ICP each ──
+            const ICP_ITERS = 25;
+            const ICP_REJECT = 0.3; // 30cm — tighter for wall alignment
+
+            function runICPOnRidge(movRidge) {
+                let pts = movRidge.map(p => ({ x: p.x, z: p.z }));
+
+                for (let iter = 0; iter < ICP_ITERS; iter++) {
+                    const pairs = [];
+                    pts.forEach(p => {
+                        const nn = findNearestRidge(p.x, p.z);
+                        if (nn.idx >= 0 && nn.dist < ICP_REJECT)
+                            pairs.push({ mx: p.x, mz: p.z, rx: refRidge[nn.idx].x, rz: refRidge[nn.idx].z });
+                    });
+                    if (pairs.length < 10) break;
+
+                    let cmx = 0, cmz = 0, crx = 0, crz = 0;
+                    pairs.forEach(p => { cmx += p.mx; cmz += p.mz; crx += p.rx; crz += p.rz; });
+                    cmx /= pairs.length; cmz /= pairs.length;
+                    crx /= pairs.length; crz /= pairs.length;
+
+                    let sxx = 0, sxz = 0, szx = 0, szz = 0;
+                    pairs.forEach(p => {
+                        const dmx = p.mx - cmx, dmz = p.mz - cmz;
+                        const drx = p.rx - crx, drz = p.rz - crz;
+                        sxx += dmx * drx; sxz += dmx * drz;
+                        szx += dmz * drx; szz += dmz * drz;
+                    });
+                    const angle = Math.atan2(sxz - szx, sxx + szz);
+                    const c = Math.cos(angle), s = Math.sin(angle);
+                    const dtx = crx - (c * cmx - s * cmz);
+                    const dtz = crz - (s * cmx + c * cmz);
+
+                    if (Math.abs(angle) < 0.00005 && Math.abs(dtx) < 0.0002 && Math.abs(dtz) < 0.0002) break;
+
+                    pts = pts.map(p => ({
+                        x: c * p.x - s * p.z + dtx,
+                        z: s * p.x + c * p.z + dtz
+                    }));
+                }
+
+                // Compute final error
+                let totalErr = 0, matchCount = 0;
+                pts.forEach(p => {
+                    const nn = findNearestRidge(p.x, p.z);
+                    if (nn.idx >= 0 && nn.dist < ICP_REJECT) { totalErr += nn.dist; matchCount++; }
+                });
+                const avgErr = matchCount > 0 ? totalErr / matchCount : Infinity;
+                const coverage = matchCount / pts.length;
+
+                return { error: avgErr, coverage, matchCount };
+            }
+
+            // Compute centroid of movable ridge
+            const movGrid = buildDensityGrid(movIdx);
+            const movRidgeOrig = extractRidgePoints(movGrid);
+
+            // Compute centroids
+            let mcx = 0, mcz = 0;
+            movRidgeOrig.forEach(p => { mcx += p.x; mcz += p.z; });
+            mcx /= movRidgeOrig.length; mcz /= movRidgeOrig.length;
+            let rcx = 0, rcz = 0;
+            refRidge.forEach(p => { rcx += p.x; rcz += p.z; });
+            rcx /= refRidge.length; rcz /= refRidge.length;
+
+            // Try 4 rotations: 0°, 90°, 180°, 270°
+            let bestAngle = 0, bestError = Infinity, bestCoverage = 0;
+
+            for (const degOffset of [0, 90, 180, 270]) {
+                const rad = degOffset * Math.PI / 180;
+                const c = Math.cos(rad), s = Math.sin(rad);
+
+                // Rotate movable ridge around its centroid, then translate to ref centroid
+                const rotated = movRidgeOrig.map(p => {
+                    const dx = p.x - mcx, dz = p.z - mcz;
+                    return {
+                        x: rcx + c * dx - s * dz,
+                        z: rcz + s * dx + c * dz
+                    };
+                });
+
+                const result = runICPOnRidge(rotated);
+                // Prefer higher coverage, then lower error
+                const score = result.coverage * 1000 - result.error;
+                const bestScore = bestCoverage * 1000 - bestError;
+                if (score > bestScore) {
+                    bestAngle = degOffset;
+                    bestError = result.error;
+                    bestCoverage = result.coverage;
+                }
+            }
+
+            // ── Step 4: Apply best rotation + ICP to actual points ──
+            const bestRad = bestAngle * Math.PI / 180;
+            const bc = Math.cos(bestRad), bs = Math.sin(bestRad);
+
+            // Compute actual point centroids
+            let amcx = 0, amcz = 0;
+            movIdx.forEach(i => { amcx += points[i].x; amcz += points[i].z; });
+            amcx /= movIdx.length; amcz /= movIdx.length;
+            let arcx = 0, arcz = 0;
+            refIdx.forEach(i => { arcx += points[i].x; arcz += points[i].z; });
+            arcx /= refIdx.length; arcz /= refIdx.length;
+
+            // Apply coarse rotation around centroid + translate to ref centroid
+            movIdx.forEach(i => {
+                const p = points[i];
+                const dx = p.x - amcx, dz = p.z - amcz;
+                p.x = arcx + bc * dx - bs * dz;
+                p.z = arcz + bs * dx + bc * dz;
+            });
+
+            // ── Step 5: ICP refinement on actual high-density points ──
+            // Subsample to max 5000 points from each
+            const maxPts = 5000;
+            const sub = (indices) => {
+                if (indices.length <= maxPts) return indices;
+                const step = indices.length / maxPts;
+                const out = [];
+                for (let i = 0; i < maxPts; i++) out.push(indices[Math.floor(i * step)]);
+                return out;
+            };
+            const refSub = sub(refIdx);
+
+            // Build reference spatial index
+            const refSI = new Map();
+            const siCell = 0.15;
+            refSub.forEach(i => {
+                const p = points[i];
+                const key = Math.floor(p.x / siCell) + ',' + Math.floor(p.z / siCell);
+                if (!refSI.has(key)) refSI.set(key, []);
+                refSI.get(key).push(i);
+            });
+
+            function findNearestPt(px, pz) {
+                const gx = Math.floor(px / siCell), gz = Math.floor(pz / siCell);
+                let bestDist = Infinity, bestIdx = -1;
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        const cell = refSI.get((gx + dx) + ',' + (gz + dz));
+                        if (!cell) continue;
+                        for (const ri of cell) {
+                            const rp = points[ri];
+                            const d = (rp.x - px) ** 2 + (rp.z - pz) ** 2;
+                            if (d < bestDist) { bestDist = d; bestIdx = ri; }
+                        }
+                    }
+                }
+                return { idx: bestIdx, dist: Math.sqrt(bestDist) };
+            }
+
+            const movSub = sub(movIdx);
+            for (let iter = 0; iter < ICP_ITERS; iter++) {
+                const pairs = [];
+                movSub.forEach(i => {
+                    const p = points[i];
+                    const nn = findNearestPt(p.x, p.z);
+                    if (nn.idx >= 0 && nn.dist < 0.4)
+                        pairs.push({ mx: p.x, mz: p.z, rx: points[nn.idx].x, rz: points[nn.idx].z });
+                });
+                if (pairs.length < 10) break;
+
+                let cmx = 0, cmz = 0, crx = 0, crz = 0;
+                pairs.forEach(p => { cmx += p.mx; cmz += p.mz; crx += p.rx; crz += p.rz; });
+                cmx /= pairs.length; cmz /= pairs.length;
+                crx /= pairs.length; crz /= pairs.length;
+
+                let sxx = 0, sxz = 0, szx = 0, szz = 0;
+                pairs.forEach(p => {
+                    const dmx = p.mx - cmx, dmz = p.mz - cmz;
+                    const drx = p.rx - crx, drz = p.rz - crz;
+                    sxx += dmx * drx; sxz += dmx * drz;
+                    szx += dmz * drx; szz += dmz * drz;
+                });
+                const angle = Math.atan2(sxz - szx, sxx + szz);
+                const c = Math.cos(angle), s = Math.sin(angle);
+                const dtx = crx - (c * cmx - s * cmz);
+                const dtz = crz - (s * cmx + c * cmz);
+
+                if (Math.abs(angle) < 0.0001 && Math.abs(dtx) < 0.0005 && Math.abs(dtz) < 0.0005) break;
+
+                movIdx.forEach(i => {
+                    const p = points[i];
+                    const nx = c * p.x - s * p.z + dtx;
+                    const nz = s * p.x + c * p.z + dtz;
+                    p.x = nx; p.z = nz;
+                });
+            }
+
+            rebuildPointCloud();
+            document.getElementById('selection-info').textContent =
+                `Wall-edge aligned (best at ${bestAngle}°, error: ${(bestError * 1000).toFixed(1)}mm, coverage: ${(bestCoverage * 100).toFixed(0)}%)`;
+        }
+
         function showNudgePanel() {
-            if (numScans >= 2) document.getElementById('nudge-panel').style.display = 'block';
+            if (numScans >= 2) {
+                document.getElementById('nudge-panel').style.display = 'block';
+                updateNudgeScanList();
+            }
         }
         function hideNudgePanel() {
             document.getElementById('nudge-panel').style.display = 'none';
@@ -3757,7 +4553,7 @@
                 decreasePointSize();
             } else if (event.key === ']' || event.key === '=' || event.key === '+') {
                 increasePointSize();
-            } else if (numScans >= 2 && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','PageUp','PageDown'].includes(event.key)) {
+            } else if (numScans >= 2 && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','PageUp','PageDown','Home','End'].includes(event.key)) {
                 event.preventDefault();
                 if      (event.key === 'ArrowUp')    nudgeScan( 0, 0,-1);
                 else if (event.key === 'ArrowDown')  nudgeScan( 0, 0, 1);
@@ -3765,6 +4561,8 @@
                 else if (event.key === 'ArrowRight') nudgeScan( 1, 0, 0);
                 else if (event.key === 'PageUp')     nudgeScan( 0, 1, 0);
                 else if (event.key === 'PageDown')   nudgeScan( 0,-1, 0);
+                else if (event.key === 'Home')       rotateScan(-1);
+                else if (event.key === 'End')        rotateScan( 1);
             }
         }
 
@@ -6636,6 +7434,10 @@
                 document.getElementById('selection-info').textContent =
                     `Failed to load photogrammetry session ${sessionId}: ${e.message}`;
             }
+            // Strip URL params so hard refresh gives a clean empty labeler
+            if (window.history.replaceState) {
+                window.history.replaceState({}, '', window.location.pathname);
+            }
         })();
 
         // ══════════════════════════════════════════════════════════════════════
@@ -6782,6 +7584,10 @@
             } catch (e) {
                 document.getElementById('selection-info').textContent =
                     `Failed to auto-load ${scanFile}: ${e.message}`;
+            }
+            // Strip URL params so hard refresh gives a clean empty labeler
+            if (window.history.replaceState) {
+                window.history.replaceState({}, '', window.location.pathname);
             }
         })();
     </script>

@@ -71,6 +71,10 @@ class MeshManager: NSObject, ObservableObject {
     // as authoritative room geometry — far more accurate than post-processing.
     private var collectedPlaneAnchors: [UUID: ARPlaneAnchor] = [:]
 
+    /// Camera positions sampled during scan (for per-point distance-from-camera in labeler)
+    private var cameraTrack: [[Float]] = []   // [[x, y, z, timestamp], ...]
+    private var scanStartTime: TimeInterval = 0
+
     // Movement tracking for pause detection
     private var lastCameraPosition: SIMD3<Float>?
     private var lastCameraUpdateTime: Date = .distantPast
@@ -370,6 +374,10 @@ class MeshManager: NSObject, ObservableObject {
         if let orientation = computeScanOrientation(points: points) {
             data["scan_orientation"] = orientation
         }
+        // Include camera track for distance-from-camera analysis in labeler
+        if !cameraTrack.isEmpty {
+            data["camera_track"] = cameraTrack  // [[x, y, z, timestamp], ...]
+        }
         return try? JSONSerialization.data(withJSONObject: data)
     }
 
@@ -582,6 +590,7 @@ class MeshManager: NSObject, ObservableObject {
             roomBuilder.reset()
             capturedScan = CapturedScan(startTime: Date())
             existingMeshIds.removeAll()
+            cameraTrack.removeAll()
 
             // Reset user-confirmed corners, classified objects, and window planes
             userConfirmedCorners.removeAll()
@@ -2614,13 +2623,21 @@ extension MeshManager: ARSessionDelegate {
             surfaceClassifier.updateDeviceOrientation(from: frame)
             deviceOrientation = surfaceClassifier.deviceOrientation
 
-            // Track camera position for back reflection detection
+            // Track camera position for back reflection detection + export
             let cameraPosition = SIMD3<Float>(
                 frame.camera.transform.columns.3.x,
                 frame.camera.transform.columns.3.y,
                 frame.camera.transform.columns.3.z
             )
             surfaceClassifier.trackCameraPosition(cameraPosition)
+
+            // Sample camera track for scan export (~5 Hz)
+            if isScanning {
+                let t = frame.timestamp
+                if cameraTrack.isEmpty || (t - Double(cameraTrack.last![3])) >= 0.2 {
+                    cameraTrack.append([cameraPosition.x, cameraPosition.y, cameraPosition.z, Float(t)])
+                }
+            }
 
             // Test mode processing - only ARKit planes for now
             if isScanning && currentMode == .test {

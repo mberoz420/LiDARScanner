@@ -714,6 +714,27 @@ struct PhotogrammetryView: View {
                 }
 
                 if captureMode == .cube {
+                    // Box toggle for Object/Cube mode
+                    Button(action: {
+                        if meshManager.scanVolume != nil {
+                            meshManager.clearScanVolume()
+                        } else {
+                            meshManager.placeScanVolume()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: meshManager.scanVolume != nil ? "cube.fill" : "cube")
+                                .foregroundColor(.yellow)
+                            Text(meshManager.scanVolume != nil ? "Box: ON" : "Box: OFF")
+                                .font(.caption2).foregroundColor(.white.opacity(0.8))
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.black.opacity(0.45)).cornerRadius(8)
+                        .overlay(RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.yellow.opacity(0.6), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+
                     Text("Aim at your object, then tap Start")
                         .font(.caption2).foregroundColor(.yellow.opacity(0.9))
                 } else if captureMode == .lidarOnly {
