@@ -836,6 +836,10 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,18 8,10 14,14 21,6"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/><circle cx="8" cy="10" r="1.5" fill="currentColor"/><circle cx="14" cy="14" r="1.5" fill="currentColor"/><circle cx="21" cy="6" r="1.5" fill="currentColor"/></svg>
                     Polyline
                 </div>
+                <div class="tool-btn" id="tool-marker" onclick="setTool('marker')" title="Place Marker (M)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
+                    Marker
+                </div>
                 <div class="tool-btn" id="tool-windowzoom" onclick="setTool('windowzoom')" title="Window Zoom (W) — drag a rectangle to zoom in">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="12" height="12" stroke-dasharray="3,2"/><circle cx="19" cy="19" r="4"/><line x1="21.5" y1="21.5" x2="23" y2="23"/><line x1="17" y1="19" x2="21" y2="19"/><line x1="19" y1="17" x2="19" y2="21"/></svg>
                     W.Zoom
@@ -1417,7 +1421,7 @@
             points = []; labels = []; normals = []; rgbColors = []; scanIds = [];
             deletedIndices.clear(); selectedIndices.clear();
             numScans = 0; currentFilename = null; originalData = null;
-            guideLines = [];
+            guideLines = []; guideMarkers = [];
             if (guideLinesGroup) { scene.remove(guideLinesGroup); guideLinesGroup = null; }
             if (pointCloud) { scene.remove(pointCloud); pointCloud = null; }
             if (roomOutlineGroup) { scene.remove(roomOutlineGroup); roomOutlineGroup = null; }
@@ -1443,6 +1447,7 @@
 
         // Guide Lines state
         let guideLines = [];        // [{type:'polygon'|'polyline', points:[{x,y,z}...], closed:bool}]
+        let guideMarkers = [];      // [{x,y,z}, ...] standalone circle markers
         let guideLinesGroup = null;
         let activeGuidePoints = []; // vertices being placed for current polygon/polyline
         let isDrawingGuide = false;
@@ -1498,6 +1503,7 @@
                     `Undo: ${action.strokeType} (${action.changes.length} pts)`;
             } else if (action.type === 'guide') {
                 guideLines = action.prev;
+                if (action.prevMarkers) guideMarkers = action.prevMarkers;
                 rebuildGuideLines();
                 document.getElementById('selection-info').textContent = 'Undo: guide line change';
             } else if (action.type === 'boundary') {
@@ -1560,7 +1566,7 @@
             document.getElementById('tool-' + name)?.classList.add('active');
 
             const isConstruct   = (name === 'construct');
-            const isGuideDraw   = (name === 'polygon' || name === 'polyline');
+            const isGuideDraw   = (name === 'polygon' || name === 'polyline' || name === 'marker');
             const isTrimExtend  = (name === 'trim'    || name === 'extend');
             const isWindowZoom  = (name === 'windowzoom');
 
@@ -1583,6 +1589,7 @@
             if (info) {
                 if (name === 'polygon')   info.textContent = 'Guide Polygon: click vertices — click near 1st point or Esc to close';
                 else if (name === 'polyline') info.textContent = 'Guide Line: click to place points — right-click or Esc to finish';
+                else if (name === 'marker')   info.textContent = 'Marker: click to place circle markers — connect later with Polyline (snaps to markers)';
                 else if (name === 'trim')     info.textContent = 'Trim: click on a guide line segment to trim at intersection';
                 else if (name === 'extend')   info.textContent = 'Extend: click near a guide line endpoint to extend to nearest guide';
                 else if (name === 'construct') info.textContent = 'Boundary: click vertices — Esc to close & apply as room boundary';
@@ -1673,7 +1680,12 @@
             // Use distance from camera to scene center as reference
             const camDist = camera ? camera.position.distanceTo(
                 new THREE.Vector3(sceneCenter.x, sceneCenter.y, sceneCenter.z)) : 10;
-            const spriteScale = camDist * 0.025; // ~2.5% of view distance
+            const spriteScale = camDist * 0.015; // ~1.5% of view distance
+
+            // Draw standalone markers
+            if (guideMarkers.length > 0) {
+                addVertexCircles(guideLinesGroup, guideMarkers, guideVertexTex, spriteScale);
+            }
 
             // Draw committed guide lines
             guideLines.forEach(guide => {
@@ -1738,6 +1750,9 @@
                 const d2 = (sx-ex)**2 + (sy-ey)**2;
                 if (d2 < bestDist2) { bestDist2 = d2; bestPt = pt; }
             };
+
+            // Snap to standalone markers
+            if (snapTypes.vertex) guideMarkers.forEach(p => checkPt(p));
 
             guideLines.forEach(guide => {
                 const pts = guide.points;
@@ -1815,6 +1830,15 @@
         function handleGuideToolClick(event) {
             const pos = drawSnapTarget || getClickWorldPos(event);
             if (!pos) return;
+
+            if (activeTool === 'marker') {
+                pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)), prevMarkers: JSON.parse(JSON.stringify(guideMarkers)) });
+                guideMarkers.push({ x: pos.x, y: pos.y, z: pos.z });
+                rebuildGuideLines();
+                document.getElementById('selection-info').textContent =
+                    `Marker placed (${guideMarkers.length} total). Switch to Polyline to connect.`;
+                return;
+            }
 
             if (activeTool === 'polygon' || activeTool === 'polyline') {
                 // Close polygon if clicking near first point
@@ -2252,7 +2276,7 @@
             }
 
             const isGuideActive = (activeTool === 'polygon' || activeTool === 'polyline'
-                                || activeTool === 'trim'    || activeTool === 'extend');
+                                || activeTool === 'marker'  || activeTool === 'trim'    || activeTool === 'extend');
 
             if (!drawMode && !isGuideActive) return;
 
@@ -3295,9 +3319,13 @@
                 computePointDistances();
             }
 
-            // Restore guide lines if saved
+            // Restore guide lines and markers if saved
             if (data.guide_lines && Array.isArray(data.guide_lines)) {
                 guideLines = data.guide_lines;
+                rebuildGuideLines();
+            }
+            if (data.guide_markers && Array.isArray(data.guide_markers)) {
+                guideMarkers = data.guide_markers;
                 rebuildGuideLines();
             }
 
@@ -4565,9 +4593,9 @@
                 return;
             }
 
-            // ── Guide tools intercept (polygon, polyline, trim, extend) ───────
+            // ── Guide tools intercept (polygon, polyline, marker, trim, extend) ───
             if (activeTool === 'polygon' || activeTool === 'polyline'
-             || activeTool === 'trim'    || activeTool === 'extend') {
+             || activeTool === 'marker'  || activeTool === 'trim'    || activeTool === 'extend') {
                 if (!wasDrag) handleGuideToolClick(event);
                 return;
             }
@@ -4790,6 +4818,8 @@
                 setTool('polygon');
             } else if (event.key === 'l' || event.key === 'L') {
                 setTool('polyline');
+            } else if (event.key === 'm' || event.key === 'M') {
+                setTool('marker');
             } else if (event.key === 't' || event.key === 'T') {
                 setTool('trim');
             } else if ((event.key === 'x' || event.key === 'X') && !event.ctrlKey) {
@@ -5200,6 +5230,7 @@
                 num_points: pts.length,
                 custom_labels: customLabels.map(l => ({ id: l.id, name: l.name })),
                 guide_lines: guideLines,
+                guide_markers: guideMarkers,
                 saved_at: new Date().toISOString()
             };
             if (meshFaces) data.faces = meshFaces;
