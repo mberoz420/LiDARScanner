@@ -101,7 +101,8 @@
 - **labeler.php** - Session-checking wrapper that serves PointCloudLabeler.html to authenticated users
 - **admin.php** - Admin panel: view pending/approved/rejected users, approve/reject with email notifications
 - **setup_db.php** - One-time DB setup: creates users table + default admin account. DELETE after running
-- **api/auth.php** - Auth API: login, register, logout, approve, reject, list_users
+- **reset-password.php** - Password reset landing page (from email link), verifies token and accepts new password
+- **api/auth.php** - Auth API: login, register, logout, approve, reject, list_users, verify_reset_token, reset_password
 - **includes/config.php** - DB credentials, API keys, paths, limits, ADMIN_EMAIL
 - **includes/db.php** - PDO connection helper (singleton)
 - **includes/.htaccess** - Blocks direct web access to include files
@@ -113,12 +114,17 @@
 
 - **tools/PointCloudLabeler.html** - Browser-based point cloud labeler with:
   - Load from local/server, auto-classify, manual label (paint/erase)
-  - Guide drawing (polygon, polyline, trim, extend) with AutoCAD crosshair cursor
+  - Guide drawing (polygon, polyline, spline, trim, extend, marker) with AutoCAD crosshair cursor
+  - Tube-based thick guide lines (TubeGeometry) with configurable width and color
+  - Circle+dot vertex markers on guide lines (canvas sprite textures)
   - Drawing sessions stay active during pan/zoom/rotate; right-click to finish
   - Window zoom, boundary construction, multi-scan insert/align/nudge
+  - Camera distance heatmap color mode (green→red, from camera_track data)
+  - Density lines: top-down XZ ridge detection with PCA line fitting for wall detection
+  - Unified Save Project dialog (server/local, folder picker, create folder)
   - Top menu bar: Project (Open/Save local & server, Export GLB/JSON/ML)
-  - Visibility toggles (collapsible left toolbar), photogrammetry layer
-  - Ctrl+O/S/Shift+S/Z shortcuts
+  - Visibility toggles (collapsible left toolbar, 370px wide), photogrammetry layer
+  - Ctrl+O/S/Shift+S/Z shortcuts, S for spline tool
   - File Manager: browse server files, create folders, rename, copy, delete
   - Auto front-direction from vertical surface normals (scan orientation)
 

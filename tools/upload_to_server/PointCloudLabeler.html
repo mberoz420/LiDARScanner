@@ -830,6 +830,10 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,18 8,10 14,14 21,6"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/><circle cx="8" cy="10" r="1.5" fill="currentColor"/><circle cx="14" cy="14" r="1.5" fill="currentColor"/><circle cx="21" cy="6" r="1.5" fill="currentColor"/></svg>
                     Polyline
                 </div>
+                <div class="tool-btn" id="tool-spline" onclick="setTool('spline')" title="Spline Curve (S)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 Q8 4, 14 14 T21 6"/><circle cx="3" cy="18" r="1.5" fill="currentColor"/><circle cx="14" cy="14" r="1.5" fill="currentColor"/><circle cx="21" cy="6" r="1.5" fill="currentColor"/></svg>
+                    Spline
+                </div>
                 <div class="tool-btn" id="tool-marker" onclick="setTool('marker')" title="Place Marker (M)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
                     Marker
@@ -853,12 +857,6 @@
                            oninput="setGuideWidth(this.value)"
                            style="flex:1;height:12px;">
                     <span id="guide-width-value" style="font-size:9px;color:#888;min-width:16px;">3</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:5px;margin-top:3px;">
-                    <label style="font-size:9px;color:#666;display:flex;align-items:center;gap:3px;cursor:pointer;">
-                        <input type="checkbox" id="guide-spline-toggle" onchange="toggleGuideSpline(this.checked)" style="margin:0;">
-                        <span>Spline (smooth curve)</span>
-                    </label>
                 </div>
             </div>
 
@@ -1514,7 +1512,6 @@
         let snapTypes = { vertex: true, midpoint: true, intersect: true };
         let guideLineColor = 0x00d9ff;  // user-selectable guide line color
         let guideLineWidth = 3;         // tube thickness in mm (radius = width/2 * 0.001)
-        let guideSpline = false;        // smooth spline through vertices
 
         // View lock state
         let viewLocked = false;
@@ -1607,10 +1604,6 @@
             document.getElementById('guide-width-value').textContent = val;
             if (scene) rebuildGuideLines();
         }
-        function toggleGuideSpline(on) {
-            guideSpline = on;
-            if (scene) rebuildGuideLines();
-        }
 
         function toggleViewLock() {
             viewLocked = !viewLocked;
@@ -1636,7 +1629,7 @@
             document.getElementById('tool-' + name)?.classList.add('active');
 
             const isConstruct   = (name === 'construct');
-            const isGuideDraw   = (name === 'polygon' || name === 'polyline' || name === 'marker');
+            const isGuideDraw   = (name === 'polygon' || name === 'polyline' || name === 'spline' || name === 'marker');
             const isTrimExtend  = (name === 'trim'    || name === 'extend');
             const isWindowZoom  = (name === 'windowzoom');
 
@@ -1659,6 +1652,7 @@
             if (info) {
                 if (name === 'polygon')   info.textContent = 'Guide Polygon: click vertices — click near 1st point or Esc to close';
                 else if (name === 'polyline') info.textContent = 'Guide Line: click to place points — right-click or Esc to finish';
+                else if (name === 'spline')   info.textContent = 'Spline: click control points — smooth curve drawn through them. Right-click or Esc to finish';
                 else if (name === 'marker')   info.textContent = 'Marker: click to place circle markers — connect later with Polyline (snaps to markers)';
                 else if (name === 'trim')     info.textContent = 'Trim: click on a guide line segment to trim at intersection';
                 else if (name === 'extend')   info.textContent = 'Extend: click near a guide line endpoint to extend to nearest guide';
@@ -1788,7 +1782,8 @@
             guideLines.forEach(guide => {
                 const pts = guide.points;
                 if (pts.length < 2) return;
-                buildGuideTube(guideLinesGroup, pts, guideLineColor, tubeRadius, guide.closed, guideSpline);
+                const isSpline = guide.type === 'spline';
+                buildGuideTube(guideLinesGroup, pts, guideLineColor, tubeRadius, guide.closed, isSpline);
                 addVertexCircles(guideLinesGroup, pts, guideVertexTex, spriteScale);
             });
 
@@ -1796,8 +1791,9 @@
             if (activeGuidePoints.length >= 1) {
                 const pts = [...activeGuidePoints];
                 if (drawSnapTarget) pts.push(drawSnapTarget);
+                const activeIsSpline = activeTool === 'spline';
                 if (pts.length >= 2) {
-                    buildGuideTube(guideLinesGroup, pts, 0xffcc00, tubeRadius, false, guideSpline);
+                    buildGuideTube(guideLinesGroup, pts, 0xffcc00, tubeRadius, false, activeIsSpline);
                 }
                 addVertexCircles(guideLinesGroup, activeGuidePoints, guideVertexTexActive, spriteScale * 1.2);
             }
@@ -1914,7 +1910,7 @@
                 return;
             }
 
-            if (activeTool === 'polygon' || activeTool === 'polyline') {
+            if (activeTool === 'polygon' || activeTool === 'polyline' || activeTool === 'spline') {
                 // Close polygon if clicking near first point
                 if (activeTool === 'polygon' && activeGuidePoints.length >= 3) {
                     const first = activeGuidePoints[0];
@@ -1933,14 +1929,15 @@
                 isDrawingGuide = true;
                 rebuildGuideLines();
                 const n = activeGuidePoints.length;
+                const toolLabel = activeTool === 'polygon' ? 'Polygon' : activeTool === 'spline' ? 'Spline' : 'Polyline';
                 if (n === 1) {
                     document.getElementById('selection-info').textContent =
                         activeTool === 'polygon'
                             ? 'Guide Polygon: click to add vertices — click near 1st point or Esc to close'
-                            : 'Guide Line: click to add points — right-click or Esc to finish';
+                            : `${toolLabel}: click to add points — right-click or Esc to finish`;
                 } else {
                     document.getElementById('selection-info').textContent =
-                        `${activeTool === 'polygon' ? 'Polygon' : 'Polyline'}: ${n} point${n===1?'':'s'}`;
+                        `${toolLabel}: ${n} point${n===1?'':'s'}`;
                 }
             } else if (activeTool === 'trim') {
                 const seg = findClosestGuideSegment(pos);
@@ -1956,11 +1953,13 @@
         function finishGuidePolyline() {
             if (activeGuidePoints.length < 2) { cancelGuideDraw(); return; }
             pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)) });
-            guideLines.push({ type: 'polyline', points: [...activeGuidePoints], closed: false });
+            const guideType = activeTool === 'spline' ? 'spline' : 'polyline';
+            guideLines.push({ type: guideType, points: [...activeGuidePoints], closed: false });
             activeGuidePoints = [];
             isDrawingGuide = false;
             rebuildGuideLines();
-            document.getElementById('selection-info').textContent = `Guide line added (${guideLines[guideLines.length-1].points.length} points).`;
+            const label = guideType === 'spline' ? 'Spline' : 'Guide line';
+            document.getElementById('selection-info').textContent = `${label} added (${guideLines[guideLines.length-1].points.length} points).`;
         }
 
         function cancelGuideDraw() {
@@ -2349,7 +2348,7 @@
                 return;
             }
 
-            const isGuideActive = (activeTool === 'polygon' || activeTool === 'polyline'
+            const isGuideActive = (activeTool === 'polygon' || activeTool === 'polyline' || activeTool === 'spline'
                                 || activeTool === 'marker'  || activeTool === 'trim'    || activeTool === 'extend');
 
             if (!drawMode && !isGuideActive) return;
@@ -3269,7 +3268,7 @@
             renderer.domElement.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 // Show context menu during drawing sessions
-                const isGuideDrawing = (activeTool === 'polygon' || activeTool === 'polyline') && isDrawingGuide;
+                const isGuideDrawing = (activeTool === 'polygon' || activeTool === 'polyline' || activeTool === 'spline') && isDrawingGuide;
                 const isBoundaryDrawing = drawMode && drawnPoints3D.length > 0;
                 if (isGuideDrawing || isBoundaryDrawing) {
                     showDrawContextMenu(e, isGuideDrawing, isBoundaryDrawing);
@@ -4667,8 +4666,8 @@
                 return;
             }
 
-            // ── Guide tools intercept (polygon, polyline, marker, trim, extend) ───
-            if (activeTool === 'polygon' || activeTool === 'polyline'
+            // ── Guide tools intercept (polygon, polyline, spline, marker, trim, extend)
+            if (activeTool === 'polygon' || activeTool === 'polyline' || activeTool === 'spline'
              || activeTool === 'marker'  || activeTool === 'trim'    || activeTool === 'extend') {
                 if (!wasDrag) handleGuideToolClick(event);
                 return;
@@ -4866,7 +4865,7 @@
                         isDrawingGuide = false;
                         rebuildGuideLines();
                         document.getElementById('selection-info').textContent = 'Guide polygon closed.';
-                    } else if (activeTool === 'polyline' && activeGuidePoints.length >= 2) {
+                    } else if ((activeTool === 'polyline' || activeTool === 'spline') && activeGuidePoints.length >= 2) {
                         finishGuidePolyline();
                     } else {
                         cancelGuideDraw();
@@ -4892,6 +4891,8 @@
                 setTool('polygon');
             } else if (event.key === 'l' || event.key === 'L') {
                 setTool('polyline');
+            } else if (event.key === 's' || event.key === 'S') {
+                if (!event.ctrlKey) setTool('spline');
             } else if (event.key === 'm' || event.key === 'M') {
                 setTool('marker');
             } else if (event.key === 't' || event.key === 'T') {
