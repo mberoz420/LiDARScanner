@@ -1630,9 +1630,50 @@
 
         // ── Guide Lines System ──────────────────────────────────────────────────
 
+        // Build a circle-with-center-dot texture for vertex markers
+        function makeCircleTexture(ringColor, dotColor, size) {
+            const c = document.createElement('canvas');
+            c.width = size; c.height = size;
+            const ctx = c.getContext('2d');
+            const cx = size / 2, cy = size / 2, r = size / 2 - 2;
+            // Outer ring
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.strokeStyle = ringColor;
+            ctx.lineWidth = Math.max(3, size / 16);
+            ctx.stroke();
+            // Center dot
+            ctx.beginPath();
+            ctx.arc(cx, cy, r * 0.3, 0, Math.PI * 2);
+            ctx.fillStyle = dotColor;
+            ctx.fill();
+            return new THREE.CanvasTexture(c);
+        }
+        const guideVertexTex      = makeCircleTexture('#ffffff', '#00d9ff', 64);
+        const guideVertexTexActive = makeCircleTexture('#ffffff', '#ffcc00', 64);
+
+        function addVertexCircles(group, pts, tex, pixelSize) {
+            pts.forEach(p => {
+                const mat = new THREE.SpriteMaterial({
+                    map: tex, transparent: true, depthTest: false, sizeAttenuation: false
+                });
+                const sprite = new THREE.Sprite(mat);
+                sprite.position.set(p.x, p.y, p.z);
+                // Scale in NDC-ish units — pixelSize is approx screen pixels
+                sprite.scale.set(pixelSize, pixelSize, 1);
+                group.add(sprite);
+            });
+        }
+
         function rebuildGuideLines() {
             if (guideLinesGroup) scene.remove(guideLinesGroup);
             guideLinesGroup = new THREE.Group();
+
+            // Compute a sprite scale that stays roughly constant on screen
+            // Use distance from camera to scene center as reference
+            const camDist = camera ? camera.position.distanceTo(
+                new THREE.Vector3(sceneCenter.x, sceneCenter.y, sceneCenter.z)) : 10;
+            const spriteScale = camDist * 0.025; // ~2.5% of view distance
 
             // Draw committed guide lines
             guideLines.forEach(guide => {
@@ -1649,21 +1690,8 @@
                 const geo = new THREE.BufferGeometry();
                 geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
                 guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: guideLineColor, linewidth: 2 })));
-                // Vertex dots — large visible markers at each clicked vertex
-                const dv = pts.flatMap(p => [p.x, p.y, p.z]);
-                const dg = new THREE.BufferGeometry();
-                dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({
-                    color: 0xffffff, size: 0.18, sizeAttenuation: true,
-                    transparent: true, opacity: 0.9, depthTest: false
-                })));
-                // Inner colored dot
-                const dg2 = new THREE.BufferGeometry();
-                dg2.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg2, new THREE.PointsMaterial({
-                    color: guideLineColor, size: 0.12, sizeAttenuation: true,
-                    depthTest: false
-                })));
+                // Circle markers at each vertex
+                addVertexCircles(guideLinesGroup, pts, guideVertexTex, spriteScale);
             });
 
             // Draw active (in-progress) guide
@@ -1684,20 +1712,8 @@
                         guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffcc00, linewidth: 2 })));
                     }
                 }
-                // Active vertex dots — white outline + yellow fill
-                const dv = pts.flatMap(p => [p.x, p.y, p.z]);
-                const dg = new THREE.BufferGeometry();
-                dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({
-                    color: 0xffffff, size: 0.22, sizeAttenuation: true,
-                    transparent: true, opacity: 0.9, depthTest: false
-                })));
-                const dg2 = new THREE.BufferGeometry();
-                dg2.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg2, new THREE.PointsMaterial({
-                    color: 0xffcc00, size: 0.14, sizeAttenuation: true,
-                    depthTest: false
-                })));
+                // Circle markers at active vertices
+                addVertexCircles(guideLinesGroup, pts, guideVertexTexActive, spriteScale * 1.2);
             }
 
             scene.add(guideLinesGroup);
