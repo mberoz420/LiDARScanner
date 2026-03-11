@@ -1900,10 +1900,14 @@
             const distLast  = Math.sqrt((clickPt.x-lastPt.x)**2  + (clickPt.z-lastPt.z)**2);
             const extendFromEnd = distLast < distFirst;
 
+            // Direction: from the second-to-last point through the endpoint
             const fixedPt = extendFromEnd ? (pts[pts.length-2] || pts[0]) : (pts[1] || pts[pts.length-1]);
             const extPt   = extendFromEnd ? lastPt : firstPt;
             const dx = extPt.x - fixedPt.x, dz = extPt.z - fixedPt.z;
-            const farPt = { x: extPt.x + dx*1000, y: extPt.y, z: extPt.z + dz*1000 };
+            const dirLen = Math.sqrt(dx*dx + dz*dz);
+            if (dirLen < 1e-8) return;
+            // Ray from extPt in the extending direction
+            const farPt = { x: extPt.x + (dx/dirLen)*1000, y: extPt.y, z: extPt.z + (dz/dirLen)*1000 };
 
             const allInts = [];
             guideLines.forEach((other, oi) => {
@@ -1912,15 +1916,19 @@
                 const oSegCount = op.length - 1 + (other.closed ? 1 : 0);
                 for (let si = 0; si < oSegCount; si++) {
                     const q1 = op[si % op.length], q2 = op[(si+1) % op.length];
-                    const int = lineLineIntersectXZ(fixedPt, farPt, q1, q2);
-                    if (int && int.t1 > 1.001 && int.t2 >= 0 && int.t2 <= 1) {
-                        allInts.push({ x: int.x, y: extPt.y, z: int.z, t: int.t1 });
+                    // Intersect ray (extPt → farPt) with segment (q1 → q2)
+                    const int = lineLineIntersectXZ(extPt, farPt, q1, q2);
+                    // t1 > 0 = intersection is in the extending direction
+                    // t2 in [0,1] = intersection is on the target segment
+                    if (int && int.t1 > 1e-6 && int.t2 >= -1e-6 && int.t2 <= 1 + 1e-6) {
+                        const dist = Math.sqrt((int.x-extPt.x)**2 + (int.z-extPt.z)**2);
+                        allInts.push({ x: int.x, y: extPt.y, z: int.z, dist });
                     }
                 }
             });
 
             if (!allInts.length) { document.getElementById('selection-info').textContent = 'No boundary found to extend to.'; return; }
-            allInts.sort((a, b) => a.t - b.t);
+            allInts.sort((a, b) => a.dist - b.dist);
             const nearest = allInts[0];
             const newPts = [...pts];
             const newPt = { x: nearest.x, y: nearest.y, z: nearest.z };
