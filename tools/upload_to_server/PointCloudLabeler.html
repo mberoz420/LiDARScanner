@@ -1649,11 +1649,21 @@
                 const geo = new THREE.BufferGeometry();
                 geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
                 guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: guideLineColor, linewidth: 2 })));
-                // Vertex dots
+                // Vertex dots — large visible markers at each clicked vertex
                 const dv = pts.flatMap(p => [p.x, p.y, p.z]);
                 const dg = new THREE.BufferGeometry();
                 dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({ color: guideLineColor, size: 0.06 })));
+                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({
+                    color: 0xffffff, size: 0.18, sizeAttenuation: true,
+                    transparent: true, opacity: 0.9, depthTest: false
+                })));
+                // Inner colored dot
+                const dg2 = new THREE.BufferGeometry();
+                dg2.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
+                guideLinesGroup.add(new THREE.Points(dg2, new THREE.PointsMaterial({
+                    color: guideLineColor, size: 0.12, sizeAttenuation: true,
+                    depthTest: false
+                })));
             });
 
             // Draw active (in-progress) guide
@@ -1674,10 +1684,20 @@
                         guideLinesGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffcc00, linewidth: 2 })));
                     }
                 }
+                // Active vertex dots — white outline + yellow fill
                 const dv = pts.flatMap(p => [p.x, p.y, p.z]);
                 const dg = new THREE.BufferGeometry();
                 dg.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
-                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({ color: 0xffcc00, size: 0.08 })));
+                guideLinesGroup.add(new THREE.Points(dg, new THREE.PointsMaterial({
+                    color: 0xffffff, size: 0.22, sizeAttenuation: true,
+                    transparent: true, opacity: 0.9, depthTest: false
+                })));
+                const dg2 = new THREE.BufferGeometry();
+                dg2.setAttribute('position', new THREE.Float32BufferAttribute(dv, 3));
+                guideLinesGroup.add(new THREE.Points(dg2, new THREE.PointsMaterial({
+                    color: 0xffcc00, size: 0.14, sizeAttenuation: true,
+                    depthTest: false
+                })));
             }
 
             scene.add(guideLinesGroup);
