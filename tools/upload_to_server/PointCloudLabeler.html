@@ -2574,8 +2574,10 @@
         }
 
         /**
-         * Density Lines — detect dominant Y levels and draw horizontal planes.
-         * Builds a Y-histogram, finds peaks, draws cross-hair rectangles in the scene.
+         * Density Lines — top-down density ridge detection.
+         * Projects all points onto XZ (top view), builds a 2D density grid,
+         * finds high-density ridge cells (walls, edges), clusters them,
+         * fits lines via PCA, and draws them vertically floor-to-ceiling.
          */
         function toggleDensityLines() {
             if (densityLinesGroup) {
@@ -2585,163 +2587,191 @@
                 return;
             }
             if (points.length === 0) return;
+            document.getElementById('selection-info').textContent = 'Computing density lines...';
 
-            // Build Y histogram (1 cm bins)
-            const binSize = 0.01;
-            const bins = {};
-            let totalVisible = 0;
+            const cellSize = 0.03; // 3 cm grid
+            const grid = {};
+            let yLo = Infinity, yHi = -Infinity;
+            let visCount = 0;
+
+            // 1. Build top-down XZ density grid (collapse Y)
             for (let i = 0; i < points.length; i++) {
                 if (!isPointVisible(i)) continue;
-                totalVisible++;
-                const bin = Math.round(points[i].y / binSize);
-                bins[bin] = (bins[bin] || 0) + 1;
+                visCount++;
+                const p = points[i];
+                if (p.y < yLo) yLo = p.y;
+                if (p.y > yHi) yHi = p.y;
+                const gx = Math.floor(p.x / cellSize);
+                const gz = Math.floor(p.z / cellSize);
+                const key = gx + ',' + gz;
+                if (!grid[key]) grid[key] = { gx, gz, count: 0, sumY: 0 };
+                grid[key].count++;
+                grid[key].sumY += p.y;
             }
-            if (totalVisible === 0) return;
+            if (visCount === 0) return;
 
-            // Smooth histogram with a ±5 bin Gaussian kernel (~10 cm window)
-            const sortedBins = Object.keys(bins).map(Number).sort((a, b) => a - b);
-            const smoothed = {};
-            const radius = 5;
-            sortedBins.forEach(b => {
-                let sum = 0, wt = 0;
-                for (let d = -radius; d <= radius; d++) {
-                    const v = bins[b + d] || 0;
-                    const w = Math.exp(-0.5 * (d / 2.5) ** 2);
-                    sum += v * w;
-                    wt += w;
-                }
-                smoothed[b] = sum / wt;
-            });
+            // 2. Find density threshold — top 15% of occupied cells
+            const cells = Object.values(grid);
+            const counts = cells.map(c => c.count).sort((a, b) => a - b);
+            const threshIdx = Math.floor(counts.length * 0.85);
+            const densityThresh = counts[threshIdx] || 1;
 
-            // Find peaks: local maxima above 2% of max density
-            const maxDensity = Math.max(...Object.values(smoothed));
-            const threshold = maxDensity * 0.02;
-            const peakBins = [];
-            const halfWindow = 10; // ±10 bins = ±10 cm exclusion zone
-            sortedBins.forEach(b => {
-                if (smoothed[b] < threshold) return;
-                let isPeak = true;
-                for (let d = -halfWindow; d <= halfWindow; d++) {
-                    if (d === 0) continue;
-                    if ((smoothed[b + d] || 0) > smoothed[b]) { isPeak = false; break; }
-                }
-                if (isPeak) {
-                    // Merge with nearby peaks
-                    if (peakBins.length > 0 && (b - peakBins[peakBins.length - 1].bin) < halfWindow * 2) {
-                        const prev = peakBins[peakBins.length - 1];
-                        if (smoothed[b] > smoothed[prev.bin]) {
-                            prev.bin = b;
-                            prev.y = b * binSize;
-                            prev.count = smoothed[b];
-                        }
-                    } else {
-                        peakBins.push({ bin: b, y: b * binSize, count: smoothed[b] });
-                    }
-                }
-            });
-
-            if (peakBins.length === 0) {
-                document.getElementById('selection-info').textContent = 'No density peaks found.';
+            // 3. Collect ridge cells (high-density)
+            const ridgeCells = cells.filter(c => c.count >= densityThresh);
+            if (ridgeCells.length < 2) {
+                document.getElementById('selection-info').textContent = 'No density ridges found.';
                 return;
             }
 
-            // Sort by density descending, keep top 10
-            peakBins.sort((a, b) => b.count - a.count);
-            const topPeaks = peakBins.slice(0, 10);
-            topPeaks.sort((a, b) => a.y - b.y);
+            // 4. Cluster ridge cells using flood-fill (8-connected)
+            const ridgeSet = {};
+            ridgeCells.forEach(c => { ridgeSet[c.gx + ',' + c.gz] = c; });
+            const visited = new Set();
+            const clusters = [];
 
-            // For each peak, collect points near that Y, grid in XZ, trace boundary
-            const yTolerance = 0.03; // ±3 cm band
-            const gridCell = 0.05;   // 5 cm XZ grid
+            for (const c of ridgeCells) {
+                const key = c.gx + ',' + c.gz;
+                if (visited.has(key)) continue;
+                const cluster = [];
+                const queue = [c];
+                visited.add(key);
+                while (queue.length > 0) {
+                    const cur = queue.pop();
+                    cluster.push(cur);
+                    for (let dx = -1; dx <= 1; dx++) {
+                        for (let dz = -1; dz <= 1; dz++) {
+                            if (dx === 0 && dz === 0) continue;
+                            const nk = (cur.gx + dx) + ',' + (cur.gz + dz);
+                            if (!visited.has(nk) && ridgeSet[nk]) {
+                                visited.add(nk);
+                                queue.push(ridgeSet[nk]);
+                            }
+                        }
+                    }
+                }
+                if (cluster.length >= 3) clusters.push(cluster);
+            }
+
+            // Sort clusters by total point count descending, keep top 20
+            clusters.sort((a, b) => {
+                const sa = a.reduce((s, c) => s + c.count, 0);
+                const sb = b.reduce((s, c) => s + c.count, 0);
+                return sb - sa;
+            });
+            const topClusters = clusters.slice(0, 20);
+
+            // 5. For each cluster, fit a line using PCA in XZ, draw vertical wall line
             densityLinesGroup = new THREE.Group();
-            const colors = [0x22c55e, 0xeab308, 0x3b82f6, 0xef4444, 0xa855f7, 0x06b6d4, 0xf97316, 0xec4899, 0x14b8a6, 0x8b5cf6];
+            const colors = [0x22c55e, 0xeab308, 0x3b82f6, 0xef4444, 0xa855f7,
+                            0x06b6d4, 0xf97316, 0xec4899, 0x14b8a6, 0x8b5cf6];
 
-            topPeaks.forEach((peak, idx) => {
-                const y = peak.y;
+            topClusters.forEach((cluster, idx) => {
                 const color = colors[idx % colors.length];
+                const n = cluster.length;
 
-                // Collect XZ points in this Y band
-                const occupied = {};
-                let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
-                for (let i = 0; i < points.length; i++) {
-                    if (!isPointVisible(i)) continue;
-                    const p = points[i];
-                    if (Math.abs(p.y - y) > yTolerance) continue;
-                    const gx = Math.floor(p.x / gridCell);
-                    const gz = Math.floor(p.z / gridCell);
-                    occupied[gx + ',' + gz] = true;
-                    if (gx < gxMin) gxMin = gx;
-                    if (gx > gxMax) gxMax = gx;
-                    if (gz < gzMin) gzMin = gz;
-                    if (gz > gzMax) gzMax = gz;
+                // Weighted centroid
+                let totalW = 0, cx = 0, cz = 0, avgY = 0;
+                cluster.forEach(c => {
+                    const w = c.count;
+                    totalW += w;
+                    cx += (c.gx + 0.5) * cellSize * w;
+                    cz += (c.gz + 0.5) * cellSize * w;
+                    avgY += (c.sumY / c.count) * w;
+                });
+                cx /= totalW; cz /= totalW; avgY /= totalW;
+
+                // PCA — find principal direction in XZ
+                let cxx = 0, cxz = 0, czz = 0;
+                cluster.forEach(c => {
+                    const w = c.count;
+                    const dx = (c.gx + 0.5) * cellSize - cx;
+                    const dz = (c.gz + 0.5) * cellSize - cz;
+                    cxx += dx * dx * w;
+                    cxz += dx * dz * w;
+                    czz += dz * dz * w;
+                });
+                // Eigenvector of 2x2 covariance for largest eigenvalue
+                const trace = cxx + czz;
+                const det = cxx * czz - cxz * cxz;
+                const lambda1 = trace / 2 + Math.sqrt(Math.max((trace * trace) / 4 - det, 0));
+                let dirX, dirZ;
+                if (Math.abs(cxz) > 1e-10) {
+                    dirX = lambda1 - czz;
+                    dirZ = cxz;
+                } else if (cxx >= czz) {
+                    dirX = 1; dirZ = 0;
+                } else {
+                    dirX = 0; dirZ = 1;
                 }
+                const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+                dirX /= len; dirZ /= len;
 
-                // Find boundary cells: occupied cells with ≥1 empty 4-neighbor
-                const boundary = [];
-                for (const key in occupied) {
-                    const [gx, gz] = key.split(',').map(Number);
-                    const hasEmpty = !occupied[(gx-1)+','+gz] || !occupied[(gx+1)+','+gz]
-                                  || !occupied[gx+','+(gz-1)] || !occupied[gx+','+(gz+1)];
-                    if (hasEmpty) {
-                        boundary.push({ x: (gx + 0.5) * gridCell, z: (gz + 0.5) * gridCell });
-                    }
-                }
+                // Project cluster cells onto the principal axis to get line extent
+                let tMin = Infinity, tMax = -Infinity;
+                cluster.forEach(c => {
+                    const px = (c.gx + 0.5) * cellSize - cx;
+                    const pz = (c.gz + 0.5) * cellSize - cz;
+                    const t = px * dirX + pz * dirZ;
+                    if (t < tMin) tMin = t;
+                    if (t > tMax) tMax = t;
+                });
 
-                if (boundary.length < 3) return;
+                // Line endpoints in XZ
+                const x0 = cx + dirX * tMin;
+                const z0 = cz + dirZ * tMin;
+                const x1 = cx + dirX * tMax;
+                const z1 = cz + dirZ * tMax;
 
-                // Order boundary points by nearest-neighbor traversal
-                const ordered = [boundary.splice(0, 1)[0]];
-                while (boundary.length > 0) {
-                    const last = ordered[ordered.length - 1];
-                    let bestIdx = 0, bestDist = Infinity;
-                    for (let j = 0; j < boundary.length; j++) {
-                        const d = (boundary[j].x - last.x) ** 2 + (boundary[j].z - last.z) ** 2;
-                        if (d < bestDist) { bestDist = d; bestIdx = j; }
-                    }
-                    // If nearest point is too far (gap > 4 cells), start new segment
-                    if (bestDist > (gridCell * 4) ** 2 && ordered.length > 2) break;
-                    ordered.push(boundary.splice(bestIdx, 1)[0]);
-                }
+                // Draw vertical wall: 4 edges of a rectangle from yLo to yHi
+                const mat = new THREE.LineBasicMaterial({ color, linewidth: 2, transparent: true, opacity: 0.8 });
+                const verts = new Float32Array([
+                    // Bottom line
+                    x0, yLo, z0,  x1, yLo, z1,
+                    // Top line
+                    x0, yHi, z0,  x1, yHi, z1,
+                    // Left edge
+                    x0, yLo, z0,  x0, yHi, z0,
+                    // Right edge
+                    x1, yLo, z1,  x1, yHi, z1,
+                ]);
+                const geo = new THREE.BufferGeometry();
+                geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+                densityLinesGroup.add(new THREE.LineSegments(geo, mat));
 
-                // Draw boundary as connected line loop
-                if (ordered.length >= 3) {
-                    const verts = [];
-                    for (let i = 0; i < ordered.length - 1; i++) {
-                        verts.push(ordered[i].x, y, ordered[i].z);
-                        verts.push(ordered[i+1].x, y, ordered[i+1].z);
-                    }
-                    // Close loop
-                    verts.push(ordered[ordered.length-1].x, y, ordered[ordered.length-1].z);
-                    verts.push(ordered[0].x, y, ordered[0].z);
+                // Semi-transparent wall fill
+                const fillGeo = new THREE.BufferGeometry();
+                const fillVerts = new Float32Array([
+                    x0, yLo, z0,  x1, yLo, z1,  x1, yHi, z1,
+                    x0, yLo, z0,  x1, yHi, z1,  x0, yHi, z0,
+                ]);
+                fillGeo.setAttribute('position', new THREE.BufferAttribute(fillVerts, 3));
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color, transparent: true, opacity: 0.08,
+                    side: THREE.DoubleSide, depthWrite: false
+                });
+                densityLinesGroup.add(new THREE.Mesh(fillGeo, fillMat));
 
-                    const geo = new THREE.BufferGeometry();
-                    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-                    const mat = new THREE.LineBasicMaterial({ color, linewidth: 2, transparent: true, opacity: 0.85 });
-                    densityLinesGroup.add(new THREE.LineSegments(geo, mat));
-                }
-
-                // Label sprite at centroid
-                const cx = ordered.reduce((s, p) => s + p.x, 0) / ordered.length;
-                const cz = ordered.reduce((s, p) => s + p.z, 0) / ordered.length;
+                // Label at midpoint
+                const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
+                const lineLen = Math.sqrt((x1-x0)**2 + (z1-z0)**2);
                 const canvas = document.createElement('canvas');
                 canvas.width = 256; canvas.height = 48;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
-                ctx.font = 'bold 28px sans-serif';
-                ctx.fillText('Y=' + y.toFixed(2) + 'm', 4, 34);
+                const ctx2d = canvas.getContext('2d');
+                ctx2d.fillStyle = '#' + color.toString(16).padStart(6, '0');
+                ctx2d.font = 'bold 24px sans-serif';
+                ctx2d.fillText(lineLen.toFixed(2) + 'm', 4, 32);
                 const tex = new THREE.CanvasTexture(canvas);
                 const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
                 const sprite = new THREE.Sprite(spriteMat);
-                sprite.position.set(cx, y + 0.15, cz);
-                sprite.scale.set(1.2, 0.22, 1);
+                sprite.position.set(mx, (yLo + yHi) / 2, mz);
+                sprite.scale.set(0.8, 0.15, 1);
                 densityLinesGroup.add(sprite);
             });
 
             scene.add(densityLinesGroup);
 
-            const desc = topPeaks.map(p => `Y=${p.y.toFixed(2)}m`).join(', ');
             document.getElementById('selection-info').textContent =
-                `Density lines: ${topPeaks.length} planes — ${desc}`;
+                `Density lines: ${topClusters.length} wall ridges detected`;
         }
 
         /** Renders per-scan color pickers inside #scan-color-list. */
