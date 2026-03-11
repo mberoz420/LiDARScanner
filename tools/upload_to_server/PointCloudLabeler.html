@@ -2650,42 +2650,79 @@
             const topPeaks = peakBins.slice(0, 10);
             topPeaks.sort((a, b) => a.y - b.y);
 
-            // Compute scene XZ bounds for the lines
-            let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
-            for (let i = 0; i < points.length; i++) {
-                if (!isPointVisible(i)) continue;
-                const p = points[i];
-                if (p.x < xMin) xMin = p.x;
-                if (p.x > xMax) xMax = p.x;
-                if (p.z < zMin) zMin = p.z;
-                if (p.z > zMax) zMax = p.z;
-            }
-            const pad = (xMax - xMin) * 0.05;
-
-            // Draw lines
+            // For each peak, collect points near that Y, grid in XZ, trace boundary
+            const yTolerance = 0.03; // ±3 cm band
+            const gridCell = 0.05;   // 5 cm XZ grid
             densityLinesGroup = new THREE.Group();
             const colors = [0x22c55e, 0xeab308, 0x3b82f6, 0xef4444, 0xa855f7, 0x06b6d4, 0xf97316, 0xec4899, 0x14b8a6, 0x8b5cf6];
 
             topPeaks.forEach((peak, idx) => {
                 const y = peak.y;
                 const color = colors[idx % colors.length];
-                const mat = new THREE.LineBasicMaterial({ color, linewidth: 2, transparent: true, opacity: 0.7 });
 
-                // Draw cross: two lines spanning the scene at this Y
-                const verts = new Float32Array([
-                    xMin - pad, y, zMin - pad,   xMax + pad, y, zMin - pad,
-                    xMax + pad, y, zMin - pad,   xMax + pad, y, zMax + pad,
-                    xMax + pad, y, zMax + pad,   xMin - pad, y, zMax + pad,
-                    xMin - pad, y, zMax + pad,   xMin - pad, y, zMin - pad,
-                    // Center cross
-                    xMin - pad, y, (zMin + zMax) / 2,  xMax + pad, y, (zMin + zMax) / 2,
-                    (xMin + xMax) / 2, y, zMin - pad,  (xMin + xMax) / 2, y, zMax + pad,
-                ]);
-                const geo = new THREE.BufferGeometry();
-                geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-                densityLinesGroup.add(new THREE.LineSegments(geo, mat));
+                // Collect XZ points in this Y band
+                const occupied = {};
+                let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
+                for (let i = 0; i < points.length; i++) {
+                    if (!isPointVisible(i)) continue;
+                    const p = points[i];
+                    if (Math.abs(p.y - y) > yTolerance) continue;
+                    const gx = Math.floor(p.x / gridCell);
+                    const gz = Math.floor(p.z / gridCell);
+                    occupied[gx + ',' + gz] = true;
+                    if (gx < gxMin) gxMin = gx;
+                    if (gx > gxMax) gxMax = gx;
+                    if (gz < gzMin) gzMin = gz;
+                    if (gz > gzMax) gzMax = gz;
+                }
 
-                // Label sprite
+                // Find boundary cells: occupied cells with ≥1 empty 4-neighbor
+                const boundary = [];
+                for (const key in occupied) {
+                    const [gx, gz] = key.split(',').map(Number);
+                    const hasEmpty = !occupied[(gx-1)+','+gz] || !occupied[(gx+1)+','+gz]
+                                  || !occupied[gx+','+(gz-1)] || !occupied[gx+','+(gz+1)];
+                    if (hasEmpty) {
+                        boundary.push({ x: (gx + 0.5) * gridCell, z: (gz + 0.5) * gridCell });
+                    }
+                }
+
+                if (boundary.length < 3) return;
+
+                // Order boundary points by nearest-neighbor traversal
+                const ordered = [boundary.splice(0, 1)[0]];
+                while (boundary.length > 0) {
+                    const last = ordered[ordered.length - 1];
+                    let bestIdx = 0, bestDist = Infinity;
+                    for (let j = 0; j < boundary.length; j++) {
+                        const d = (boundary[j].x - last.x) ** 2 + (boundary[j].z - last.z) ** 2;
+                        if (d < bestDist) { bestDist = d; bestIdx = j; }
+                    }
+                    // If nearest point is too far (gap > 4 cells), start new segment
+                    if (bestDist > (gridCell * 4) ** 2 && ordered.length > 2) break;
+                    ordered.push(boundary.splice(bestIdx, 1)[0]);
+                }
+
+                // Draw boundary as connected line loop
+                if (ordered.length >= 3) {
+                    const verts = [];
+                    for (let i = 0; i < ordered.length - 1; i++) {
+                        verts.push(ordered[i].x, y, ordered[i].z);
+                        verts.push(ordered[i+1].x, y, ordered[i+1].z);
+                    }
+                    // Close loop
+                    verts.push(ordered[ordered.length-1].x, y, ordered[ordered.length-1].z);
+                    verts.push(ordered[0].x, y, ordered[0].z);
+
+                    const geo = new THREE.BufferGeometry();
+                    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+                    const mat = new THREE.LineBasicMaterial({ color, linewidth: 2, transparent: true, opacity: 0.85 });
+                    densityLinesGroup.add(new THREE.LineSegments(geo, mat));
+                }
+
+                // Label sprite at centroid
+                const cx = ordered.reduce((s, p) => s + p.x, 0) / ordered.length;
+                const cz = ordered.reduce((s, p) => s + p.z, 0) / ordered.length;
                 const canvas = document.createElement('canvas');
                 canvas.width = 256; canvas.height = 48;
                 const ctx = canvas.getContext('2d');
@@ -2695,16 +2732,16 @@
                 const tex = new THREE.CanvasTexture(canvas);
                 const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
                 const sprite = new THREE.Sprite(spriteMat);
-                sprite.position.set(xMax + pad + 0.3, y, (zMin + zMax) / 2);
+                sprite.position.set(cx, y + 0.15, cz);
                 sprite.scale.set(1.2, 0.22, 1);
                 densityLinesGroup.add(sprite);
             });
 
             scene.add(densityLinesGroup);
 
-            const desc = topPeaks.map((p, i) => `Y=${p.y.toFixed(2)}m`).join(', ');
+            const desc = topPeaks.map(p => `Y=${p.y.toFixed(2)}m`).join(', ');
             document.getElementById('selection-info').textContent =
-                `Density lines: ${topPeaks.length} peaks — ${desc}`;
+                `Density lines: ${topPeaks.length} planes — ${desc}`;
         }
 
         /** Renders per-scan color pickers inside #scan-color-list. */
