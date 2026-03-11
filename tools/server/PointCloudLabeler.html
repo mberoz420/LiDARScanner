@@ -781,14 +781,8 @@
                     <span>Open from Server…</span>
                 </div>
                 <div class="menu-sep"></div>
-                <div class="menu-dropdown-item" onclick="closeMenus(); saveLocal()">
-                    <span>Save Local</span><span class="shortcut">Ctrl+S</span>
-                </div>
-                <div class="menu-dropdown-item" onclick="closeMenus(); saveToServer()">
-                    <span>Save to Server</span><span class="shortcut">Ctrl+Shift+S</span>
-                </div>
-                <div class="menu-dropdown-item" onclick="closeMenus(); saveToServerAs()">
-                    <span>Save to Server As…</span>
+                <div class="menu-dropdown-item" onclick="closeMenus(); showSaveDialog()">
+                    <span>Save Project…</span><span class="shortcut">Ctrl+S</span>
                 </div>
                 <div class="menu-sep"></div>
                 <div class="menu-dropdown-item" onclick="closeMenus(); exportGLB()">
@@ -1330,6 +1324,58 @@
             </div>
 
             <!-- Open-from-server modal -->
+            <!-- Save Project modal -->
+            <div id="save-modal" style="display:none;position:fixed;inset:0;
+                background:rgba(0,0,0,0.6);z-index:500;align-items:center;justify-content:center;">
+                <div style="background:#0d1a2e;border:1px solid #00d9ff;border-radius:12px;
+                            padding:20px;width:420px;box-shadow:0 8px 40px rgba(0,0,0,0.8);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                        <span style="font-weight:700;color:#00d9ff;font-size:14px;">💾 Save Project</span>
+                        <span onclick="hideSaveDialog()" style="cursor:pointer;color:#666;font-size:20px;line-height:1;">✕</span>
+                    </div>
+
+                    <!-- Destination toggle -->
+                    <div style="display:flex;gap:0;margin-bottom:14px;border-radius:8px;overflow:hidden;border:1px solid #0f3460;">
+                        <button id="save-dest-server" onclick="setSaveDest('server')"
+                            style="flex:1;padding:8px;font-size:12px;font-weight:600;cursor:pointer;
+                                   background:#1f6feb;color:#fff;border:none;">🌐 Server</button>
+                        <button id="save-dest-local" onclick="setSaveDest('local')"
+                            style="flex:1;padding:8px;font-size:12px;font-weight:600;cursor:pointer;
+                                   background:#1a2744;color:#888;border:none;">💻 Local Download</button>
+                    </div>
+
+                    <!-- Server folder picker -->
+                    <div id="save-server-options">
+                        <div style="font-size:11px;color:#888;margin-bottom:4px;">Project Folder</div>
+                        <div style="display:flex;gap:6px;margin-bottom:10px;">
+                            <select id="save-project-select"
+                                style="flex:1;padding:6px 8px;background:#1a2744;color:#fff;border:1px solid #0f3460;border-radius:6px;font-size:12px;">
+                                <option value="">Root (no folder)</option>
+                            </select>
+                            <button onclick="createNewProjectFromSave()"
+                                style="padding:6px 10px;background:#1a2744;color:#00d9ff;border:1px solid #0f3460;border-radius:6px;font-size:11px;cursor:pointer;white-space:nowrap;">+ New</button>
+                        </div>
+                    </div>
+
+                    <!-- Filename -->
+                    <div style="font-size:11px;color:#888;margin-bottom:4px;">Filename</div>
+                    <input id="save-filename" type="text" placeholder="my_scan.json"
+                        style="width:100%;padding:8px 10px;background:#1a2744;color:#fff;border:1px solid #0f3460;
+                               border-radius:6px;font-size:13px;margin-bottom:14px;box-sizing:border-box;">
+
+                    <!-- Status -->
+                    <div id="save-status" style="font-size:11px;color:#888;margin-bottom:10px;min-height:16px;"></div>
+
+                    <!-- Buttons -->
+                    <div style="display:flex;gap:8px;justify-content:flex-end;">
+                        <button onclick="hideSaveDialog()"
+                            style="padding:8px 16px;background:#1a2744;color:#aaa;border:1px solid #0f3460;border-radius:6px;font-size:12px;cursor:pointer;">Cancel</button>
+                        <button id="save-confirm-btn" onclick="confirmSave()"
+                            style="padding:8px 20px;background:#1f6feb;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+                    </div>
+                </div>
+            </div>
+
             <div id="open-server-modal" style="display:none;position:fixed;inset:0;
                 background:rgba(0,0,0,0.6);z-index:500;align-items:center;justify-content:center;">
                 <div style="background:#0d1a2e;border:1px solid #00d9ff;border-radius:12px;
@@ -5266,25 +5312,100 @@
             return data;
         }
 
-        function saveLocal() {
+        // ── Unified Save Dialog ───────────────────────────────────────────────
+        let saveDest = 'server'; // 'server' | 'local'
+
+        async function showSaveDialog() {
             if (points.length === 0) { alert('No data to save'); return; }
-            const name = currentFilename || 'pointcloud.json';
-            downloadJSON(buildSaveData(), name);
-            document.getElementById('selection-info').textContent = `Saved locally as ${name}`;
+            const modal = document.getElementById('save-modal');
+            modal.style.display = 'flex';
+            document.getElementById('save-filename').value =
+                currentFilename || 'my_scan.json';
+            document.getElementById('save-status').textContent = '';
+            setSaveDest('server');
+            // Populate project folders
+            const sel = document.getElementById('save-project-select');
+            sel.innerHTML = '<option value="">Root (no folder)</option>';
+            try {
+                const res = await fetch(SERVER_BASE + '/list_projects.php', { headers: { 'X-API-Key': API_KEY } });
+                if (res.ok) {
+                    const { projects } = await res.json();
+                    (projects || []).forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p; opt.textContent = '📁 ' + p;
+                        sel.appendChild(opt);
+                    });
+                }
+            } catch(e) {}
+            // Pre-select current project
+            if (currentProject) sel.value = currentProject;
         }
 
-        async function saveToServer(nameOverride) {
-            if (points.length === 0) { alert('No data to save'); return; }
-            const info = document.getElementById('selection-info');
-            const saveName = nameOverride || currentFilename || '';
-            info.textContent = saveName ? `Saving as ${saveName}…` : 'Saving to server…';
+        function hideSaveDialog() {
+            document.getElementById('save-modal').style.display = 'none';
+        }
+
+        function setSaveDest(dest) {
+            saveDest = dest;
+            const serverBtn = document.getElementById('save-dest-server');
+            const localBtn  = document.getElementById('save-dest-local');
+            const serverOpts = document.getElementById('save-server-options');
+            if (dest === 'server') {
+                serverBtn.style.background = '#1f6feb'; serverBtn.style.color = '#fff';
+                localBtn.style.background = '#1a2744'; localBtn.style.color = '#888';
+                serverOpts.style.display = 'block';
+            } else {
+                localBtn.style.background = '#1f6feb'; localBtn.style.color = '#fff';
+                serverBtn.style.background = '#1a2744'; serverBtn.style.color = '#888';
+                serverOpts.style.display = 'none';
+            }
+        }
+
+        function createNewProjectFromSave() {
+            const name = prompt('New project folder name:');
+            if (!name) return;
+            const clean = name.replace(/[^a-zA-Z0-9_\- ]/g, '').trim();
+            if (!clean) { alert('Invalid folder name'); return; }
+            const sel = document.getElementById('save-project-select');
+            // Add if not exists
+            const exists = Array.from(sel.options).some(o => o.value === clean);
+            if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = clean; opt.textContent = '📁 ' + clean;
+                sel.appendChild(opt);
+            }
+            sel.value = clean;
+        }
+
+        async function confirmSave() {
+            let filename = document.getElementById('save-filename').value.trim();
+            if (!filename) { alert('Please enter a filename'); return; }
+            if (!filename.endsWith('.json')) filename += '.json';
+            const statusEl = document.getElementById('save-status');
+            const btn = document.getElementById('save-confirm-btn');
+
+            if (saveDest === 'local') {
+                downloadJSON(buildSaveData(), filename);
+                statusEl.textContent = '✓ Downloaded as ' + filename;
+                statusEl.style.color = '#22c55e';
+                currentFilename = filename;
+                updateFilenameDisplay();
+                document.getElementById('selection-info').textContent = `Saved locally as ${filename}`;
+                setTimeout(hideSaveDialog, 800);
+                return;
+            }
+
+            // Server save
+            const project = document.getElementById('save-project-select').value;
+            btn.disabled = true; btn.textContent = 'Saving…';
+            statusEl.textContent = 'Uploading to server…'; statusEl.style.color = '#888';
             try {
                 const body = JSON.stringify(buildSaveData());
                 let url = SERVER_BASE + '/upload.php';
                 const params = [];
-                if (saveName) params.push('filename=' + encodeURIComponent(saveName));
-                if (currentProject) params.push('project=' + encodeURIComponent(currentProject));
-                if (params.length) url += '?' + params.join('&');
+                params.push('filename=' + encodeURIComponent(filename));
+                if (project) params.push('project=' + encodeURIComponent(project));
+                url += '?' + params.join('&');
                 const res = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
@@ -5294,21 +5415,25 @@
                 const result = await res.json();
                 if (!result.success) throw new Error(result.error || 'Unknown error');
                 currentFilename = result.filename;
+                currentProject = project || '';
                 updateFilenameDisplay();
-                info.textContent = `Saved to server as ${result.filename}`;
+                statusEl.textContent = '✓ Saved to server' + (project ? ` in ${project}/` : '') + ` as ${result.filename}`;
+                statusEl.style.color = '#22c55e';
+                document.getElementById('selection-info').textContent =
+                    `Saved to server${project ? ' [' + project + ']' : ''}: ${result.filename}`;
+                setTimeout(hideSaveDialog, 1200);
             } catch (err) {
-                alert('Save to server failed: ' + err.message);
-                info.textContent = 'Server save failed.';
+                statusEl.textContent = '✗ ' + err.message;
+                statusEl.style.color = '#ef4444';
+            } finally {
+                btn.disabled = false; btn.textContent = 'Save';
             }
         }
 
-        function saveToServerAs() {
-            if (points.length === 0) { alert('No data to save'); return; }
-            const defaultName = currentFilename || 'my_scan.json';
-            const name = prompt('Save to server as:', defaultName);
-            if (!name) return;
-            saveToServer(name);
-        }
+        // Keep Ctrl+S shortcut working
+        function saveLocal() { showSaveDialog(); }
+        function saveToServer() { showSaveDialog(); }
+        function saveToServerAs() { showSaveDialog(); }
 
         // ── File Manager ────────────────────────────────────────────────────────
         let fmCurrentPath = '';
