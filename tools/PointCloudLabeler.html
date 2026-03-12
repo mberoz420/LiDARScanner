@@ -4347,8 +4347,8 @@
             const info = document.getElementById('selection-info');
             const t0 = performance.now();
 
-            // 1. Build density grid (5cm cells for wall detection)
-            const cs = 0.05;
+            // 1. Build density grid (4cm cells)
+            const cs = 0.04;
             const cells = new Map();
             let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
 
@@ -4363,235 +4363,188 @@
                 if (gz < gzMin) gzMin = gz; if (gz > gzMax) gzMax = gz;
             }
 
-            evaLog(`Grid: ${cells.size} cells (${W}×${H}), bounds X[${gxMin}..${gxMax}] Z[${gzMin}..${gzMax}]`);
-
-            // 2. Find density threshold — top 25% are "wall" cells
-            const counts = Array.from(cells.values()).sort((a, b) => a - b);
-            const wallThresh = counts[Math.floor(counts.length * 0.75)] || 2;
-            evaLog(`Wall threshold: ${wallThresh} pts/cell (top 25% density)`);
-
-            // 3. Build binary wall image
             const W = gxMax - gxMin + 1;
             const H = gzMax - gzMin + 1;
-            const wallGrid = new Uint8Array(W * H);
+            evaLog(`Density grid: ${cells.size} cells (${W}×${H})`);
+
+            // 2. Build 2D density array and find threshold
+            const density = new Float32Array(W * H);
+            let maxDensity = 0;
             for (const [key, count] of cells) {
-                if (count >= wallThresh) {
-                    const [gx, gz] = key.split(',').map(Number);
-                    const ix = gx - gxMin;
-                    const iz = gz - gzMin;
-                    wallGrid[iz * W + ix] = 1;
-                }
+                const [gx, gz] = key.split(',').map(Number);
+                const idx = (gz - gzMin) * W + (gx - gxMin);
+                density[idx] = count;
+                if (count > maxDensity) maxDensity = count;
             }
 
-            // 4. Morphological cleanup — dilate then erode to connect nearby wall cells
-            function dilate(grid, w, h) {
-                const out = new Uint8Array(w * h);
-                for (let z = 1; z < h - 1; z++) {
-                    for (let x = 1; x < w - 1; x++) {
-                        if (grid[z*w+x] || grid[(z-1)*w+x] || grid[(z+1)*w+x] ||
-                            grid[z*w+x-1] || grid[z*w+x+1]) {
-                            out[z*w+x] = 1;
-                        }
-                    }
-                }
-                return out;
-            }
-            function erode(grid, w, h) {
-                const out = new Uint8Array(w * h);
-                for (let z = 1; z < h - 1; z++) {
-                    for (let x = 1; x < w - 1; x++) {
-                        if (grid[z*w+x] && grid[(z-1)*w+x] && grid[(z+1)*w+x] &&
-                            grid[z*w+x-1] && grid[z*w+x+1]) {
-                            out[z*w+x] = 1;
-                        }
-                    }
-                }
-                return out;
-            }
+            const counts = Array.from(cells.values()).sort((a, b) => a - b);
+            const wallThresh = counts[Math.floor(counts.length * 0.70)] || 2;
+            evaLog(`Wall threshold: ${wallThresh} pts/cell`);
 
-            let processed = dilate(wallGrid, W, H);
-            processed = dilate(processed, W, H);
-            processed = erode(processed, W, H);
+            // 3. Scan rows (horizontal runs of dense cells) → detect horizontal walls
+            const runs = [];
+            const MIN_RUN = 8; // minimum 8 cells = ~32cm
 
-            // 5. Find connected components using flood fill
-            const visited = new Uint8Array(W * H);
-            const components = [];
-
-            function floodFill(startX, startZ) {
-                const comp = [];
-                const stack = [[startX, startZ]];
-                while (stack.length > 0) {
-                    const [x, z] = stack.pop();
-                    const idx = z * W + x;
-                    if (x < 0 || x >= W || z < 0 || z >= H) continue;
-                    if (visited[idx] || !processed[idx]) continue;
-                    visited[idx] = 1;
-                    comp.push([x, z]);
-                    stack.push([x+1,z], [x-1,z], [x,z+1], [x,z-1]);
-                }
-                return comp;
-            }
-
+            // Horizontal scan (X direction at each Z)
             for (let z = 0; z < H; z++) {
-                for (let x = 0; x < W; x++) {
-                    if (processed[z*W+x] && !visited[z*W+x]) {
-                        const comp = floodFill(x, z);
-                        if (comp.length >= 5) { // minimum 5 cells to be a wall segment
-                            components.push(comp);
+                let runStart = -1;
+                for (let x = 0; x <= W; x++) {
+                    const d = x < W ? density[z * W + x] : 0;
+                    if (d >= wallThresh) {
+                        if (runStart < 0) runStart = x;
+                    } else {
+                        if (runStart >= 0) {
+                            const runLen = x - runStart;
+                            if (runLen >= MIN_RUN) {
+                                runs.push({
+                                    x1: (runStart + gxMin) * cs,
+                                    z1: (z + gzMin + 0.5) * cs,
+                                    x2: (x - 1 + gxMin + 1) * cs,
+                                    z2: (z + gzMin + 0.5) * cs,
+                                    dir: 'h', len: runLen, row: z
+                                });
+                            }
+                            runStart = -1;
                         }
                     }
                 }
             }
 
-            evaLog(`Found ${components.length} wall components (flood fill)`);
-
-            // 6. For each component, find the principal axis and fit a line segment
-            const wallSegments = [];
-
-            for (const comp of components) {
-                if (comp.length < 3) continue;
-
-                // Centroid
-                let cx = 0, cz = 0;
-                for (const [x, z] of comp) { cx += x; cz += z; }
-                cx /= comp.length; cz /= comp.length;
-
-                // PCA for direction
-                let cxx = 0, czz = 0, cxz = 0;
-                for (const [x, z] of comp) {
-                    const dx = x - cx, dz = z - cz;
-                    cxx += dx * dx; czz += dz * dz; cxz += dx * dz;
+            // Vertical scan (Z direction at each X)
+            for (let x = 0; x < W; x++) {
+                let runStart = -1;
+                for (let z = 0; z <= H; z++) {
+                    const d = z < H ? density[z * W + x] : 0;
+                    if (d >= wallThresh) {
+                        if (runStart < 0) runStart = z;
+                    } else {
+                        if (runStart >= 0) {
+                            const runLen = z - runStart;
+                            if (runLen >= MIN_RUN) {
+                                runs.push({
+                                    x1: (x + gxMin + 0.5) * cs,
+                                    z1: (runStart + gzMin) * cs,
+                                    x2: (x + gxMin + 0.5) * cs,
+                                    z2: (z - 1 + gzMin + 1) * cs,
+                                    dir: 'v', len: runLen, col: x
+                                });
+                            }
+                            runStart = -1;
+                        }
+                    }
                 }
+            }
 
-                // Eigenvector of covariance matrix (principal direction)
-                const theta = 0.5 * Math.atan2(2 * cxz, cxx - czz);
-                const dirX = Math.cos(theta);
-                const dirZ = Math.sin(theta);
+            evaLog(`Found ${runs.length} density runs (H+V scan)`);
 
-                // Project all points onto principal axis
-                let minProj = Infinity, maxProj = -Infinity;
-                for (const [x, z] of comp) {
-                    const proj = (x - cx) * dirX + (z - cz) * dirZ;
-                    if (proj < minProj) minProj = proj;
-                    if (proj > maxProj) maxProj = proj;
+            // 4. Merge parallel nearby runs into wall lines
+            // Group by direction and proximity
+            const hRuns = runs.filter(r => r.dir === 'h').sort((a, b) => a.z1 - b.z1);
+            const vRuns = runs.filter(r => r.dir === 'v').sort((a, b) => a.x1 - b.x1);
+
+            function mergeParallelRuns(sorted, posKey, startKey, endKey, mergeThresh) {
+                const merged = [];
+                const used = new Set();
+                for (let i = 0; i < sorted.length; i++) {
+                    if (used.has(i)) continue;
+                    const group = [sorted[i]];
+                    used.add(i);
+                    for (let j = i + 1; j < sorted.length; j++) {
+                        if (used.has(j)) continue;
+                        // Same position (within threshold)?
+                        const posDiff = Math.abs(sorted[j][posKey] - sorted[i][posKey]);
+                        if (posDiff > mergeThresh) break; // sorted, so no more nearby
+                        // Overlapping range?
+                        const aStart = Math.min(sorted[i][startKey], sorted[i][endKey]);
+                        const aEnd = Math.max(sorted[i][startKey], sorted[i][endKey]);
+                        const bStart = Math.min(sorted[j][startKey], sorted[j][endKey]);
+                        const bEnd = Math.max(sorted[j][startKey], sorted[j][endKey]);
+                        if (bStart <= aEnd + 0.15 && bEnd >= aStart - 0.15) {
+                            group.push(sorted[j]);
+                            used.add(j);
+                        }
+                    }
+                    // Merge group — average position, extend range
+                    let avgPos = 0;
+                    let minR = Infinity, maxR = -Infinity;
+                    for (const r of group) {
+                        avgPos += r[posKey];
+                        minR = Math.min(minR, r[startKey], r[endKey]);
+                        maxR = Math.max(maxR, r[startKey], r[endKey]);
+                    }
+                    avgPos /= group.length;
+                    merged.push({ pos: avgPos, start: minR, end: maxR, count: group.length });
                 }
+                return merged;
+            }
 
-                // Segment length in cells
-                const segLen = maxProj - minProj;
-                if (segLen < 4) continue; // too short (< 20cm)
+            const mergedH = mergeParallelRuns(hRuns, 'z1', 'x1', 'x2', 0.12); // 12cm merge distance
+            const mergedV = mergeParallelRuns(vRuns, 'x1', 'z1', 'z2', 0.12);
 
-                // Convert to world coordinates
-                const x1 = (cx + dirX * minProj + gxMin + 0.5) * cs;
-                const z1 = (cz + dirZ * minProj + gzMin + 0.5) * cs;
-                const x2 = (cx + dirX * maxProj + gxMin + 0.5) * cs;
-                const z2 = (cz + dirZ * maxProj + gzMin + 0.5) * cs;
+            evaLog(`Merged: ${mergedH.length} horizontal + ${mergedV.length} vertical walls`);
 
-                // Check linearity — if spread perpendicular to axis is too wide, it's not a wall
-                let maxPerp = 0;
-                for (const [x, z] of comp) {
-                    const perp = Math.abs((x - cx) * (-dirZ) + (z - cz) * dirX);
-                    if (perp > maxPerp) maxPerp = perp;
-                }
+            // 5. Convert to guide line segments
+            const wallLines = [];
 
-                // Wall should be thin relative to length
-                if (maxPerp > segLen * 0.4 && maxPerp > 6) continue; // too fat
-
-                wallSegments.push({
-                    x1, z1, x2, z2,
-                    length: segLen * cs,
-                    cells: comp.length,
-                    perpSpread: maxPerp * cs
+            for (const w of mergedH) {
+                const len = Math.abs(w.end - w.start);
+                if (len < 0.25) continue; // skip very short
+                wallLines.push({
+                    x1: w.start, z1: w.pos,
+                    x2: w.end, z2: w.pos,
+                    length: len
+                });
+            }
+            for (const w of mergedV) {
+                const len = Math.abs(w.end - w.start);
+                if (len < 0.25) continue;
+                wallLines.push({
+                    x1: w.pos, z1: w.start,
+                    x2: w.pos, z2: w.end,
+                    length: len
                 });
             }
 
-            evaLog(`PCA line fitting: ${wallSegments.length} wall segments detected`);
+            // 6. Remove duplicate/overlapping segments
+            // If two segments overlap significantly and are close, keep the longer one
+            wallLines.sort((a, b) => b.length - a.length);
+            const finalLines = [];
+            const usedLine = new Set();
 
-            // 7. Merge collinear nearby segments
-            const merged = [];
-            const usedSeg = new Set();
+            for (let i = 0; i < wallLines.length; i++) {
+                if (usedLine.has(i)) continue;
+                const a = wallLines[i];
+                usedLine.add(i);
+                finalLines.push(a);
 
-            // Sort by angle then position
-            wallSegments.forEach((s, i) => {
-                s.angle = Math.atan2(s.z2 - s.z1, s.x2 - s.x1);
-                // Normalize angle to [0, π)
-                if (s.angle < 0) s.angle += Math.PI;
-                s.idx = i;
-            });
-
-            wallSegments.sort((a, b) => a.angle - b.angle);
-
-            for (let i = 0; i < wallSegments.length; i++) {
-                if (usedSeg.has(i)) continue;
-                const s = wallSegments[i];
-                const chain = [s];
-                usedSeg.add(i);
-
-                // Find collinear neighbors
-                for (let j = i + 1; j < wallSegments.length; j++) {
-                    if (usedSeg.has(j)) continue;
-                    const t = wallSegments[j];
-                    // Check angle similarity
-                    let angleDiff = Math.abs(s.angle - t.angle);
-                    if (angleDiff > Math.PI / 2) angleDiff = Math.PI - angleDiff;
-                    if (angleDiff > 0.15) continue; // ~8.5 degrees
-
-                    // Check proximity (perpendicular distance between midpoints)
-                    const mx = (t.x1 + t.x2) / 2, mz = (t.z1 + t.z2) / 2;
-                    const smx = (s.x1 + s.x2) / 2, smz = (s.z1 + s.z2) / 2;
-                    const dx = mx - smx, dz = mz - smz;
-                    const dirX = Math.cos(s.angle), dirZ = Math.sin(s.angle);
-                    const perpDist = Math.abs(dx * (-dirZ) + dz * dirX);
-
-                    if (perpDist < 0.15) { // within 15cm
-                        chain.push(t);
-                        usedSeg.add(j);
-                    }
-                }
-
-                // Merge chain: find extreme endpoints along the direction
-                if (chain.length > 0) {
-                    const allPts = [];
-                    for (const seg of chain) {
-                        allPts.push({ x: seg.x1, z: seg.z1 });
-                        allPts.push({ x: seg.x2, z: seg.z2 });
-                    }
-                    const dirX = Math.cos(s.angle), dirZ = Math.sin(s.angle);
-                    let minP = Infinity, maxP = -Infinity, minPt = null, maxPt = null;
-                    for (const p of allPts) {
-                        const proj = p.x * dirX + p.z * dirZ;
-                        if (proj < minP) { minP = proj; minPt = p; }
-                        if (proj > maxP) { maxP = proj; maxPt = p; }
-                    }
-                    if (minPt && maxPt) {
-                        const len = Math.sqrt((maxPt.x - minPt.x) ** 2 + (maxPt.z - minPt.z) ** 2);
-                        if (len > 0.15) { // at least 15cm
-                            merged.push({
-                                x1: minPt.x, z1: minPt.z,
-                                x2: maxPt.x, z2: maxPt.z,
-                                length: len
-                            });
-                        }
-                    }
+                // Remove shorter overlapping segments
+                for (let j = i + 1; j < wallLines.length; j++) {
+                    if (usedLine.has(j)) continue;
+                    const b = wallLines[j];
+                    // Check if midpoints are close
+                    const mx = (a.x1 + a.x2) / 2, mz = (a.z1 + a.z2) / 2;
+                    const bx = (b.x1 + b.x2) / 2, bz = (b.z1 + b.z2) / 2;
+                    const dist = Math.sqrt((mx - bx) ** 2 + (mz - bz) ** 2);
+                    if (dist < 0.2) usedLine.add(j); // too close to a longer line
                 }
             }
 
-            evaLog(`Merged collinear segments: ${merged.length} wall lines`);
+            evaLog(`Final: ${finalLines.length} wall segments`);
 
-            if (merged.length === 0) {
-                evaLog('Could not detect clear wall segments.');
-                evaLog('Try scanning more of the room or adjusting scan angle.');
-                info.textContent = 'Eva: Could not detect clear wall segments.';
+            if (finalLines.length === 0) {
+                evaLog('Could not detect wall segments. Scan may need more coverage.');
+                info.textContent = 'Eva: No wall segments detected.';
                 closeEvaPanel(3000);
                 return;
             }
 
-            // 8. Add as guide lines
+            // 7. Add as guide lines
             const y = drawPlaneLocked ? drawPlaneY : 0;
             pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)),
                         prevMarkers: JSON.parse(JSON.stringify(guideMarkers)) });
 
             let addedCount = 0;
-            for (const seg of merged) {
+            for (const seg of finalLines) {
                 guideLines.push({
                     type: 'polyline',
                     points: [
@@ -4612,10 +4565,15 @@
             });
 
             evaLog(`Drew ${addedCount} wall segments in ${elapsed}s`);
-            evaLog('Review and adjust, then use "Close Gaps" to connect.');
-            evaLog('Don\'t forget to save (Ctrl+S)!');
-            info.textContent = `Eva: Drew ${addedCount} wall segments in ${elapsed}s. Review, adjust, then use "Close Gaps" to connect.`;
-            closeEvaPanel(5000);
+            for (const seg of finalLines) {
+                const len = seg.length.toFixed(2);
+                const isH = Math.abs(seg.z2 - seg.z1) < 0.05;
+                evaLog(`  ${isH ? '─' : '│'} ${len}m at ${isH ? 'Z=' + seg.z1.toFixed(2) : 'X=' + seg.x1.toFixed(2)}`);
+            }
+            evaLog('Review and adjust. Use "Close Gaps" to connect.');
+            evaLog('Ctrl+S to save!');
+            info.textContent = `Eva: Drew ${addedCount} wall segments in ${elapsed}s.`;
+            closeEvaPanel(8000);
         }
 
         /**
