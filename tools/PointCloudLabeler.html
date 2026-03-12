@@ -1057,9 +1057,12 @@
                 <button onclick="autoExtendAll()" style="width:100%;margin-top:4px;padding:5px 4px;font-size:10px;
                     background:#1a2744;color:#f59e0b;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;"
                     title="Auto-extend all polyline endpoints to meet their nearest neighboring line">⟷ Auto Extend All</button>
-                <button onclick="autoCompleteBoundary()" style="width:100%;margin-top:6px;padding:6px 4px;font-size:10px;
+                <button onclick="evaDrawBoundary()" style="width:100%;margin-top:6px;padding:6px 4px;font-size:10px;
                     background:linear-gradient(135deg,#1a1a3e,#2d1b4e);color:#e879f9;border:1px solid #c026d3;border-radius:4px;cursor:pointer;font-weight:600;"
-                    title="Eva AI: auto-complete room boundary by tracing density ridges between open endpoints">✦ Eva: Complete Boundary</button>
+                    title="Eva AI: detect walls from point density and draw room boundary from scratch">✦ Eva: Draw Boundary</button>
+                <button onclick="autoCompleteBoundary()" style="width:100%;margin-top:3px;padding:4px 4px;font-size:9px;
+                    background:linear-gradient(135deg,#1a1a3e,#2d1b4e);color:#c084fc;border:1px solid #7c3aed;border-radius:4px;cursor:pointer;"
+                    title="Eva AI: connect gaps between existing guide lines via density pathfinding">✦ Eva: Close Gaps</button>
                 <button onclick="replayActions()" style="width:100%;margin-top:4px;padding:5px 4px;font-size:10px;
                     background:#1a2744;color:#a78bfa;border:1px solid #7c3aed;border-radius:4px;cursor:pointer;"
                     title="Replay drawing actions from action log — auto-redraw all guide lines step by step">▶ Replay Actions</button>
@@ -1935,6 +1938,7 @@
             trim_applied: p => `Trimmed line (${p.num_intersections} intersection${p.num_intersections !== 1 ? 's' : ''})`,
             extend_both: p => `Extended 2 lines to meeting point`,
             auto_extend_all: p => `Auto-extended ${p.endpoints_extended} endpoints`,
+            eva_draw_boundary: p => `Eva drew ${p.segments} wall segments (${p.time_sec}s)`,
             build_walls: p => `Built ${p.num_walls} walls from guides`,
             density_lines: p => `Detected ${p.ridges_detected} wall ridges`,
             plane_fit: p => `Fitted plane (${p.mode}, ${p.num_points} pts)`,
@@ -1980,6 +1984,7 @@
             'marker_placed': 'Marking reference point for alignment',
             'arrow_placed': 'Indicating observer/camera viewing direction at this location',
             'circle_placed': 'Marking area for Eva to learn — anomaly, gap, or feature boundary',
+            'eva_draw_boundary': 'Eva auto-detected wall positions from point density ridges',
             'trim_applied': 'Removing overextended segment at intersection',
             'extend_both': 'Closing wall corner gap — extending lines to meet',
             'auto_extend_all': 'Batch-closing all wall corners to form room outline',
@@ -4268,6 +4273,295 @@
             document.getElementById('selection-info').textContent =
                 `Density lines: ${topClusters.length} wall ridges detected`;
             logAction('density_lines', { ridges_detected: topClusters.length });
+        }
+
+        /**
+         * Eva: Draw Boundary — detect walls from point density and draw the room boundary from scratch
+         * Algorithm:
+         * 1. Build density grid from XZ projection
+         * 2. Find dense cells (wall candidates) using adaptive threshold
+         * 3. Extract outer contour using marching squares / convex-hull-like boundary trace
+         * 4. Separate into wall segments using direction changes
+         * 5. Simplify with Douglas-Peucker and add as guide lines
+         */
+        function evaDrawBoundary() {
+            if (!points.length) {
+                document.getElementById('selection-info').textContent = 'Eva: No point cloud loaded.';
+                return;
+            }
+            const info = document.getElementById('selection-info');
+            info.textContent = 'Eva: Analyzing point cloud density to find walls...';
+            console.log('[Eva] evaDrawBoundary started. points:', points.length);
+            setTimeout(() => _evaDrawBoundaryWork(), 50);
+        }
+
+        function _evaDrawBoundaryWork() {
+            const info = document.getElementById('selection-info');
+            const t0 = performance.now();
+
+            // 1. Build density grid (5cm cells for wall detection)
+            const cs = 0.05;
+            const cells = new Map();
+            let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
+
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                const p = points[i];
+                const gx = Math.floor(p.x / cs);
+                const gz = Math.floor(p.z / cs);
+                const key = gx + ',' + gz;
+                cells.set(key, (cells.get(key) || 0) + 1);
+                if (gx < gxMin) gxMin = gx; if (gx > gxMax) gxMax = gx;
+                if (gz < gzMin) gzMin = gz; if (gz > gzMax) gzMax = gz;
+            }
+
+            console.log('[Eva] Grid built:', cells.size, 'cells, bounds:', gxMin, gxMax, gzMin, gzMax);
+
+            // 2. Find density threshold — top 25% are "wall" cells
+            const counts = Array.from(cells.values()).sort((a, b) => a - b);
+            const wallThresh = counts[Math.floor(counts.length * 0.75)] || 2;
+            console.log('[Eva] Wall threshold:', wallThresh, 'points/cell');
+
+            // 3. Build binary wall image
+            const W = gxMax - gxMin + 1;
+            const H = gzMax - gzMin + 1;
+            const wallGrid = new Uint8Array(W * H);
+            for (const [key, count] of cells) {
+                if (count >= wallThresh) {
+                    const [gx, gz] = key.split(',').map(Number);
+                    const ix = gx - gxMin;
+                    const iz = gz - gzMin;
+                    wallGrid[iz * W + ix] = 1;
+                }
+            }
+
+            // 4. Morphological cleanup — dilate then erode to connect nearby wall cells
+            function dilate(grid, w, h) {
+                const out = new Uint8Array(w * h);
+                for (let z = 1; z < h - 1; z++) {
+                    for (let x = 1; x < w - 1; x++) {
+                        if (grid[z*w+x] || grid[(z-1)*w+x] || grid[(z+1)*w+x] ||
+                            grid[z*w+x-1] || grid[z*w+x+1]) {
+                            out[z*w+x] = 1;
+                        }
+                    }
+                }
+                return out;
+            }
+            function erode(grid, w, h) {
+                const out = new Uint8Array(w * h);
+                for (let z = 1; z < h - 1; z++) {
+                    for (let x = 1; x < w - 1; x++) {
+                        if (grid[z*w+x] && grid[(z-1)*w+x] && grid[(z+1)*w+x] &&
+                            grid[z*w+x-1] && grid[z*w+x+1]) {
+                            out[z*w+x] = 1;
+                        }
+                    }
+                }
+                return out;
+            }
+
+            let processed = dilate(wallGrid, W, H);
+            processed = dilate(processed, W, H);
+            processed = erode(processed, W, H);
+
+            // 5. Find connected components using flood fill
+            const visited = new Uint8Array(W * H);
+            const components = [];
+
+            function floodFill(startX, startZ) {
+                const comp = [];
+                const stack = [[startX, startZ]];
+                while (stack.length > 0) {
+                    const [x, z] = stack.pop();
+                    const idx = z * W + x;
+                    if (x < 0 || x >= W || z < 0 || z >= H) continue;
+                    if (visited[idx] || !processed[idx]) continue;
+                    visited[idx] = 1;
+                    comp.push([x, z]);
+                    stack.push([x+1,z], [x-1,z], [x,z+1], [x,z-1]);
+                }
+                return comp;
+            }
+
+            for (let z = 0; z < H; z++) {
+                for (let x = 0; x < W; x++) {
+                    if (processed[z*W+x] && !visited[z*W+x]) {
+                        const comp = floodFill(x, z);
+                        if (comp.length >= 5) { // minimum 5 cells to be a wall segment
+                            components.push(comp);
+                        }
+                    }
+                }
+            }
+
+            console.log('[Eva] Found', components.length, 'wall components');
+
+            // 6. For each component, find the principal axis and fit a line segment
+            const wallSegments = [];
+
+            for (const comp of components) {
+                if (comp.length < 3) continue;
+
+                // Centroid
+                let cx = 0, cz = 0;
+                for (const [x, z] of comp) { cx += x; cz += z; }
+                cx /= comp.length; cz /= comp.length;
+
+                // PCA for direction
+                let cxx = 0, czz = 0, cxz = 0;
+                for (const [x, z] of comp) {
+                    const dx = x - cx, dz = z - cz;
+                    cxx += dx * dx; czz += dz * dz; cxz += dx * dz;
+                }
+
+                // Eigenvector of covariance matrix (principal direction)
+                const theta = 0.5 * Math.atan2(2 * cxz, cxx - czz);
+                const dirX = Math.cos(theta);
+                const dirZ = Math.sin(theta);
+
+                // Project all points onto principal axis
+                let minProj = Infinity, maxProj = -Infinity;
+                for (const [x, z] of comp) {
+                    const proj = (x - cx) * dirX + (z - cz) * dirZ;
+                    if (proj < minProj) minProj = proj;
+                    if (proj > maxProj) maxProj = proj;
+                }
+
+                // Segment length in cells
+                const segLen = maxProj - minProj;
+                if (segLen < 4) continue; // too short (< 20cm)
+
+                // Convert to world coordinates
+                const x1 = (cx + dirX * minProj + gxMin + 0.5) * cs;
+                const z1 = (cz + dirZ * minProj + gzMin + 0.5) * cs;
+                const x2 = (cx + dirX * maxProj + gxMin + 0.5) * cs;
+                const z2 = (cz + dirZ * maxProj + gzMin + 0.5) * cs;
+
+                // Check linearity — if spread perpendicular to axis is too wide, it's not a wall
+                let maxPerp = 0;
+                for (const [x, z] of comp) {
+                    const perp = Math.abs((x - cx) * (-dirZ) + (z - cz) * dirX);
+                    if (perp > maxPerp) maxPerp = perp;
+                }
+
+                // Wall should be thin relative to length
+                if (maxPerp > segLen * 0.4 && maxPerp > 6) continue; // too fat
+
+                wallSegments.push({
+                    x1, z1, x2, z2,
+                    length: segLen * cs,
+                    cells: comp.length,
+                    perpSpread: maxPerp * cs
+                });
+            }
+
+            console.log('[Eva] Wall segments after PCA:', wallSegments.length);
+
+            // 7. Merge collinear nearby segments
+            const merged = [];
+            const usedSeg = new Set();
+
+            // Sort by angle then position
+            wallSegments.forEach((s, i) => {
+                s.angle = Math.atan2(s.z2 - s.z1, s.x2 - s.x1);
+                // Normalize angle to [0, π)
+                if (s.angle < 0) s.angle += Math.PI;
+                s.idx = i;
+            });
+
+            wallSegments.sort((a, b) => a.angle - b.angle);
+
+            for (let i = 0; i < wallSegments.length; i++) {
+                if (usedSeg.has(i)) continue;
+                const s = wallSegments[i];
+                const chain = [s];
+                usedSeg.add(i);
+
+                // Find collinear neighbors
+                for (let j = i + 1; j < wallSegments.length; j++) {
+                    if (usedSeg.has(j)) continue;
+                    const t = wallSegments[j];
+                    // Check angle similarity
+                    let angleDiff = Math.abs(s.angle - t.angle);
+                    if (angleDiff > Math.PI / 2) angleDiff = Math.PI - angleDiff;
+                    if (angleDiff > 0.15) continue; // ~8.5 degrees
+
+                    // Check proximity (perpendicular distance between midpoints)
+                    const mx = (t.x1 + t.x2) / 2, mz = (t.z1 + t.z2) / 2;
+                    const smx = (s.x1 + s.x2) / 2, smz = (s.z1 + s.z2) / 2;
+                    const dx = mx - smx, dz = mz - smz;
+                    const dirX = Math.cos(s.angle), dirZ = Math.sin(s.angle);
+                    const perpDist = Math.abs(dx * (-dirZ) + dz * dirX);
+
+                    if (perpDist < 0.15) { // within 15cm
+                        chain.push(t);
+                        usedSeg.add(j);
+                    }
+                }
+
+                // Merge chain: find extreme endpoints along the direction
+                if (chain.length > 0) {
+                    const allPts = [];
+                    for (const seg of chain) {
+                        allPts.push({ x: seg.x1, z: seg.z1 });
+                        allPts.push({ x: seg.x2, z: seg.z2 });
+                    }
+                    const dirX = Math.cos(s.angle), dirZ = Math.sin(s.angle);
+                    let minP = Infinity, maxP = -Infinity, minPt = null, maxPt = null;
+                    for (const p of allPts) {
+                        const proj = p.x * dirX + p.z * dirZ;
+                        if (proj < minP) { minP = proj; minPt = p; }
+                        if (proj > maxP) { maxP = proj; maxPt = p; }
+                    }
+                    if (minPt && maxPt) {
+                        const len = Math.sqrt((maxPt.x - minPt.x) ** 2 + (maxPt.z - minPt.z) ** 2);
+                        if (len > 0.15) { // at least 15cm
+                            merged.push({
+                                x1: minPt.x, z1: minPt.z,
+                                x2: maxPt.x, z2: maxPt.z,
+                                length: len
+                            });
+                        }
+                    }
+                }
+            }
+
+            console.log('[Eva] After merge:', merged.length, 'wall lines');
+
+            if (merged.length === 0) {
+                info.textContent = 'Eva: Could not detect clear wall segments. Try scanning more of the room.';
+                return;
+            }
+
+            // 8. Add as guide lines
+            const y = drawPlaneLocked ? drawPlaneY : 0;
+            pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)),
+                        prevMarkers: JSON.parse(JSON.stringify(guideMarkers)) });
+
+            let addedCount = 0;
+            for (const seg of merged) {
+                guideLines.push({
+                    type: 'polyline',
+                    points: [
+                        { x: seg.x1, y: y, z: seg.z1 },
+                        { x: seg.x2, y: y, z: seg.z2 }
+                    ],
+                    closed: false
+                });
+                addedCount++;
+            }
+
+            rebuildGuideLines();
+            const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+            logAction('eva_draw_boundary', {
+                segments: addedCount,
+                time_sec: +elapsed
+            });
+
+            info.textContent = `Eva: Drew ${addedCount} wall segments in ${elapsed}s. Review, adjust, then use "Close Gaps" to connect.`;
+            console.log('[Eva] Done!', addedCount, 'segments in', elapsed, 's');
         }
 
         /**
