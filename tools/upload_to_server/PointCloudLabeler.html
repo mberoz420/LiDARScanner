@@ -1526,7 +1526,15 @@
                         style="width:100%;padding:8px;background:#1a2744;color:#e0e0e0;border:1px solid #f59e0b44;
                                border-radius:6px;font-size:11px;resize:vertical;box-sizing:border-box;font-family:inherit;
                                outline:none;" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#f59e0b44'"></textarea>
-                    <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end;">
+                    <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end;align-items:center;">
+                        <label style="font-size:9px;color:#666;display:flex;align-items:center;gap:3px;cursor:pointer;">
+                            <input type="checkbox" id="notebook-autosend" checked style="width:12px;height:12px;">
+                            Auto-send to Eva
+                        </label>
+                        <button onclick="sendAllNotebookToEva()"
+                            style="padding:5px 10px;background:#c026d322;color:#c084fc;border:1px solid #c026d355;
+                                   border-radius:5px;font-size:10px;cursor:pointer;"
+                            title="Send all notebook entries to Eva's brain on the server">✦ Send to Eva</button>
                         <button onclick="addNotebookEntry()"
                             style="padding:5px 14px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b55;
                                    border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">Add Entry (Ctrl+Enter)</button>
@@ -1931,12 +1939,54 @@
             notebookEntries.push(entry);
             logAction('notebook_entry', { tag: tag, text: text, entry_id: entry.id });
 
+            // Auto-send notebook entry to Eva's brain if enabled
+            const autoSend = document.getElementById('notebook-autosend');
+            if (autoSend && autoSend.checked) {
+                evaPushToServer('log', {
+                    type: 'notebook',
+                    source: 'labeler',
+                    log_action: 'notebook_entry',
+                    context: `[${tag}] ${text}`,
+                    reasoning: currentFilename || 'unknown scan'
+                });
+                evaSentEntries.add(entry.id);
+                console.log('[Notebook] Auto-sent to Eva brain');
+            }
+
             textarea.value = '';
             renderNotebookEntries();
 
             // Scroll to bottom
             const container = document.getElementById('notebook-entries');
             container.scrollTop = container.scrollHeight;
+        }
+
+        // Track which notebook entries have been sent to Eva
+        const evaSentEntries = new Set();
+
+        // Send all unsent notebook entries to Eva's brain on server
+        async function sendAllNotebookToEva() {
+            const unsent = notebookEntries.filter(e => !evaSentEntries.has(e.id));
+            if (unsent.length === 0) {
+                const info = document.getElementById('selection-info');
+                if (info) info.textContent = 'All notebook entries already sent to Eva.';
+                return;
+            }
+            let sent = 0;
+            for (const entry of unsent) {
+                await evaPushToServer('log', {
+                    type: 'notebook',
+                    source: 'labeler',
+                    log_action: 'notebook_entry',
+                    context: `[${entry.tag || 'note'}] ${entry.text}`,
+                    reasoning: currentFilename || 'unknown scan'
+                });
+                evaSentEntries.add(entry.id);
+                sent++;
+            }
+            const info = document.getElementById('selection-info');
+            if (info) info.textContent = `Sent ${sent} notebook entries to Eva's brain.`;
+            console.log(`[Notebook] Sent ${sent} entries to Eva brain`);
         }
 
         function deleteNotebookEntry(id) {
@@ -4562,7 +4612,7 @@
         // ── Eva AI: Central Brain + Local Ollama Model ──
         const OLLAMA_URL = 'http://localhost:11434';
         const OLLAMA_MODEL = 'llama3.1:8b';
-        const EVA_BRAIN_URL = SERVER_BASE + '/api/eva.php';
+        const EVA_BRAIN_URL = 'https://scanwizard.robo-wizard.com/api/eva.php';
 
         // ── Eva Brain: Server sync ──
         async function evaSyncFromServer() {
