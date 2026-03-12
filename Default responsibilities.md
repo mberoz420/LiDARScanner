@@ -121,12 +121,30 @@
   - Window zoom, boundary construction, multi-scan insert/align/nudge
   - Camera distance heatmap color mode (green→red, from camera_track data)
   - Density lines: top-down XZ ridge detection with PCA line fitting for wall detection
+  - Construction layer (separate from guide lines, reddish color, togglable)
+  - Two-click extend: select two lines → both extend to intersection point
+  - Auto Extend All: batch-extend every polyline endpoint to nearest neighbor
+  - Build Walls: extend+trim guide lines at intersections, extrude to 3D wall planes
+  - Plane Fit tool: PCA plane fitting with orthogonal/free mode toggle
+  - Draw plane lock (XZ plane at configurable Y height)
+  - Custom SVG cursors for trim/extend/planefit tools
+  - Action logging system: records every tool action with camera state for AI training
+  - Notebook: floating draggable panel with live activity feed, "Why?" annotations per action
+  - Tagged notes (Observation, Decision, Issue, Technique, Rule) with camera pinning
+  - Action log + notebook saved with project, exportable as training data
   - Unified Save Project dialog (server/local, folder picker, create folder)
-  - Top menu bar: Project (Open/Save local & server, Export GLB/JSON/ML)
-  - Visibility toggles (collapsible left toolbar, 370px wide), photogrammetry layer
-  - Ctrl+O/S/Shift+S/Z shortcuts, S for spline tool
+  - Top menu bar: Project (Open/Save local & server, Export GLB/JSON/ML/Action Log)
+  - Visibility toggles (collapsible left toolbar, 240px wide), photogrammetry layer
+  - Right sidebar (260px, compact controls)
+  - Ctrl+O/S/Shift+S/Z shortcuts, S for spline, N for note, Shift+N for notebook
   - File Manager: browse server files, create folders, rename, copy, delete
   - Auto front-direction from vertical surface normals (scan orientation)
+  - Density magnet: cursor snaps toward dense point regions when drawing (XZ weighted centroid)
+  - Eva AI: auto-complete room boundary via A* pathfinding through density grid
+  - Action replay: re-execute drawing actions from action log with animation
+  - Vertex numbering: numbered labels on guide line vertices (canvas sprite textures)
+  - Why-history auto-fill: suggests reasons for actions based on user history and built-in defaults
+- **AI_KNOWLEDGE_BASE.md** - Comprehensive design rationale document for AI training: system purpose, tool explanations, workflow patterns, data formats, decision reasoning
 
 - **tools/watch_scans.py** - Local dev scan watcher
 - **tools/analyze_floor.py** - Floor analysis utility
