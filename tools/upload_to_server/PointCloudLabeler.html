@@ -4284,6 +4284,51 @@
          * 4. Separate into wall segments using direction changes
          * 5. Simplify with Douglas-Peucker and add as guide lines
          */
+        function showEvaPanel(msg) {
+            let panel = document.getElementById('eva-panel');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'eva-panel';
+                panel.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+                    background:rgba(8,12,28,0.95);border:2px solid #c026d3;border-radius:14px;
+                    padding:24px 32px;z-index:9999;min-width:340px;max-width:500px;
+                    font-size:13px;color:#e0e0e0;backdrop-filter:blur(12px);
+                    box-shadow:0 0 40px rgba(192,38,211,0.3);`;
+                panel.innerHTML = `
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                        <span style="font-size:22px;">✦</span>
+                        <span style="font-weight:700;color:#e879f9;font-size:17px;">Eva</span>
+                    </div>
+                    <div id="eva-panel-log" style="font-family:monospace;font-size:11px;line-height:1.6;
+                        max-height:300px;overflow-y:auto;color:#c4b5fd;"></div>
+                `;
+                document.body.appendChild(panel);
+            }
+            panel.style.display = 'block';
+            const log = document.getElementById('eva-panel-log');
+            if (msg) {
+                log.innerHTML += `<div>${msg}</div>`;
+                log.scrollTop = log.scrollHeight;
+            }
+            return panel;
+        }
+
+        function evaLog(msg) {
+            console.log('[Eva]', msg);
+            const log = document.getElementById('eva-panel-log');
+            if (log) {
+                log.innerHTML += `<div style="color:#d8b4fe;">> ${msg}</div>`;
+                log.scrollTop = log.scrollHeight;
+            }
+        }
+
+        function closeEvaPanel(delay) {
+            setTimeout(() => {
+                const panel = document.getElementById('eva-panel');
+                if (panel) panel.style.display = 'none';
+            }, delay || 0);
+        }
+
         function evaDrawBoundary() {
             if (!points.length) {
                 document.getElementById('selection-info').textContent = 'Eva: No point cloud loaded.';
@@ -4291,8 +4336,11 @@
             }
             const info = document.getElementById('selection-info');
             info.textContent = 'Eva: Analyzing point cloud density to find walls...';
-            console.log('[Eva] evaDrawBoundary started. points:', points.length);
-            setTimeout(() => _evaDrawBoundaryWork(), 50);
+            showEvaPanel(null);
+            document.getElementById('eva-panel-log').innerHTML = '';
+            evaLog('Starting boundary detection...');
+            evaLog(`Analyzing ${points.length.toLocaleString()} points`);
+            setTimeout(() => _evaDrawBoundaryWork(), 100);
         }
 
         function _evaDrawBoundaryWork() {
@@ -4315,12 +4363,12 @@
                 if (gz < gzMin) gzMin = gz; if (gz > gzMax) gzMax = gz;
             }
 
-            console.log('[Eva] Grid built:', cells.size, 'cells, bounds:', gxMin, gxMax, gzMin, gzMax);
+            evaLog(`Grid: ${cells.size} cells (${W}×${H}), bounds X[${gxMin}..${gxMax}] Z[${gzMin}..${gzMax}]`);
 
             // 2. Find density threshold — top 25% are "wall" cells
             const counts = Array.from(cells.values()).sort((a, b) => a - b);
             const wallThresh = counts[Math.floor(counts.length * 0.75)] || 2;
-            console.log('[Eva] Wall threshold:', wallThresh, 'points/cell');
+            evaLog(`Wall threshold: ${wallThresh} pts/cell (top 25% density)`);
 
             // 3. Build binary wall image
             const W = gxMax - gxMin + 1;
@@ -4395,7 +4443,7 @@
                 }
             }
 
-            console.log('[Eva] Found', components.length, 'wall components');
+            evaLog(`Found ${components.length} wall components (flood fill)`);
 
             // 6. For each component, find the principal axis and fit a line segment
             const wallSegments = [];
@@ -4456,7 +4504,7 @@
                 });
             }
 
-            console.log('[Eva] Wall segments after PCA:', wallSegments.length);
+            evaLog(`PCA line fitting: ${wallSegments.length} wall segments detected`);
 
             // 7. Merge collinear nearby segments
             const merged = [];
@@ -4527,10 +4575,13 @@
                 }
             }
 
-            console.log('[Eva] After merge:', merged.length, 'wall lines');
+            evaLog(`Merged collinear segments: ${merged.length} wall lines`);
 
             if (merged.length === 0) {
-                info.textContent = 'Eva: Could not detect clear wall segments. Try scanning more of the room.';
+                evaLog('Could not detect clear wall segments.');
+                evaLog('Try scanning more of the room or adjusting scan angle.');
+                info.textContent = 'Eva: Could not detect clear wall segments.';
+                closeEvaPanel(3000);
                 return;
             }
 
@@ -4560,8 +4611,11 @@
                 time_sec: +elapsed
             });
 
+            evaLog(`Drew ${addedCount} wall segments in ${elapsed}s`);
+            evaLog('Review and adjust, then use "Close Gaps" to connect.');
+            evaLog('Don\'t forget to save (Ctrl+S)!');
             info.textContent = `Eva: Drew ${addedCount} wall segments in ${elapsed}s. Review, adjust, then use "Close Gaps" to connect.`;
-            console.log('[Eva] Done!', addedCount, 'segments in', elapsed, 's');
+            closeEvaPanel(5000);
         }
 
         /**
