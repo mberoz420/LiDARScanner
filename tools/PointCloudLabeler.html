@@ -864,6 +864,10 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="16" r="4" fill="none"/><circle cx="8" cy="16" r="1.5" fill="currentColor"/><line x1="11" y1="13.5" x2="20" y2="6"/><line x1="20" y1="6" x2="16" y2="6"/><line x1="20" y1="6" x2="20" y2="10"/></svg>
                     Arrow
                 </div>
+                <div class="tool-btn" id="tool-circle" onclick="setTool('circle')" title="Annotation Circle (C) — mark gaps, windows, noise areas for Eva">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" stroke-dasharray="4,2"/><line x1="8" y1="8" x2="16" y2="16"/><line x1="16" y1="8" x2="8" y2="16"/></svg>
+                    Circle
+                </div>
                 <div class="tool-btn" id="tool-planefit" onclick="setTool('planefit')" title="Fit Plane (F) — click point cloud to fit a plane to nearby points">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18L10 6L20 10L14 22Z" fill="none"/><line x1="12" y1="14" x2="12" y2="8" stroke-dasharray="2,2"/></svg>
                     Plane
@@ -1610,7 +1614,7 @@
             points = []; labels = []; normals = []; rgbColors = []; scanIds = [];
             deletedIndices.clear(); selectedIndices.clear();
             numScans = 0; currentFilename = null; originalData = null;
-            guideLines = []; guideMarkers = []; constructionLines = []; observerArrows = [];
+            guideLines = []; guideMarkers = []; constructionLines = []; observerArrows = []; annotationCircles = [];
             actionLog = []; notebookEntries = [];
             actionSessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
             const counter = document.getElementById('action-log-count');
@@ -1670,6 +1674,18 @@
         let showObserverArrows = true;
         let arrowPlacingPos = null;    // first-click position during two-click placement
         let arrowPreviewAngle = 0;     // live angle during placement
+
+        // Annotation circles (mark gaps, windows, noise for Eva)
+        const CIRCLE_TAGS = ['gap', 'window', 'noise', 'door', 'obstruction', 'other'];
+        const CIRCLE_TAG_COLORS = {
+            gap: 0xff4444, window: 0x44aaff, noise: 0xff8800,
+            door: 0x44ff88, obstruction: 0xaa44ff, other: 0xffff44
+        };
+        let annotationCircles = [];    // [{x,y,z, radius, tag, note}]
+        let annotationCirclesGroup = null;
+        let showAnnotationCircles = true;
+        let circlePlacingCenter = null; // first-click center during placement
+        let circlePreviewRadius = 0;    // live radius during placement
 
         // Plane fit tool
         let fittedPlanes = [];          // [{center:{x,y,z}, normal:{x,y,z}, u:{x,y,z}, v:{x,y,z}, size:number}]
@@ -1915,6 +1931,7 @@
             polygon_closed: p => `Closed polygon with ${p.num_points} points`,
             marker_placed: p => `Placed marker #${p.total}`,
             arrow_placed: p => `Observer arrow #${p.total} at ${(p.angle * 180 / Math.PI).toFixed(0)}°`,
+            circle_placed: p => `Circle #${p.total} "${p.tag}" (${(p.radius*100).toFixed(0)}cm)${p.note ? ': '+p.note : ''}`,
             trim_applied: p => `Trimmed line (${p.num_intersections} intersection${p.num_intersections !== 1 ? 's' : ''})`,
             extend_both: p => `Extended 2 lines to meeting point`,
             auto_extend_all: p => `Auto-extended ${p.endpoints_extended} endpoints`,
@@ -1962,6 +1979,7 @@
             'guide_point_added': 'Placing vertex on wall/edge alignment',
             'marker_placed': 'Marking reference point for alignment',
             'arrow_placed': 'Indicating observer/camera viewing direction at this location',
+            'circle_placed': 'Marking area for Eva to learn — anomaly, gap, or feature boundary',
             'trim_applied': 'Removing overextended segment at intersection',
             'extend_both': 'Closing wall corner gap — extending lines to meet',
             'auto_extend_all': 'Batch-closing all wall corners to form room outline',
@@ -2268,6 +2286,10 @@
                 observerArrows = action.prev;
                 rebuildObserverArrows();
                 document.getElementById('selection-info').textContent = 'Undo: observer arrow';
+            } else if (action.type === 'circles') {
+                annotationCircles = action.prev;
+                rebuildAnnotationCircles();
+                document.getElementById('selection-info').textContent = 'Undo: annotation circle';
             } else if (action.type === 'guide') {
                 guideLines = action.prev;
                 if (action.prevMarkers) guideMarkers = action.prevMarkers;
@@ -2341,9 +2363,10 @@
             document.getElementById('tool-' + name)?.classList.add('active');
 
             const isConstruct   = (name === 'construct');
-            const isGuideDraw   = (name === 'polygon' || name === 'polyline' || name === 'spline' || name === 'marker' || name === 'arrow');
+            const isGuideDraw   = (name === 'polygon' || name === 'polyline' || name === 'spline' || name === 'marker' || name === 'arrow' || name === 'circle');
             const isTrimExtend  = (name === 'trim'    || name === 'extend');
             if (name !== 'arrow') { arrowPlacingPos = null; }
+            if (name !== 'circle') { circlePlacingCenter = null; }
             const isWindowZoom  = (name === 'windowzoom');
 
             drawMode = isConstruct;
@@ -2370,6 +2393,7 @@
                 else if (name === 'spline')   info.textContent = 'Spline: click control points — smooth curve drawn through them. Right-click or Esc to finish';
                 else if (name === 'marker')   info.textContent = 'Marker: click to place circle markers — connect later with Polyline (snaps to markers)';
                 else if (name === 'arrow')    info.textContent = 'Arrow: click to place observer position, then click again to set viewing direction';
+                else if (name === 'circle')   info.textContent = 'Circle: click center, then click edge to set radius — tag the area for Eva (gap/window/noise/door)';
                 else if (name === 'trim')     info.textContent = 'Trim: click on a guide line segment to trim at intersection';
                 else if (name === 'extend')   info.textContent = 'Extend: click first line, then second line — both extend to meeting point';
                 else if (name === 'planefit') info.textContent = 'Plane Fit: click on point cloud to fit a plane to nearby points';
@@ -2560,6 +2584,7 @@
             scene.add(guideLinesGroup);
             rebuildConstructionLines();
             rebuildObserverArrows();
+            rebuildAnnotationCircles();
         }
 
         function rebuildConstructionLines() {
@@ -2696,6 +2721,206 @@
             const tex = new THREE.CanvasTexture(canvas);
             const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
             return sprite;
+        }
+
+        // ── Annotation Circles ─────────────────────────────────────────────
+        function rebuildAnnotationCircles() {
+            if (annotationCirclesGroup) scene.remove(annotationCirclesGroup);
+            annotationCirclesGroup = new THREE.Group();
+
+            if (!showAnnotationCircles) { scene.add(annotationCirclesGroup); return; }
+
+            const camDist = camera ? camera.position.distanceTo(
+                new THREE.Vector3(sceneCenter.x, sceneCenter.y, sceneCenter.z)) : 10;
+            const labelScale = camDist * 0.012;
+
+            const allCircles = [...annotationCircles];
+            // Preview circle while placing
+            if (circlePlacingCenter && circlePreviewRadius > 0.02) {
+                allCircles.push({
+                    x: circlePlacingCenter.x, y: circlePlacingCenter.y, z: circlePlacingCenter.z,
+                    radius: circlePreviewRadius, tag: 'other', note: '', preview: true
+                });
+            }
+
+            allCircles.forEach((circ, i) => {
+                const isPreview = !!circ.preview;
+                const tagColor = CIRCLE_TAG_COLORS[circ.tag] || 0xffff44;
+                const color = isPreview ? 0xffffff : tagColor;
+                const opacity = isPreview ? 0.4 : 0.6;
+
+                // Draw circle ring on XZ plane
+                const segments = 48;
+                const ringPts = [];
+                for (let s = 0; s <= segments; s++) {
+                    const theta = (s / segments) * Math.PI * 2;
+                    ringPts.push(new THREE.Vector3(
+                        circ.x + Math.cos(theta) * circ.radius,
+                        (circ.y || 0) + 0.02,
+                        circ.z + Math.sin(theta) * circ.radius
+                    ));
+                }
+                const ringGeo = new THREE.BufferGeometry().setFromPoints(ringPts);
+                const ringMat = new THREE.LineBasicMaterial({ color, linewidth: 2, transparent: true, opacity, depthTest: false });
+                const ring = new THREE.Line(ringGeo, ringMat);
+                annotationCirclesGroup.add(ring);
+
+                // Dashed inner fill (semi-transparent disc)
+                const discGeo = new THREE.CircleGeometry(circ.radius, segments);
+                const discMat = new THREE.MeshBasicMaterial({
+                    color, transparent: true, opacity: isPreview ? 0.08 : 0.12,
+                    side: THREE.DoubleSide, depthTest: false
+                });
+                const disc = new THREE.Mesh(discGeo, discMat);
+                disc.position.set(circ.x, (circ.y || 0) + 0.015, circ.z);
+                disc.rotation.x = -Math.PI / 2;
+                annotationCirclesGroup.add(disc);
+
+                // Cross-hatch lines through center
+                const crossSize = circ.radius * 0.4;
+                const crossMat = new THREE.LineBasicMaterial({ color, linewidth: 1, transparent: true, opacity: opacity * 0.7, depthTest: false });
+                const hGeo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(circ.x - crossSize, (circ.y||0)+0.025, circ.z),
+                    new THREE.Vector3(circ.x + crossSize, (circ.y||0)+0.025, circ.z)
+                ]);
+                const vGeo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(circ.x, (circ.y||0)+0.025, circ.z - crossSize),
+                    new THREE.Vector3(circ.x, (circ.y||0)+0.025, circ.z + crossSize)
+                ]);
+                annotationCirclesGroup.add(new THREE.Line(hGeo, crossMat));
+                annotationCirclesGroup.add(new THREE.Line(vGeo, crossMat));
+
+                // Label sprite
+                if (!isPreview) {
+                    const label = createCircleLabel(i + 1, circ.tag, color);
+                    label.position.set(circ.x, (circ.y || 0) + labelScale * 2, circ.z);
+                    const s = labelScale * 1.8;
+                    label.scale.set(s, s * 0.5, 1);
+                    annotationCirclesGroup.add(label);
+                }
+            });
+
+            scene.add(annotationCirclesGroup);
+        }
+
+        function createCircleLabel(num, tag, color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 192; canvas.height = 48;
+            const ctx = canvas.getContext('2d');
+            // Background pill
+            ctx.fillStyle = 'rgba(0,0,0,0.8)';
+            roundRect(ctx, 2, 2, 188, 44, 12); ctx.fill();
+            ctx.strokeStyle = '#' + color.toString(16).padStart(6, '0');
+            ctx.lineWidth = 2;
+            roundRect(ctx, 2, 2, 188, 44, 12); ctx.stroke();
+            // Text
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 22px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`#${num} ${tag.toUpperCase()}`, 96, 25);
+            const tex = new THREE.CanvasTexture(canvas);
+            return new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+        }
+
+        function roundRect(ctx, x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        }
+
+        function showCircleTagDialog(center, radius) {
+            // Remove any existing dialog
+            let dlg = document.getElementById('circle-tag-dialog');
+            if (dlg) dlg.remove();
+
+            dlg = document.createElement('div');
+            dlg.id = 'circle-tag-dialog';
+            dlg.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+                background:rgba(8,12,28,0.96);border:1px solid #c026d3;border-radius:12px;
+                padding:20px;z-index:9999;min-width:280px;font-size:13px;color:#e0e0e0;
+                backdrop-filter:blur(8px);`;
+
+            let html = `<div style="font-weight:700;color:#e879f9;font-size:15px;margin-bottom:12px;">
+                Tag this area for Eva</div>
+                <div style="margin-bottom:10px;color:#aaa;">Radius: ${(radius*100).toFixed(0)} cm</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">`;
+
+            CIRCLE_TAGS.forEach(tag => {
+                const c = '#' + CIRCLE_TAG_COLORS[tag].toString(16).padStart(6, '0');
+                html += `<button class="circle-tag-btn" data-tag="${tag}" style="
+                    padding:6px 12px;border-radius:6px;border:2px solid ${c};
+                    background:rgba(0,0,0,0.4);color:${c};cursor:pointer;font-weight:600;font-size:12px;
+                    transition:all 0.15s;"
+                    onmouseover="this.style.background='${c}';this.style.color='#000'"
+                    onmouseout="this.style.background='rgba(0,0,0,0.4)';this.style.color='${c}'"
+                    >${tag.charAt(0).toUpperCase() + tag.slice(1)}</button>`;
+            });
+
+            html += `</div>
+                <div style="margin-bottom:10px;">
+                    <input id="circle-note-input" type="text" placeholder="Note for Eva (optional)..."
+                        style="width:100%;padding:6px 8px;background:rgba(255,255,255,0.08);
+                        border:1px solid #555;border-radius:6px;color:#fff;font-size:12px;box-sizing:border-box;">
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;">
+                    <button id="circle-cancel-btn" style="padding:6px 16px;background:#333;color:#aaa;
+                        border:1px solid #555;border-radius:6px;cursor:pointer;">Cancel</button>
+                </div>`;
+
+            dlg.innerHTML = html;
+            document.body.appendChild(dlg);
+
+            // Focus note input
+            setTimeout(() => document.getElementById('circle-note-input')?.focus(), 50);
+
+            // Tag button clicks
+            dlg.querySelectorAll('.circle-tag-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tag = btn.dataset.tag;
+                    const note = document.getElementById('circle-note-input')?.value || '';
+                    pushUndo({ type: 'circles', prev: JSON.parse(JSON.stringify(annotationCircles)) });
+                    annotationCircles.push({
+                        x: center.x, y: center.y, z: center.z,
+                        radius: radius, tag: tag, note: note
+                    });
+                    logAction('circle_placed', {
+                        pos: { x: +center.x.toFixed(4), y: +center.y.toFixed(4), z: +center.z.toFixed(4) },
+                        radius: +radius.toFixed(4), tag: tag, note: note,
+                        total: annotationCircles.length
+                    });
+                    circlePlacingCenter = null;
+                    circlePreviewRadius = 0;
+                    rebuildAnnotationCircles();
+                    document.getElementById('selection-info').textContent =
+                        `Circle #${annotationCircles.length} tagged "${tag}" (${(radius*100).toFixed(0)}cm). Click to place another.`;
+                    dlg.remove();
+                });
+            });
+
+            // Cancel
+            document.getElementById('circle-cancel-btn').addEventListener('click', () => {
+                circlePlacingCenter = null;
+                circlePreviewRadius = 0;
+                rebuildAnnotationCircles();
+                dlg.remove();
+            });
+
+            // Enter key in note input = pick first tag or selected
+            document.getElementById('circle-note-input')?.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    circlePlacingCenter = null; circlePreviewRadius = 0;
+                    rebuildAnnotationCircles(); dlg.remove();
+                }
+            });
         }
 
         // Find snap point from guide line vertices/midpoints
@@ -2843,6 +3068,24 @@
                     rebuildObserverArrows();
                     document.getElementById('selection-info').textContent =
                         `Observer arrow placed (${observerArrows.length} total). Click to place another.`;
+                }
+                return;
+            }
+
+            if (activeTool === 'circle') {
+                if (!circlePlacingCenter) {
+                    // First click — set center
+                    circlePlacingCenter = { x: pos.x, y: pos.y, z: pos.z };
+                    document.getElementById('selection-info').textContent =
+                        'Circle: move to set radius, click to confirm';
+                    rebuildAnnotationCircles();
+                } else {
+                    // Second click — set radius and prompt for tag
+                    const dx = pos.x - circlePlacingCenter.x;
+                    const dz = pos.z - circlePlacingCenter.z;
+                    const radius = Math.sqrt(dx * dx + dz * dz);
+                    if (radius < 0.02) return; // too small
+                    showCircleTagDialog(circlePlacingCenter, radius);
                 }
                 return;
             }
@@ -3414,7 +3657,7 @@
 
             const isGuideActive = (activeTool === 'polygon' || activeTool === 'polyline' || activeTool === 'spline'
                                 || activeTool === 'marker'  || activeTool === 'trim'    || activeTool === 'extend'
-                                || activeTool === 'arrow');
+                                || activeTool === 'arrow'   || activeTool === 'circle');
 
             if (!drawMode && !isGuideActive) return;
 
@@ -3451,6 +3694,14 @@
                     arrowPreviewAngle = Math.atan2(dz, dx);
                     rebuildObserverArrows();
                 }
+            }
+
+            // ── Circle placement preview ──
+            if (activeTool === 'circle' && circlePlacingCenter && drawSnapTarget) {
+                const dx = drawSnapTarget.x - circlePlacingCenter.x;
+                const dz = drawSnapTarget.z - circlePlacingCenter.z;
+                circlePreviewRadius = Math.sqrt(dx * dx + dz * dz);
+                rebuildAnnotationCircles();
             }
 
             // Snap indicator — AutoCAD-style crosshair
@@ -5430,6 +5681,14 @@
                 console.log('[Load] Restored', observerArrows.length, 'observer arrows');
             }
             rebuildObserverArrows();
+
+            // Reset and load annotation circles
+            annotationCircles = [];
+            if (data.annotation_circles && Array.isArray(data.annotation_circles)) {
+                annotationCircles = data.annotation_circles;
+                console.log('[Load] Restored', annotationCircles.length, 'annotation circles');
+            }
+            rebuildAnnotationCircles();
             if (data.construction_lines && Array.isArray(data.construction_lines)) {
                 constructionLines = data.construction_lines;
                 rebuildConstructionLines();
@@ -6740,7 +6999,7 @@
             // ── Guide tools intercept (polygon, polyline, spline, marker, trim, extend)
             if (activeTool === 'polygon' || activeTool === 'polyline' || activeTool === 'spline'
              || activeTool === 'marker'  || activeTool === 'trim'    || activeTool === 'extend'
-             || activeTool === 'arrow') {
+             || activeTool === 'arrow'   || activeTool === 'circle') {
                 if (!wasDrag) handleGuideToolClick(event);
                 return;
             }
@@ -6952,6 +7211,12 @@
             } else if (event.key === 'Delete' || event.key === 'Backspace') {
                 deleteSelected();
             } else if (event.key === 'Escape') {
+                if (circlePlacingCenter) {
+                    circlePlacingCenter = null; circlePreviewRadius = 0;
+                    rebuildAnnotationCircles();
+                    document.getElementById('selection-info').textContent = 'Circle placement cancelled.';
+                    return;
+                }
                 if (arrowPlacingPos) {
                     arrowPlacingPos = null;
                     rebuildObserverArrows();
@@ -7004,6 +7269,8 @@
                 setTool('marker');
             } else if (event.key === 'a' && !event.ctrlKey && !event.shiftKey) {
                 setTool('arrow');
+            } else if (event.key === 'c' && !event.ctrlKey && !event.shiftKey) {
+                setTool('circle');
             } else if (event.key === 't' || event.key === 'T') {
                 setTool('trim');
             } else if ((event.key === 'x' || event.key === 'X') && !event.ctrlKey) {
@@ -7416,6 +7683,7 @@
                 guide_lines: guideLines,
                 guide_markers: guideMarkers,
                 observer_arrows: observerArrows,
+                annotation_circles: annotationCircles,
                 construction_lines: constructionLines,
                 action_log: actionLog,
                 notebook: notebookEntries,
