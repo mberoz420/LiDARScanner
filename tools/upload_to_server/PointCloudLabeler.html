@@ -1067,6 +1067,9 @@
                 <button onclick="autoCompleteBoundary()" style="width:100%;margin-top:3px;padding:4px 4px;font-size:9px;
                     background:linear-gradient(135deg,#1a1a3e,#2d1b4e);color:#c084fc;border:1px solid #7c3aed;border-radius:4px;cursor:pointer;"
                     title="Eva AI: connect gaps between existing guide lines via density pathfinding">✦ Eva: Close Gaps</button>
+                <button onclick="evaDetectGlass()" style="width:100%;margin-top:3px;padding:4px 4px;font-size:9px;
+                    background:linear-gradient(135deg,#1a1a3e,#1b2e4e);color:#44aaff;border:1px solid #2288dd;border-radius:4px;cursor:pointer;"
+                    title="Eva AI: detect points that passed through window glass and bounced off outside surfaces">✦ Eva: Detect Glass</button>
                 <button onclick="replayActions()" style="width:100%;margin-top:4px;padding:5px 4px;font-size:10px;
                     background:#1a2744;color:#a78bfa;border:1px solid #7c3aed;border-radius:4px;cursor:pointer;"
                     title="Replay drawing actions from action log — auto-redraw all guide lines step by step">▶ Replay Actions</button>
@@ -1950,6 +1953,7 @@
             extend_both: p => `Extended 2 lines to meeting point`,
             auto_extend_all: p => `Auto-extended ${p.endpoints_extended} endpoints`,
             eva_draw_boundary: p => `Eva drew ${p.segments} wall segments (${p.time_sec}s)`,
+            eva_detect_glass: p => `Eva detected ${p.glass_points} glass artifacts (${p.beyond_boundary} beyond boundary, ${p.non_planar} non-planar)`,
             build_walls: p => `Built ${p.num_walls} walls from guides`,
             density_lines: p => `Detected ${p.ridges_detected} wall ridges`,
             plane_fit: p => `Fitted plane (${p.mode}, ${p.num_points} pts)`,
@@ -1997,6 +2001,7 @@
             'circle_placed': 'Marking area for Eva to learn — anomaly, gap, or feature boundary',
             'region_placed': 'Drawing irregular region for Eva — marking non-circular area of interest',
             'eva_draw_boundary': 'Eva auto-detected wall positions from point density ridges',
+            'eva_detect_glass': 'Eva detected LiDAR rays that passed through window glass and bounced off outside surfaces',
             'trim_applied': 'Removing overextended segment at intersection',
             'extend_both': 'Closing wall corner gap — extending lines to meet',
             'auto_extend_all': 'Batch-closing all wall corners to form room outline',
@@ -4826,6 +4831,279 @@
             evaLog('Ctrl+S to save!');
             info.textContent = `Eva: Drew ${addedCount} wall segments (${gapAngles.length} gaps detected) in ${elapsed}s`;
             closeEvaPanel(10000);
+        }
+
+        /**
+         * Eva: Detect Glass — find points that passed through window glass
+         * and bounced off outside surfaces.
+         *
+         * Algorithm:
+         * 1. Build room boundary polygon from guide lines (Eva's drawn walls)
+         * 2. Estimate scanner position (point cloud centroid)
+         * 3. For each point, cast ray from scanner through point
+         * 4. Check if point is beyond the boundary along that ray
+         * 5. Test local planarity — scattered non-planar points = glass artifact
+         * 6. Check if point is near a window/other annotation
+         * 7. Auto-label detected points as noise (label 4)
+         */
+        function evaDetectGlass() {
+            if (!points.length) {
+                document.getElementById('selection-info').textContent = 'Eva: No point cloud loaded.';
+                return;
+            }
+            if (guideLines.length === 0) {
+                document.getElementById('selection-info').textContent = 'Eva: Draw boundary first — I need walls to know what\'s inside vs outside.';
+                return;
+            }
+            showEvaPanel(null);
+            document.getElementById('eva-panel-log').innerHTML = '';
+            evaLog('Detecting glass pass-through artifacts...');
+            setTimeout(() => _evaDetectGlassWork(), 50);
+        }
+
+        function _evaDetectGlassWork() {
+            const info = document.getElementById('selection-info');
+            const t0 = performance.now();
+
+            // 1. Build boundary polygon from guide lines (XZ projection)
+            // Collect all guide line segments as boundary edges
+            const boundaryEdges = [];
+            for (const guide of guideLines) {
+                const pts = guide.points;
+                for (let i = 0; i < pts.length - 1; i++) {
+                    boundaryEdges.push({
+                        x1: pts[i].x, z1: pts[i].z,
+                        x2: pts[i + 1].x, z2: pts[i + 1].z
+                    });
+                }
+                if (guide.closed && pts.length >= 3) {
+                    boundaryEdges.push({
+                        x1: pts[pts.length - 1].x, z1: pts[pts.length - 1].z,
+                        x2: pts[0].x, z2: pts[0].z
+                    });
+                }
+            }
+            evaLog(`Boundary: ${boundaryEdges.length} edges from ${guideLines.length} guide lines`);
+
+            // 2. Estimate scanner position (centroid)
+            let scanX = 0, scanZ = 0, scanCount = 0;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                scanX += points[i].x; scanZ += points[i].z; scanCount++;
+            }
+            scanX /= scanCount; scanZ /= scanCount;
+            evaLog(`Scanner center: (${scanX.toFixed(2)}, ${scanZ.toFixed(2)})`);
+
+            // 3. Find the boundary distance along each ray from scanner
+            // For each point, compute ray from scanner → point → find where it crosses boundary
+            function rayBoundaryDist(px, pz) {
+                // Ray from scanner through point
+                const dx = px - scanX;
+                const dz = pz - scanZ;
+                const len = Math.sqrt(dx * dx + dz * dz);
+                if (len < 0.01) return Infinity;
+                const rdx = dx / len, rdz = dz / len;
+
+                let closestDist = Infinity;
+
+                for (const edge of boundaryEdges) {
+                    // Ray-segment intersection
+                    const ex = edge.x2 - edge.x1, ez = edge.z2 - edge.z1;
+                    const denom = rdx * ez - rdz * ex;
+                    if (Math.abs(denom) < 1e-10) continue;
+
+                    const t = ((edge.x1 - scanX) * ez - (edge.z1 - scanZ) * ex) / denom;
+                    const u = ((edge.x1 - scanX) * rdz - (edge.z1 - scanZ) * rdx) / denom;
+
+                    if (t > 0.01 && u >= 0 && u <= 1) {
+                        if (t < closestDist) closestDist = t;
+                    }
+                }
+                return closestDist;
+            }
+
+            // 4. Collect window/gap annotation regions
+            const windowRegions = [];
+            for (const circ of annotationCircles) {
+                if (circ.tag === 'window' || circ.tag === 'other' || circ.tag === 'gap') {
+                    windowRegions.push({ type: 'circle', x: circ.x, z: circ.z, r: circ.radius, tag: circ.tag });
+                }
+            }
+            for (const poly of annotationPolygons) {
+                if (poly.tag === 'window' || poly.tag === 'other' || poly.tag === 'gap') {
+                    windowRegions.push({ type: 'polygon', points: poly.points, tag: poly.tag });
+                }
+            }
+            evaLog(`Window/gap annotations: ${windowRegions.length}`);
+
+            // Point-in-polygon test (for annotation polygons)
+            function pointInPoly(px, pz, polyPts) {
+                let inside = false;
+                for (let i = 0, j = polyPts.length - 1; i < polyPts.length; j = i++) {
+                    const xi = polyPts[i].x, zi = polyPts[i].z;
+                    const xj = polyPts[j].x, zj = polyPts[j].z;
+                    if ((zi > pz) !== (zj > pz) &&
+                        px < (xj - xi) * (pz - zi) / (zj - zi) + xi) {
+                        inside = !inside;
+                    }
+                }
+                return inside;
+            }
+
+            function isInWindowRegion(px, pz) {
+                for (const r of windowRegions) {
+                    if (r.type === 'circle') {
+                        const dx = px - r.x, dz = pz - r.z;
+                        if (dx * dx + dz * dz <= r.r * r.r) return true;
+                    } else {
+                        if (pointInPoly(px, pz, r.points)) return true;
+                    }
+                }
+                return false;
+            }
+
+            // 5. Build spatial index for planarity test (grid of point indices)
+            const PLAN_CS = 0.10; // 10cm cells for neighbor lookup
+            const spatialGrid = new Map();
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                const p = points[i];
+                const key = Math.floor(p.x / PLAN_CS) + ',' + Math.floor(p.z / PLAN_CS);
+                if (!spatialGrid.has(key)) spatialGrid.set(key, []);
+                spatialGrid.get(key).push(i);
+            }
+
+            // Local planarity test — PCA on nearby points
+            function localPlanarity(idx) {
+                const p = points[idx];
+                const gx = Math.floor(p.x / PLAN_CS);
+                const gz = Math.floor(p.z / PLAN_CS);
+                const neighbors = [];
+
+                // Gather neighbors from 3x3 grid cells
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        const cell = spatialGrid.get((gx + dx) + ',' + (gz + dz));
+                        if (cell) {
+                            for (const ni of cell) {
+                                const np = points[ni];
+                                const dist = Math.sqrt((np.x-p.x)**2 + (np.y-p.y)**2 + (np.z-p.z)**2);
+                                if (dist < 0.15) neighbors.push(np); // 15cm radius
+                            }
+                        }
+                    }
+                }
+
+                if (neighbors.length < 5) return 0; // too few neighbors = isolated = noise
+
+                // PCA: compute covariance matrix eigenvalues
+                let mx = 0, my = 0, mz = 0;
+                for (const n of neighbors) { mx += n.x; my += n.y; mz += n.z; }
+                mx /= neighbors.length; my /= neighbors.length; mz /= neighbors.length;
+
+                let cxx = 0, cyy = 0, czz = 0, cxy = 0, cxz = 0, cyz = 0;
+                for (const n of neighbors) {
+                    const dx = n.x - mx, dy = n.y - my, dz = n.z - mz;
+                    cxx += dx*dx; cyy += dy*dy; czz += dz*dz;
+                    cxy += dx*dy; cxz += dx*dz; cyz += dy*dz;
+                }
+
+                // Simplified: ratio of smallest eigenvalue to sum
+                // For a plane, smallest eigenvalue ≈ 0 (flat)
+                // For scattered points, all eigenvalues are similar (non-planar)
+                const trace = cxx + cyy + czz;
+                if (trace < 1e-10) return 1; // degenerate
+
+                // Use determinant / trace^3 as a rough planarity measure
+                // High = non-planar, Low = planar
+                const det = cxx*(cyy*czz - cyz*cyz) - cxy*(cxy*czz - cyz*cxz) + cxz*(cxy*cyz - cyy*cxz);
+                const sphericity = Math.abs(det) / (trace * trace * trace / 27 + 1e-10);
+
+                return sphericity; // 0 = perfect plane, 1 = sphere/random
+            }
+
+            // 6. Scan all points — detect glass artifacts
+            evaLog('Scanning points for glass artifacts...');
+            const BEYOND_MARGIN = 0.10; // point must be 10cm+ beyond boundary
+            const PLANARITY_THRESH = 0.15; // above this = non-planar = noise
+            const glassPoints = [];
+            const undoChanges = [];
+            let beyondCount = 0, nonPlanarCount = 0, inWindowCount = 0;
+
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                if (labels[i] === 4) continue; // already noise
+                const p = points[i];
+
+                // Distance from scanner to point
+                const dx = p.x - scanX, dz = p.z - scanZ;
+                const ptDist = Math.sqrt(dx * dx + dz * dz);
+
+                // Distance from scanner to boundary along this ray
+                const bndDist = rayBoundaryDist(p.x, p.z);
+
+                // Is point beyond boundary?
+                const isBeyond = ptDist > bndDist + BEYOND_MARGIN;
+
+                // Is point in a window/gap annotation?
+                const inWindow = isInWindowRegion(p.x, p.z);
+
+                if (isBeyond) beyondCount++;
+                if (inWindow) inWindowCount++;
+
+                // Classify as glass artifact if:
+                // (a) Beyond boundary, OR
+                // (b) Inside a window annotation
+                if (isBeyond || inWindow) {
+                    // Check planarity
+                    const sphericity = localPlanarity(i);
+                    const isNonPlanar = sphericity > PLANARITY_THRESH || sphericity === 0;
+
+                    if (isNonPlanar || isBeyond) {
+                        if (isNonPlanar) nonPlanarCount++;
+                        glassPoints.push(i);
+                        undoChanges.push({ index: i, prevLabel: labels[i] });
+                    }
+                }
+            }
+
+            evaLog(`Analysis complete:`);
+            evaLog(`  ${beyondCount} points beyond boundary`);
+            evaLog(`  ${inWindowCount} points inside window annotations`);
+            evaLog(`  ${nonPlanarCount} non-planar (scattered)`);
+            evaLog(`  ${glassPoints.length} total glass artifacts detected`);
+
+            if (glassPoints.length === 0) {
+                evaLog('No glass artifacts found.');
+                info.textContent = 'Eva: No glass artifacts detected.';
+                closeEvaPanel(3000);
+                return;
+            }
+
+            // 7. Apply labels — noise (4) for glass artifacts
+            pushUndo({ type: 'stroke', strokeType: 'eva_glass', changes: undoChanges });
+            for (const idx of glassPoints) {
+                labels[idx] = 4; // noise
+            }
+
+            rebuildPointCloud();
+            updateStats();
+
+            const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+            logAction('eva_detect_glass', {
+                glass_points: glassPoints.length,
+                beyond_boundary: beyondCount,
+                in_window_region: inWindowCount,
+                non_planar: nonPlanarCount,
+                time_sec: +elapsed
+            });
+
+            evaLog(`─────────────────────────────`);
+            evaLog(`Labeled ${glassPoints.length} points as noise in ${elapsed}s`);
+            evaLog('Undo with Ctrl+Z if too aggressive.');
+            evaLog('Ctrl+S to save!');
+            info.textContent = `Eva: ${glassPoints.length} glass artifacts → noise (${elapsed}s). Ctrl+Z to undo.`;
+            closeEvaPanel(8000);
         }
 
         /**
