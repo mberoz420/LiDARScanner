@@ -4349,212 +4349,243 @@
             const info = document.getElementById('selection-info');
             const t0 = performance.now();
 
-            // 1. Build density grid (4cm cells)
-            const cs = 0.04;
+            // ── 1. Build density grid (3cm cells for fine detail) ──
+            const cs = 0.03;
             const cells = new Map();
-            let gxMin = Infinity, gxMax = -Infinity, gzMin = Infinity, gzMax = -Infinity;
+            let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
                 const p = points[i];
                 const gx = Math.floor(p.x / cs);
                 const gz = Math.floor(p.z / cs);
-                const key = gx + ',' + gz;
-                cells.set(key, (cells.get(key) || 0) + 1);
-                if (gx < gxMin) gxMin = gx; if (gx > gxMax) gxMax = gx;
-                if (gz < gzMin) gzMin = gz; if (gz > gzMax) gzMax = gz;
+                cells.set(gx + ',' + gz, (cells.get(gx + ',' + gz) || 0) + 1);
+                if (p.x < xMin) xMin = p.x; if (p.x > xMax) xMax = p.x;
+                if (p.z < zMin) zMin = p.z; if (p.z > zMax) zMax = p.z;
             }
 
-            const W = gxMax - gxMin + 1;
-            const H = gzMax - gzMin + 1;
-            evaLog(`Density grid: ${cells.size} cells (${W}×${H})`);
+            evaLog(`Grid: ${cells.size} cells, room ${(xMax-xMin).toFixed(1)}m × ${(zMax-zMin).toFixed(1)}m`);
 
-            // 2. Build 2D density array and find threshold
-            const density = new Float32Array(W * H);
-            let maxDensity = 0;
-            for (const [key, count] of cells) {
-                const [gx, gz] = key.split(',').map(Number);
-                const idx = (gz - gzMin) * W + (gx - gxMin);
-                density[idx] = count;
-                if (count > maxDensity) maxDensity = count;
+            // Density lookup helper
+            function getDen(wx, wz) {
+                return cells.get(Math.floor(wx / cs) + ',' + Math.floor(wz / cs)) || 0;
             }
 
+            // Adaptive threshold — top 30% density
             const counts = Array.from(cells.values()).sort((a, b) => a - b);
-            const wallThresh = counts[Math.floor(counts.length * 0.70)] || 2;
-            evaLog(`Wall threshold: ${wallThresh} pts/cell`);
+            const ridgeThresh = counts[Math.floor(counts.length * 0.70)] || 2;
+            evaLog(`Ridge threshold: ${ridgeThresh} pts/cell`);
 
-            // 3. Scan rows (horizontal runs of dense cells) → detect horizontal walls
-            const runs = [];
-            const MIN_RUN = 8; // minimum 8 cells = ~32cm
+            // ── 2. Estimate scanner position (centroid of all points) ──
+            let scanX = 0, scanZ = 0, scanCount = 0;
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                scanX += points[i].x; scanZ += points[i].z; scanCount++;
+            }
+            scanX /= scanCount; scanZ /= scanCount;
+            evaLog(`Scanner ~center: (${scanX.toFixed(2)}, ${scanZ.toFixed(2)})`);
 
-            // Horizontal scan (X direction at each Z)
-            for (let z = 0; z < H; z++) {
-                let runStart = -1;
-                for (let x = 0; x <= W; x++) {
-                    const d = x < W ? density[z * W + x] : 0;
-                    if (d >= wallThresh) {
-                        if (runStart < 0) runStart = x;
-                    } else {
-                        if (runStart >= 0) {
-                            const runLen = x - runStart;
-                            if (runLen >= MIN_RUN) {
-                                runs.push({
-                                    x1: (runStart + gxMin) * cs,
-                                    z1: (z + gzMin + 0.5) * cs,
-                                    x2: (x - 1 + gxMin + 1) * cs,
-                                    z2: (z + gzMin + 0.5) * cs,
-                                    dir: 'h', len: runLen, row: z
-                                });
+            // ── 3. Ray-cast from outside inward — "shrink wrap" ──
+            // Cast rays from a large circle outside the point cloud toward center
+            // Find where each ray first hits a dense region = boundary point
+            const margin = 1.0; // start 1m outside bounding box
+            const outerR = Math.max(xMax - xMin, zMax - zMin) / 2 + margin;
+            const cx = (xMin + xMax) / 2;
+            const cz = (zMin + zMax) / 2;
+
+            const NUM_RAYS = 720; // every 0.5 degrees
+            const RAY_STEP = cs * 0.5; // step size = half cell
+            const RIDGE_WINDOW = 5; // look ahead this many steps for peak density
+            const boundaryPts = [];
+
+            evaLog(`Casting ${NUM_RAYS} rays inward (${(360/NUM_RAYS).toFixed(1)}° step)...`);
+
+            for (let r = 0; r < NUM_RAYS; r++) {
+                const angle = (r / NUM_RAYS) * Math.PI * 2;
+                const dirX = -Math.cos(angle); // inward
+                const dirZ = -Math.sin(angle);
+                const startX = cx + Math.cos(angle) * outerR;
+                const startZ = cz + Math.sin(angle) * outerR;
+
+                // March inward, find first cell above threshold
+                let hitX = null, hitZ = null;
+                let maxDenOnRay = 0, maxDenX = 0, maxDenZ = 0;
+                const maxSteps = Math.ceil(outerR * 2 / RAY_STEP);
+
+                for (let s = 0; s < maxSteps; s++) {
+                    const wx = startX + dirX * s * RAY_STEP;
+                    const wz = startZ + dirZ * s * RAY_STEP;
+                    const d = getDen(wx, wz);
+
+                    if (d >= ridgeThresh && !hitX) {
+                        // First hit — but look ahead a few steps for the peak (ridge center)
+                        hitX = wx; hitZ = wz;
+                        maxDenOnRay = d; maxDenX = wx; maxDenZ = wz;
+
+                        for (let ahead = 1; ahead <= RIDGE_WINDOW; ahead++) {
+                            const ax = wx + dirX * ahead * RAY_STEP;
+                            const az = wz + dirZ * ahead * RAY_STEP;
+                            const ad = getDen(ax, az);
+                            if (ad > maxDenOnRay) {
+                                maxDenOnRay = ad; maxDenX = ax; maxDenZ = az;
                             }
-                            runStart = -1;
                         }
+                        break;
                     }
+                }
+
+                if (hitX !== null) {
+                    // Use the peak density position (ridge center) not just first hit
+                    boundaryPts.push({ x: maxDenX, z: maxDenZ, angle: angle, density: maxDenOnRay });
                 }
             }
 
-            // Vertical scan (Z direction at each X)
-            for (let x = 0; x < W; x++) {
-                let runStart = -1;
-                for (let z = 0; z <= H; z++) {
-                    const d = z < H ? density[z * W + x] : 0;
-                    if (d >= wallThresh) {
-                        if (runStart < 0) runStart = z;
-                    } else {
-                        if (runStart >= 0) {
-                            const runLen = z - runStart;
-                            if (runLen >= MIN_RUN) {
-                                runs.push({
-                                    x1: (x + gxMin + 0.5) * cs,
-                                    z1: (runStart + gzMin) * cs,
-                                    x2: (x + gxMin + 0.5) * cs,
-                                    z2: (z - 1 + gzMin + 1) * cs,
-                                    dir: 'v', len: runLen, col: x
-                                });
-                            }
-                            runStart = -1;
-                        }
-                    }
-                }
-            }
+            evaLog(`Boundary hits: ${boundaryPts.length} / ${NUM_RAYS} rays`);
 
-            evaLog(`Found ${runs.length} density runs (H+V scan)`);
-
-            // 4. Merge parallel nearby runs into wall lines
-            // Group by direction and proximity
-            const hRuns = runs.filter(r => r.dir === 'h').sort((a, b) => a.z1 - b.z1);
-            const vRuns = runs.filter(r => r.dir === 'v').sort((a, b) => a.x1 - b.x1);
-
-            function mergeParallelRuns(sorted, posKey, startKey, endKey, mergeThresh) {
-                const merged = [];
-                const used = new Set();
-                for (let i = 0; i < sorted.length; i++) {
-                    if (used.has(i)) continue;
-                    const group = [sorted[i]];
-                    used.add(i);
-                    for (let j = i + 1; j < sorted.length; j++) {
-                        if (used.has(j)) continue;
-                        // Same position (within threshold)?
-                        const posDiff = Math.abs(sorted[j][posKey] - sorted[i][posKey]);
-                        if (posDiff > mergeThresh) break; // sorted, so no more nearby
-                        // Overlapping range?
-                        const aStart = Math.min(sorted[i][startKey], sorted[i][endKey]);
-                        const aEnd = Math.max(sorted[i][startKey], sorted[i][endKey]);
-                        const bStart = Math.min(sorted[j][startKey], sorted[j][endKey]);
-                        const bEnd = Math.max(sorted[j][startKey], sorted[j][endKey]);
-                        if (bStart <= aEnd + 0.15 && bEnd >= aStart - 0.15) {
-                            group.push(sorted[j]);
-                            used.add(j);
-                        }
-                    }
-                    // Merge group — average position, extend range
-                    let avgPos = 0;
-                    let minR = Infinity, maxR = -Infinity;
-                    for (const r of group) {
-                        avgPos += r[posKey];
-                        minR = Math.min(minR, r[startKey], r[endKey]);
-                        maxR = Math.max(maxR, r[startKey], r[endKey]);
-                    }
-                    avgPos /= group.length;
-                    merged.push({ pos: avgPos, start: minR, end: maxR, count: group.length });
-                }
-                return merged;
-            }
-
-            const mergedH = mergeParallelRuns(hRuns, 'z1', 'x1', 'x2', 0.12); // 12cm merge distance
-            const mergedV = mergeParallelRuns(vRuns, 'x1', 'z1', 'z2', 0.12);
-
-            evaLog(`Merged: ${mergedH.length} horizontal + ${mergedV.length} vertical walls`);
-
-            // 5. Convert to guide line segments
-            const wallLines = [];
-
-            for (const w of mergedH) {
-                const len = Math.abs(w.end - w.start);
-                if (len < 0.25) continue; // skip very short
-                wallLines.push({
-                    x1: w.start, z1: w.pos,
-                    x2: w.end, z2: w.pos,
-                    length: len
-                });
-            }
-            for (const w of mergedV) {
-                const len = Math.abs(w.end - w.start);
-                if (len < 0.25) continue;
-                wallLines.push({
-                    x1: w.pos, z1: w.start,
-                    x2: w.pos, z2: w.end,
-                    length: len
-                });
-            }
-
-            // 6. Remove duplicate/overlapping segments
-            // If two segments overlap significantly and are close, keep the longer one
-            wallLines.sort((a, b) => b.length - a.length);
-            const finalLines = [];
-            const usedLine = new Set();
-
-            for (let i = 0; i < wallLines.length; i++) {
-                if (usedLine.has(i)) continue;
-                const a = wallLines[i];
-                usedLine.add(i);
-                finalLines.push(a);
-
-                // Remove shorter overlapping segments
-                for (let j = i + 1; j < wallLines.length; j++) {
-                    if (usedLine.has(j)) continue;
-                    const b = wallLines[j];
-                    // Check if midpoints are close
-                    const mx = (a.x1 + a.x2) / 2, mz = (a.z1 + a.z2) / 2;
-                    const bx = (b.x1 + b.x2) / 2, bz = (b.z1 + b.z2) / 2;
-                    const dist = Math.sqrt((mx - bx) ** 2 + (mz - bz) ** 2);
-                    if (dist < 0.2) usedLine.add(j); // too close to a longer line
-                }
-            }
-
-            evaLog(`Final: ${finalLines.length} wall segments`);
-
-            if (finalLines.length === 0) {
-                evaLog('Could not detect wall segments. Scan may need more coverage.');
-                info.textContent = 'Eva: No wall segments detected.';
+            if (boundaryPts.length < 10) {
+                evaLog('Too few boundary points. Scan may be too sparse.');
+                info.textContent = 'Eva: Could not trace boundary — not enough density.';
                 closeEvaPanel(3000);
                 return;
             }
 
-            // 7. Add as guide lines
+            // ── 4. Detect gaps (LiDAR blind spots at 75-90° angles) ──
+            // Check annotation circles tagged as gaps/windows
+            const gapCircles = annotationCircles.filter(c =>
+                c.tag === 'gap' || c.tag === 'window' || c.tag === 'other'
+            );
+            evaLog(`Known gap annotations: ${gapCircles.length}`);
+
+            // Also detect gaps by angular gaps in boundary hits
+            const gapAngles = [];
+            for (let i = 0; i < boundaryPts.length; i++) {
+                const next = boundaryPts[(i + 1) % boundaryPts.length];
+                let angleDiff = next.angle - boundaryPts[i].angle;
+                if (angleDiff < 0) angleDiff += Math.PI * 2;
+                if (angleDiff > (Math.PI * 2 / NUM_RAYS) * 3) { // gap > 3× normal spacing
+                    gapAngles.push({
+                        startAngle: boundaryPts[i].angle,
+                        endAngle: next.angle,
+                        gapDeg: (angleDiff * 180 / Math.PI).toFixed(1)
+                    });
+                }
+            }
+            if (gapAngles.length > 0) {
+                evaLog(`Detected ${gapAngles.length} angular gaps (LiDAR blind spots):`);
+                gapAngles.forEach(g => evaLog(`  gap: ${g.gapDeg}°`));
+            }
+
+            // ── 5. Simplify boundary with Douglas-Peucker ──
+            function dpSimplify(pts, tol) {
+                if (pts.length <= 2) return pts;
+                let maxDist = 0, maxIdx = 0;
+                const first = pts[0], last = pts[pts.length - 1];
+                const dx = last.x - first.x, dz = last.z - first.z;
+                const len2 = dx * dx + dz * dz;
+                for (let i = 1; i < pts.length - 1; i++) {
+                    let dist;
+                    if (len2 < 1e-8) {
+                        dist = Math.sqrt((pts[i].x - first.x) ** 2 + (pts[i].z - first.z) ** 2);
+                    } else {
+                        const t = Math.max(0, Math.min(1, ((pts[i].x - first.x) * dx + (pts[i].z - first.z) * dz) / len2));
+                        dist = Math.sqrt((pts[i].x - first.x - t * dx) ** 2 + (pts[i].z - first.z - t * dz) ** 2);
+                    }
+                    if (dist > maxDist) { maxDist = dist; maxIdx = i; }
+                }
+                if (maxDist > tol) {
+                    const left = dpSimplify(pts.slice(0, maxIdx + 1), tol);
+                    const right = dpSimplify(pts.slice(maxIdx), tol);
+                    return left.slice(0, -1).concat(right);
+                }
+                return [first, last];
+            }
+
+            const simplified = dpSimplify(boundaryPts, 0.06); // 6cm tolerance
+            evaLog(`Simplified: ${boundaryPts.length} → ${simplified.length} vertices`);
+
+            // ── 6. Split into wall segments at corners (sharp direction changes) ──
+            const CORNER_ANGLE = 25 * Math.PI / 180; // 25° = corner threshold
+            const segments = [];
+            let currentSeg = [simplified[0]];
+
+            for (let i = 1; i < simplified.length; i++) {
+                currentSeg.push(simplified[i]);
+
+                if (i < simplified.length - 1 && currentSeg.length >= 2) {
+                    // Check angle between incoming and outgoing direction
+                    const prev = simplified[i - 1];
+                    const curr = simplified[i];
+                    const next = simplified[i + 1];
+                    const a1 = Math.atan2(curr.z - prev.z, curr.x - prev.x);
+                    const a2 = Math.atan2(next.z - curr.z, next.x - curr.x);
+                    let diff = Math.abs(a2 - a1);
+                    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+
+                    if (diff > CORNER_ANGLE) {
+                        // Corner detected — end current segment, start new one
+                        if (currentSeg.length >= 2) {
+                            segments.push([...currentSeg]);
+                        }
+                        currentSeg = [simplified[i]]; // start new segment from corner
+                    }
+                }
+            }
+            // Close: connect last to first if close enough
+            if (currentSeg.length >= 2) {
+                segments.push(currentSeg);
+            }
+
+            evaLog(`Split into ${segments.length} wall segments at corners`);
+
+            // ── 7. Snap segments to orthogonal (optional: prefer 0/90° walls) ──
+            // For each segment, check if it's nearly horizontal or vertical
+            // If within 10°, snap to exact H/V
+            const SNAP_ANGLE = 10 * Math.PI / 180;
+            for (const seg of segments) {
+                if (seg.length < 2) continue;
+                const first = seg[0], last = seg[seg.length - 1];
+                const angle = Math.atan2(last.z - first.z, last.x - first.x);
+                const absAngle = Math.abs(angle);
+
+                // Near horizontal (0° or 180°)
+                if (absAngle < SNAP_ANGLE || absAngle > Math.PI - SNAP_ANGLE) {
+                    const avgZ = seg.reduce((s, p) => s + p.z, 0) / seg.length;
+                    seg.forEach(p => p.z = avgZ);
+                }
+                // Near vertical (90° or -90°)
+                else if (Math.abs(absAngle - Math.PI / 2) < SNAP_ANGLE) {
+                    const avgX = seg.reduce((s, p) => s + p.x, 0) / seg.length;
+                    seg.forEach(p => p.x = avgX);
+                }
+            }
+
+            // ── 8. Filter out very short segments ──
+            const minLen = 0.20; // 20cm minimum wall length
+            const finalSegs = segments.filter(seg => {
+                if (seg.length < 2) return false;
+                const dx = seg[seg.length-1].x - seg[0].x;
+                const dz = seg[seg.length-1].z - seg[0].z;
+                return Math.sqrt(dx * dx + dz * dz) >= minLen;
+            });
+
+            evaLog(`After filtering: ${finalSegs.length} walls (>20cm)`);
+
+            if (finalSegs.length === 0) {
+                evaLog('No wall segments survived filtering.');
+                info.textContent = 'Eva: Could not detect walls.';
+                closeEvaPanel(3000);
+                return;
+            }
+
+            // ── 9. Add as guide lines ──
             const y = drawPlaneLocked ? drawPlaneY : 0;
             pushUndo({ type: 'guide', prev: JSON.parse(JSON.stringify(guideLines)),
                         prevMarkers: JSON.parse(JSON.stringify(guideMarkers)) });
 
             let addedCount = 0;
-            for (const seg of finalLines) {
-                guideLines.push({
-                    type: 'polyline',
-                    points: [
-                        { x: seg.x1, y: y, z: seg.z1 },
-                        { x: seg.x2, y: y, z: seg.z2 }
-                    ],
-                    closed: false
-                });
+            for (const seg of finalSegs) {
+                const pts = seg.map(p => ({ x: p.x, y: y, z: p.z }));
+                guideLines.push({ type: 'polyline', points: pts, closed: false });
                 addedCount++;
             }
 
@@ -4563,19 +4594,29 @@
 
             logAction('eva_draw_boundary', {
                 segments: addedCount,
+                boundary_points: boundaryPts.length,
+                gaps_detected: gapAngles.length,
+                gap_circles: gapCircles.length,
                 time_sec: +elapsed
             });
 
+            evaLog(`─────────────────────────────`);
             evaLog(`Drew ${addedCount} wall segments in ${elapsed}s`);
-            for (const seg of finalLines) {
-                const len = seg.length.toFixed(2);
-                const isH = Math.abs(seg.z2 - seg.z1) < 0.05;
-                evaLog(`  ${isH ? '─' : '│'} ${len}m at ${isH ? 'Z=' + seg.z1.toFixed(2) : 'X=' + seg.x1.toFixed(2)}`);
+            for (const seg of finalSegs) {
+                const dx = seg[seg.length-1].x - seg[0].x;
+                const dz = seg[seg.length-1].z - seg[0].z;
+                const len = Math.sqrt(dx*dx + dz*dz).toFixed(2);
+                const ang = (Math.atan2(dz, dx) * 180 / Math.PI).toFixed(0);
+                evaLog(`  wall: ${len}m @ ${ang}° (${seg.length} vertices)`);
             }
-            evaLog('Review and adjust. Use "Close Gaps" to connect.');
+            if (gapAngles.length > 0) {
+                evaLog(`${gapAngles.length} gaps detected (LiDAR blind spots)`);
+                evaLog(`Gaps are where scanner angle was 75-90° to walls`);
+            }
+            evaLog('Adjust lines, then "Close Gaps" to connect.');
             evaLog('Ctrl+S to save!');
-            info.textContent = `Eva: Drew ${addedCount} wall segments in ${elapsed}s.`;
-            closeEvaPanel(8000);
+            info.textContent = `Eva: Drew ${addedCount} wall segments (${gapAngles.length} gaps detected) in ${elapsed}s`;
+            closeEvaPanel(10000);
         }
 
         /**
