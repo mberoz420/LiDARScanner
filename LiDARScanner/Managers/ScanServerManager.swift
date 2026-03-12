@@ -102,6 +102,22 @@ class ScanServerManager: ObservableObject {
                   let filename = json["filename"] as? String else {
                 lastError = "Unexpected server response"; return nil
             }
+
+            // Notify Eva's brain about the uploaded scan
+            Task {
+                let pointCount = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["num_points"] as? Int ?? 0
+                await EvaBrainManager.shared.logScanSummary(
+                    filename: filename,
+                    pointCount: pointCount,
+                    project: project
+                )
+                await EvaBrainManager.shared.logDecision(
+                    action: "scan_uploaded",
+                    context: "Uploaded \(filename) (\(pointCount) points) to project: \(project ?? "root")",
+                    reasoning: "iOS app auto-upload after scan completion"
+                )
+            }
+
             return filename
 
         } catch {

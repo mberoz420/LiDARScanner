@@ -1070,6 +1070,20 @@
                 <button onclick="evaDetectGlass()" style="width:100%;margin-top:3px;padding:4px 4px;font-size:9px;
                     background:linear-gradient(135deg,#1a1a3e,#1b2e4e);color:#44aaff;border:1px solid #2288dd;border-radius:4px;cursor:pointer;"
                     title="Eva AI: detect points that passed through window glass and bounced off outside surfaces">✦ Eva: Detect Glass</button>
+                <button onclick="evaLearnFromCorrections()" style="width:100%;margin-top:3px;padding:4px 4px;font-size:9px;
+                    background:linear-gradient(135deg,#1a3a1a,#1b4e2d);color:#4ade80;border:1px solid #22c55e;border-radius:4px;cursor:pointer;"
+                    title="Eva compares her boundary to your corrections and adjusts her parameters">✦ Eva: Learn from Corrections</button>
+                <div style="margin-top:6px;display:flex;gap:3px;">
+                    <input id="eva-ask-input" type="text" placeholder="Ask Eva..."
+                        style="flex:1;padding:4px 6px;font-size:10px;background:#0d1117;color:#e0e0e0;
+                        border:1px solid #c026d3;border-radius:4px;outline:none;"
+                        onkeydown="if(event.key==='Enter'){document.getElementById('eva-ask-btn').click();event.preventDefault();}">
+                    <button id="eva-ask-btn" onclick="const inp=document.getElementById('eva-ask-input');if(inp.value.trim()){evaAsk(inp.value.trim());inp.value='';}"
+                        style="padding:4px 8px;font-size:10px;background:linear-gradient(135deg,#1a1a3e,#2d1b4e);
+                        color:#e879f9;border:1px solid #c026d3;border-radius:4px;cursor:pointer;font-weight:600;"
+                        title="Ask Eva a question about this scan">✦</button>
+                </div>
+                <div id="eva-status" style="font-size:8px;color:#666;margin-top:2px;"></div>
                 <button onclick="replayActions()" style="width:100%;margin-top:4px;padding:5px 4px;font-size:10px;
                     background:#1a2744;color:#a78bfa;border:1px solid #7c3aed;border-radius:4px;cursor:pointer;"
                     title="Replay drawing actions from action log — auto-redraw all guide lines step by step">▶ Replay Actions</button>
@@ -4545,17 +4559,458 @@
             }, delay || 0);
         }
 
+        // ── Eva AI: Central Brain + Local Ollama Model ──
+        const OLLAMA_URL = 'http://localhost:11434';
+        const OLLAMA_MODEL = 'llama3.1:8b';
+        const EVA_BRAIN_URL = SERVER_BASE + '/api/eva.php';
+
+        // ── Eva Brain: Server sync ──
+        async function evaSyncFromServer() {
+            try {
+                const r = await fetch(EVA_BRAIN_URL, {
+                    headers: { 'X-API-Key': API_KEY },
+                    signal: AbortSignal.timeout(5000)
+                });
+                if (!r.ok) return null;
+                const kb = await r.json();
+                // Merge server params into local
+                if (kb.params) {
+                    Object.assign(evaParams, kb.params);
+                    console.log('[Eva Brain] Synced params from server:', evaParams);
+                }
+                // Store rules and learnings for Ollama context
+                if (kb.rules) evaServerRules = kb.rules;
+                if (kb.learnings) evaServerLearnings = kb.learnings;
+                if (kb.decisions) evaServerDecisions = kb.decisions;
+                return kb;
+            } catch (e) {
+                console.log('[Eva Brain] Server unreachable:', e.message);
+                return null;
+            }
+        }
+
+        let evaServerRules = [];
+        let evaServerLearnings = [];
+        let evaServerDecisions = [];
+
+        async function evaPushToServer(action, data) {
+            try {
+                const url = EVA_BRAIN_URL + (action !== 'update' ? '?action=' + action : '');
+                const r = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body: JSON.stringify(data),
+                    signal: AbortSignal.timeout(5000)
+                });
+                if (r.ok) {
+                    const result = await r.json();
+                    console.log('[Eva Brain]', action, result.message || 'ok');
+                    return result;
+                }
+            } catch (e) {
+                console.log('[Eva Brain] Push failed:', e.message);
+            }
+            return null;
+        }
+
+        // Log a decision/action to Eva's central brain
+        function evaLogDecision(logAction, context, reasoning, source = 'labeler') {
+            evaPushToServer('log', {
+                type: 'decision',
+                source: source,
+                log_action: logAction,
+                context: context,
+                reasoning: reasoning
+            });
+        }
+
+        // Build a context summary of the current scan state for Eva
+        function evaBuildContext() {
+            const ctx = {
+                totalPoints: points.length,
+                labelCounts: {},
+                guideLineCount: guideLines.length,
+                annotationCircles: annotationCircles.length,
+                annotationPolygons: annotationPolygons.length,
+                observerArrows: observerArrows.length,
+            };
+            // Count labels
+            const labelNames = ['floor', 'wall', 'ceiling', 'object', 'noise', 'door', 'window', 'protrusion'];
+            for (let i = 0; i < labels.length; i++) {
+                const name = labelNames[labels[i]] || 'unknown';
+                ctx.labelCounts[name] = (ctx.labelCounts[name] || 0) + 1;
+            }
+            // Bounding box
+            if (points.length > 0) {
+                let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+                let minY = Infinity, maxY = -Infinity;
+                for (const p of points) {
+                    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+                    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+                    if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+                }
+                ctx.boundingBox = {
+                    width: (maxX - minX).toFixed(2) + 'm',
+                    height: (maxY - minY).toFixed(2) + 'm',
+                    depth: (maxZ - minZ).toFixed(2) + 'm'
+                };
+            }
+            // Annotation summaries
+            if (annotationCircles.length > 0) {
+                ctx.circleAnnotations = annotationCircles.map(c => ({
+                    tag: c.tag, note: c.note || '', radius: c.radius.toFixed(2) + 'm'
+                }));
+            }
+            if (annotationPolygons.length > 0) {
+                ctx.polygonAnnotations = annotationPolygons.map(p => ({
+                    tag: p.tag, note: p.note || '', vertices: p.points.length
+                }));
+            }
+            // Include Eva's server-synced knowledge
+            if (evaServerRules.length > 0) {
+                ctx.classificationRules = evaServerRules.map(r => r.rule);
+            }
+            if (evaServerLearnings.length > 0) {
+                ctx.recentLearnings = evaServerLearnings.slice(-5).map(l => l.analysis);
+            }
+            ctx.boundaryParams = { ...evaParams };
+            return ctx;
+        }
+
+        // Ask Eva (local Ollama model) a question about the current scan
+        async function evaAsk(userPrompt, options = {}) {
+            const { showPanel = true, systemPrompt = null } = options;
+
+            if (showPanel) {
+                showEvaPanel(null);
+                document.getElementById('eva-panel-log').innerHTML = '';
+                evaLog('Thinking...');
+            }
+
+            const ctx = evaBuildContext();
+            // Build rules from server brain or fallback to defaults
+            const rulesText = evaServerRules.length > 0
+                ? evaServerRules.map(r => '- ' + r.rule).join('\n')
+                : `- Dense linear point clusters = walls (clear planar density ridges)
+- Scattered/undefined points inside annotation regions = usually window glass or openings to another room
+- Any point area that does not define a plane or logical surface = noise
+- LiDAR gaps at 75-90° angles from scanner center = blind spots (walls parallel to scan ray)
+- Scanner is typically positioned in the middle of the room`;
+
+            const learningsText = evaServerLearnings.length > 0
+                ? '\n\nRecent learnings from corrections:\n' + evaServerLearnings.slice(-5).map(l => '- ' + l.analysis.substring(0, 150)).join('\n')
+                : '';
+
+            const sysPrompt = systemPrompt || `You are Eva, an AI assistant for LiDAR point cloud analysis and labeling. You help users understand their scan data, identify surfaces (walls, floors, ceilings), detect noise/artifacts (window glass, scattered points), and suggest labeling strategies.
+
+Current scan context:
+${JSON.stringify(ctx, null, 2)}
+
+Classification rules:
+${rulesText}
+${learningsText}
+
+Be concise and specific. Reference the actual data when answering.`;
+
+            try {
+                const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: OLLAMA_MODEL,
+                        prompt: userPrompt,
+                        system: sysPrompt,
+                        stream: false,
+                        options: { temperature: 0.7, num_predict: 512 }
+                    })
+                });
+
+                if (!response.ok) throw new Error(`Ollama error: ${response.status}`);
+                const data = await response.json();
+                const answer = data.response || 'No response from model.';
+
+                if (showPanel) {
+                    const log = document.getElementById('eva-panel-log');
+                    log.innerHTML = ''; // clear "Thinking..."
+                    evaLog(answer);
+                }
+                return answer;
+            } catch (err) {
+                const errMsg = err.message.includes('Failed to fetch')
+                    ? 'Eva offline — Ollama not running. Start it with: ollama serve'
+                    : `Error: ${err.message}`;
+                if (showPanel) evaLog(errMsg);
+                return null;
+            }
+        }
+
+        // Check if Ollama is available
+        async function evaCheckConnection() {
+            try {
+                const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+                if (r.ok) {
+                    const data = await r.json();
+                    const models = data.models || [];
+                    const hasModel = models.some(m => m.name.startsWith(OLLAMA_MODEL.split(':')[0]));
+                    return { connected: true, models: models.map(m => m.name), hasModel };
+                }
+            } catch (e) {}
+            return { connected: false, models: [], hasModel: false };
+        }
+
+        // ── Eva Learning: Feedback Loop ──
+        // Stores Eva's drawing parameters + learns from user corrections
+        let evaParams = {
+            cellSize: 0.03,          // density grid resolution
+            ridgePercentile: 0.70,   // top N% = ridge threshold
+            numRays: 720,            // ray count (angular resolution)
+            ridgeWindow: 5,          // look-ahead steps for peak
+            simplifyTol: 0.06,       // Douglas-Peucker tolerance (m)
+            cornerAngle: 25,         // degrees — split at corners
+            snapAngle: 10,           // degrees — snap to orthogonal
+            minWallLen: 0.20,        // minimum wall segment length (m)
+            margin: 1.0,             // start distance outside bounding box
+        };
+        let evaLastBoundary = null;  // Eva's last auto-drawn boundary (for comparison)
+        let evaFeedbackHistory = []; // past feedback from Ollama
+
+        // Load Eva's learned parameters from localStorage
+        function evaLoadParams() {
+            try {
+                const saved = localStorage.getItem('eva_params');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    Object.assign(evaParams, parsed);
+                    console.log('[Eva] Loaded learned params:', evaParams);
+                }
+                const hist = localStorage.getItem('eva_feedback_history');
+                if (hist) evaFeedbackHistory = JSON.parse(hist);
+            } catch (e) { console.warn('[Eva] Could not load params:', e); }
+        }
+
+        // Save Eva's learned parameters to localStorage
+        function evaSaveParams() {
+            try {
+                localStorage.setItem('eva_params', JSON.stringify(evaParams));
+                localStorage.setItem('eva_feedback_history', JSON.stringify(evaFeedbackHistory.slice(-20)));
+            } catch (e) { console.warn('[Eva] Could not save params:', e); }
+        }
+
+        // Snapshot Eva's boundary attempt for later comparison
+        function evaSnapshotBoundary() {
+            // Capture current guide lines that Eva just drew
+            evaLastBoundary = {
+                timestamp: Date.now(),
+                params: { ...evaParams },
+                guideLines: JSON.parse(JSON.stringify(guideLines)),
+                pointCount: points.length,
+                scanBounds: (() => {
+                    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+                    for (const p of points) {
+                        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+                        if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+                    }
+                    return { minX, maxX, minZ, maxZ, w: maxX - minX, h: maxZ - minZ };
+                })()
+            };
+            console.log('[Eva] Boundary snapshot saved for feedback comparison');
+        }
+
+        // Compare Eva's boundary to user's corrected version → ask Ollama for advice
+        async function evaLearnFromCorrections() {
+            if (!evaLastBoundary) {
+                evaLog('No previous Eva boundary to compare against.');
+                return;
+            }
+
+            showEvaPanel(null);
+            document.getElementById('eva-panel-log').innerHTML = '';
+            evaLog('Analyzing your corrections...');
+
+            const original = evaLastBoundary.guideLines;
+            const corrected = guideLines;
+
+            // Build comparison summary
+            const origSegCount = original.length;
+            const corrSegCount = corrected.length;
+
+            // Compute total lengths
+            function totalLen(lines) {
+                let len = 0;
+                for (const l of lines) {
+                    if (!l.points || l.points.length < 2) continue;
+                    for (let i = 1; i < l.points.length; i++) {
+                        const dx = l.points[i].x - l.points[i-1].x;
+                        const dz = l.points[i].z - l.points[i-1].z;
+                        len += Math.sqrt(dx * dx + dz * dz);
+                    }
+                }
+                return len;
+            }
+
+            // Count vertex differences
+            function totalVerts(lines) {
+                return lines.reduce((s, l) => s + (l.points ? l.points.length : 0), 0);
+            }
+
+            // Find segments that were added/removed/moved
+            const origLen = totalLen(original).toFixed(2);
+            const corrLen = totalLen(corrected).toFixed(2);
+            const origVerts = totalVerts(original);
+            const corrVerts = totalVerts(corrected);
+
+            // Compute average displacement between closest matching segments
+            let avgDisplacement = 0;
+            let matchCount = 0;
+            for (const cLine of corrected) {
+                if (!cLine.points || cLine.points.length < 2) continue;
+                const cMid = {
+                    x: cLine.points.reduce((s, p) => s + p.x, 0) / cLine.points.length,
+                    z: cLine.points.reduce((s, p) => s + p.z, 0) / cLine.points.length
+                };
+                let bestDist = Infinity;
+                for (const oLine of original) {
+                    if (!oLine.points || oLine.points.length < 2) continue;
+                    const oMid = {
+                        x: oLine.points.reduce((s, p) => s + p.x, 0) / oLine.points.length,
+                        z: oLine.points.reduce((s, p) => s + p.z, 0) / oLine.points.length
+                    };
+                    const d = Math.sqrt((cMid.x - oMid.x) ** 2 + (cMid.z - oMid.z) ** 2);
+                    if (d < bestDist) bestDist = d;
+                }
+                if (bestDist < 5) { avgDisplacement += bestDist; matchCount++; }
+            }
+            avgDisplacement = matchCount > 0 ? (avgDisplacement / matchCount).toFixed(3) : 'N/A';
+
+            const comparison = {
+                original: { segments: origSegCount, totalLength: origLen + 'm', vertices: origVerts },
+                corrected: { segments: corrSegCount, totalLength: corrLen + 'm', vertices: corrVerts },
+                segmentsAdded: Math.max(0, corrSegCount - origSegCount),
+                segmentsRemoved: Math.max(0, origSegCount - corrSegCount),
+                avgDisplacement: avgDisplacement + 'm',
+                currentParams: { ...evaParams },
+                scanBounds: evaLastBoundary.scanBounds,
+                annotationCount: annotationCircles.length + annotationPolygons.length
+            };
+
+            evaLog(`Original: ${origSegCount} segments, ${origLen}m total`);
+            evaLog(`Corrected: ${corrSegCount} segments, ${corrLen}m total`);
+            evaLog(`Avg displacement: ${avgDisplacement}m`);
+            evaLog('Asking Eva to analyze corrections...');
+
+            const prompt = `The user ran my automatic boundary detection on a LiDAR room scan, then manually corrected the result. Analyze the differences and suggest parameter adjustments.
+
+COMPARISON:
+${JSON.stringify(comparison, null, 2)}
+
+MY CURRENT PARAMETERS:
+${JSON.stringify(evaParams, null, 2)}
+
+PARAMETER MEANINGS:
+- cellSize: density grid resolution in meters (smaller = finer detail, slower)
+- ridgePercentile: what % of density cells count as "ridge" (0.70 = top 30%)
+- numRays: number of rays cast inward (more = smoother boundary)
+- ridgeWindow: how many steps ahead to look for peak density after first hit
+- simplifyTol: Douglas-Peucker simplification tolerance in meters (larger = fewer vertices)
+- cornerAngle: degrees of direction change to split into new wall segment
+- snapAngle: degrees within which walls snap to exact horizontal/vertical
+- minWallLen: minimum wall segment length in meters (shorter filtered out)
+- margin: how far outside bounding box to start rays
+
+Based on the corrections, suggest specific parameter changes as JSON. For example:
+- If user added segments: I may need lower ridgePercentile or smaller cellSize
+- If user removed segments: I may need higher minWallLen or higher simplifyTol
+- If user moved walls: I may need different ridgeWindow or cellSize
+- If segments are too jagged: increase simplifyTol
+- If missing corners: decrease cornerAngle
+
+Respond with:
+1. Brief analysis (2-3 sentences)
+2. A JSON block with ONLY the parameters to change: {"paramName": newValue, ...}`;
+
+            const answer = await evaAsk(prompt, { showPanel: false, systemPrompt:
+                'You are Eva, an AI that learns to draw room boundaries from LiDAR point clouds. Analyze user corrections to your boundary detection and suggest parameter adjustments. Be specific and concise. Always include a JSON block with parameter changes.' });
+
+            if (!answer) {
+                evaLog('Could not reach Ollama for analysis.');
+                closeEvaPanel(3000);
+                return;
+            }
+
+            evaLog('');
+            evaLog('Eva\'s analysis:');
+            evaLog(answer);
+
+            // Try to extract JSON parameter updates from response
+            const jsonMatch = answer.match(/\{[^{}]*\}/);
+            if (jsonMatch) {
+                try {
+                    const updates = JSON.parse(jsonMatch[0]);
+                    let changed = [];
+                    for (const [key, val] of Object.entries(updates)) {
+                        if (key in evaParams && typeof val === 'number') {
+                            const old = evaParams[key];
+                            evaParams[key] = val;
+                            changed.push(`${key}: ${old} → ${val}`);
+                        }
+                    }
+                    if (changed.length > 0) {
+                        evaLog('');
+                        evaLog('Parameters updated:');
+                        changed.forEach(c => evaLog(`  ${c}`));
+                        evaSaveParams();
+
+                        // Save to feedback history
+                        evaFeedbackHistory.push({
+                            timestamp: Date.now(),
+                            comparison: comparison,
+                            changes: updates,
+                            analysis: answer.substring(0, 300)
+                        });
+                        evaSaveParams();
+
+                        evaLog('');
+                        evaLog('Parameters saved. Next "Draw Boundary" will use updated values.');
+
+                        // Push learning to Eva's central brain on server
+                        evaPushToServer('learn', {
+                            source: 'labeler',
+                            scan_id: currentFilename || 'unknown',
+                            comparison: comparison,
+                            param_changes: updates,
+                            analysis: answer.substring(0, 500),
+                            before_params: evaLastBoundary.params,
+                            after_params: { ...evaParams }
+                        });
+                        // Also sync updated params to server
+                        evaPushToServer('update', {
+                            section: 'params',
+                            data: { ...evaParams }
+                        });
+                        evaLog('Synced to Eva\'s central brain on server.');
+                    }
+                } catch (e) {
+                    evaLog('Could not parse parameter JSON from response.');
+                }
+            }
+
+            closeEvaPanel(10000);
+        }
+
         function evaDrawBoundary() {
             if (!points.length) {
                 document.getElementById('selection-info').textContent = 'Eva: No point cloud loaded.';
                 return;
             }
+            evaLoadParams();
+            evaSyncFromServer(); // pull latest params from central brain
             const info = document.getElementById('selection-info');
             info.textContent = 'Eva: Analyzing point cloud density to find walls...';
             showEvaPanel(null);
             document.getElementById('eva-panel-log').innerHTML = '';
             evaLog('Starting boundary detection...');
             evaLog(`Analyzing ${points.length.toLocaleString()} points`);
+            evaLog(`Using params: cell=${evaParams.cellSize}m, ridge=${(100-evaParams.ridgePercentile*100).toFixed(0)}% top, corner=${evaParams.cornerAngle}°`);
             setTimeout(() => _evaDrawBoundaryWork(), 100);
         }
 
@@ -4563,8 +5018,8 @@
             const info = document.getElementById('selection-info');
             const t0 = performance.now();
 
-            // ── 1. Build density grid (3cm cells for fine detail) ──
-            const cs = 0.03;
+            // ── 1. Build density grid (using learned cell size) ──
+            const cs = evaParams.cellSize;
             const cells = new Map();
             let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
 
@@ -4585,9 +5040,9 @@
                 return cells.get(Math.floor(wx / cs) + ',' + Math.floor(wz / cs)) || 0;
             }
 
-            // Adaptive threshold — top 30% density
+            // Adaptive threshold — using learned percentile
             const counts = Array.from(cells.values()).sort((a, b) => a - b);
-            const ridgeThresh = counts[Math.floor(counts.length * 0.70)] || 2;
+            const ridgeThresh = counts[Math.floor(counts.length * evaParams.ridgePercentile)] || 2;
             evaLog(`Ridge threshold: ${ridgeThresh} pts/cell`);
 
             // ── 2. Estimate scanner position (centroid of all points) ──
@@ -4602,14 +5057,14 @@
             // ── 3. Ray-cast from outside inward — "shrink wrap" ──
             // Cast rays from a large circle outside the point cloud toward center
             // Find where each ray first hits a dense region = boundary point
-            const margin = 1.0; // start 1m outside bounding box
+            const margin = evaParams.margin;
             const outerR = Math.max(xMax - xMin, zMax - zMin) / 2 + margin;
             const cx = (xMin + xMax) / 2;
             const cz = (zMin + zMax) / 2;
 
-            const NUM_RAYS = 720; // every 0.5 degrees
+            const NUM_RAYS = evaParams.numRays;
             const RAY_STEP = cs * 0.5; // step size = half cell
-            const RIDGE_WINDOW = 5; // look ahead this many steps for peak density
+            const RIDGE_WINDOW = evaParams.ridgeWindow;
             const boundaryPts = [];
 
             evaLog(`Casting ${NUM_RAYS} rays inward (${(360/NUM_RAYS).toFixed(1)}° step)...`);
@@ -4714,11 +5169,11 @@
                 return [first, last];
             }
 
-            const simplified = dpSimplify(boundaryPts, 0.06); // 6cm tolerance
+            const simplified = dpSimplify(boundaryPts, evaParams.simplifyTol);
             evaLog(`Simplified: ${boundaryPts.length} → ${simplified.length} vertices`);
 
             // ── 6. Split into wall segments at corners (sharp direction changes) ──
-            const CORNER_ANGLE = 25 * Math.PI / 180; // 25° = corner threshold
+            const CORNER_ANGLE = evaParams.cornerAngle * Math.PI / 180;
             const segments = [];
             let currentSeg = [simplified[0]];
 
@@ -4754,7 +5209,7 @@
             // ── 7. Snap segments to orthogonal (optional: prefer 0/90° walls) ──
             // For each segment, check if it's nearly horizontal or vertical
             // If within 10°, snap to exact H/V
-            const SNAP_ANGLE = 10 * Math.PI / 180;
+            const SNAP_ANGLE = evaParams.snapAngle * Math.PI / 180;
             for (const seg of segments) {
                 if (seg.length < 2) continue;
                 const first = seg[0], last = seg[seg.length - 1];
@@ -4774,7 +5229,7 @@
             }
 
             // ── 8. Filter out very short segments ──
-            const minLen = 0.20; // 20cm minimum wall length
+            const minLen = evaParams.minWallLen;
             const finalSegs = segments.filter(seg => {
                 if (seg.length < 2) return false;
                 const dx = seg[seg.length-1].x - seg[0].x;
@@ -4828,8 +5283,25 @@
                 evaLog(`Gaps are where scanner angle was 75-90° to walls`);
             }
             evaLog('Adjust lines, then "Close Gaps" to connect.');
-            evaLog('Ctrl+S to save!');
+            evaLog('When done correcting → click "Eva: Learn" to teach me!');
             info.textContent = `Eva: Drew ${addedCount} wall segments (${gapAngles.length} gaps detected) in ${elapsed}s`;
+
+            // Snapshot for feedback loop
+            evaSnapshotBoundary();
+
+            // Log to central brain
+            evaLogDecision('draw_boundary',
+                `${points.length} points, ${addedCount} walls, ${gapAngles.length} gaps, ${elapsed}s`,
+                `Used params: cell=${cs}m, ridge=${ridgeThresh}, rays=${NUM_RAYS}, corner=${evaParams.cornerAngle}°`
+            );
+            evaPushToServer('scan_summary', {
+                filename: currentFilename || 'unknown',
+                point_count: points.length,
+                actions: ['draw_boundary'],
+                annotations: annotationCircles.length + annotationPolygons.length,
+                guide_lines: guideLines.length
+            });
+
             closeEvaPanel(10000);
         }
 
@@ -4925,12 +5397,12 @@
             // 4. Collect window/gap annotation regions
             const windowRegions = [];
             for (const circ of annotationCircles) {
-                if (circ.tag === 'window' || circ.tag === 'other' || circ.tag === 'gap') {
+                if (circ.tag === 'window' || circ.tag === 'other' || circ.tag === 'gap' || circ.tag === 'noise') {
                     windowRegions.push({ type: 'circle', x: circ.x, z: circ.z, r: circ.radius, tag: circ.tag });
                 }
             }
             for (const poly of annotationPolygons) {
-                if (poly.tag === 'window' || poly.tag === 'other' || poly.tag === 'gap') {
+                if (poly.tag === 'window' || poly.tag === 'other' || poly.tag === 'gap' || poly.tag === 'noise') {
                     windowRegions.push({ type: 'polygon', points: poly.points, tag: poly.tag });
                 }
             }
@@ -5025,10 +5497,28 @@
             // 6. Scan all points — detect glass artifacts
             evaLog('Scanning points for glass artifacts...');
             const BEYOND_MARGIN = 0.10; // point must be 10cm+ beyond boundary
-            const PLANARITY_THRESH = 0.15; // above this = non-planar = noise
+            const PLANARITY_THRESH = 0.12; // above this = non-planar = noise
+            const LOW_DENSITY_THRESH = 3;   // cells with fewer points = sparse
             const glassPoints = [];
             const undoChanges = [];
-            let beyondCount = 0, nonPlanarCount = 0, inWindowCount = 0;
+            let beyondCount = 0, nonPlanarCount = 0, inWindowCount = 0, sparseCount = 0;
+
+            // Build XZ density grid for sparse-region detection
+            const spCS = 0.08; // 8cm cells
+            const spGrid = new Map();
+            for (let i = 0; i < points.length; i++) {
+                if (deletedIndices.has(i)) continue;
+                const p = points[i];
+                const key = Math.floor(p.x / spCS) + ',' + Math.floor(p.z / spCS);
+                spGrid.set(key, (spGrid.get(key) || 0) + 1);
+            }
+            // Median density for adaptive threshold
+            const spCounts = Array.from(spGrid.values()).sort((a, b) => a - b);
+            const medianDensity = spCounts[Math.floor(spCounts.length * 0.5)] || 3;
+            const sparseCutoff = Math.max(LOW_DENSITY_THRESH, Math.floor(medianDensity * 0.25));
+            evaLog(`Density: median=${medianDensity} pts/cell, sparse cutoff=${sparseCutoff}`);
+
+            const alreadyTagged = new Set();
 
             for (let i = 0; i < points.length; i++) {
                 if (deletedIndices.has(i)) continue;
@@ -5048,30 +5538,66 @@
                 // Is point in a window/gap annotation?
                 const inWindow = isInWindowRegion(p.x, p.z);
 
+                // Is point in a sparse density region?
+                const spKey = Math.floor(p.x / spCS) + ',' + Math.floor(p.z / spCS);
+                const cellCount = spGrid.get(spKey) || 0;
+                const isSparse = cellCount <= sparseCutoff;
+
                 if (isBeyond) beyondCount++;
                 if (inWindow) inWindowCount++;
 
-                // Classify as glass artifact if:
-                // (a) Beyond boundary, OR
-                // (b) Inside a window annotation
-                if (isBeyond || inWindow) {
-                    // Check planarity
-                    const sphericity = localPlanarity(i);
-                    const isNonPlanar = sphericity > PLANARITY_THRESH || sphericity === 0;
+                // ── Decision logic ──
+                let isGlass = false;
 
-                    if (isNonPlanar || isBeyond) {
-                        if (isNonPlanar) nonPlanarCount++;
-                        glassPoints.push(i);
-                        undoChanges.push({ index: i, prevLabel: labels[i] });
+                // (a) Beyond boundary → always glass/noise
+                if (isBeyond) {
+                    isGlass = true;
+                }
+
+                // (b) Inside a window/gap annotation → check planarity
+                if (inWindow && !isGlass) {
+                    const sph = localPlanarity(i);
+                    if (sph > PLANARITY_THRESH || sph === 0) {
+                        isGlass = true;
+                        nonPlanarCount++;
                     }
+                }
+
+                // (c) NOT inside boundary edges but in a sparse region with non-planar neighbors
+                //     This catches adjacent-room scatter that's inside the bounding box
+                if (!isGlass && isSparse) {
+                    const sph = localPlanarity(i);
+                    if (sph > PLANARITY_THRESH || sph === 0) {
+                        // Double check: is it also far from any dense wall?
+                        // Look at surrounding density — if surrounded by emptiness, it's noise
+                        let nearbyDensity = 0;
+                        for (let ddx = -2; ddx <= 2; ddx++) {
+                            for (let ddz = -2; ddz <= 2; ddz++) {
+                                const nk = (Math.floor(p.x / spCS) + ddx) + ',' + (Math.floor(p.z / spCS) + ddz);
+                                nearbyDensity += spGrid.get(nk) || 0;
+                            }
+                        }
+                        // If the 5x5 neighborhood is sparse overall → noise
+                        if (nearbyDensity < medianDensity * 3) {
+                            isGlass = true;
+                            sparseCount++;
+                        }
+                    }
+                }
+
+                if (isGlass && !alreadyTagged.has(i)) {
+                    alreadyTagged.add(i);
+                    glassPoints.push(i);
+                    undoChanges.push({ index: i, prevLabel: labels[i] });
                 }
             }
 
             evaLog(`Analysis complete:`);
             evaLog(`  ${beyondCount} points beyond boundary`);
-            evaLog(`  ${inWindowCount} points inside window annotations`);
-            evaLog(`  ${nonPlanarCount} non-planar (scattered)`);
-            evaLog(`  ${glassPoints.length} total glass artifacts detected`);
+            evaLog(`  ${inWindowCount} points inside window/gap annotations`);
+            evaLog(`  ${nonPlanarCount} non-planar in annotations`);
+            evaLog(`  ${sparseCount} sparse isolated scatter (adjacent room/glass)`);
+            evaLog(`  ${glassPoints.length} total artifacts detected`);
 
             if (glassPoints.length === 0) {
                 evaLog('No glass artifacts found.');
@@ -6562,6 +7088,14 @@
                 notebookEntries = [];
             }
             if (notebookOpen) renderNotebookEntries();
+            // Load Eva's learned parameters
+            if (data.eva_params && typeof data.eva_params === 'object') {
+                Object.assign(evaParams, data.eva_params);
+                console.log('[Eva] Loaded params from project:', evaParams);
+            }
+            if (data.eva_feedback_history && Array.isArray(data.eva_feedback_history)) {
+                evaFeedbackHistory = data.eva_feedback_history;
+            }
             actionSessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
             logAction('project_loaded', { filename: currentFilename, num_points: points.length,
                 num_guides: guideLines.length, num_construction: constructionLines.length });
@@ -8544,6 +9078,8 @@
                 action_log: actionLog,
                 notebook: notebookEntries,
                 why_history: whyHistory,
+                eva_params: evaParams,
+                eva_feedback_history: evaFeedbackHistory.slice(-20),
                 saved_at: new Date().toISOString()
             };
             if (meshFaces) data.faces = meshFaces;
@@ -11128,6 +11664,31 @@
 
         // Initialize
         init();
+
+        // Load Eva's learned parameters from localStorage, then sync from server
+        evaLoadParams();
+        evaSyncFromServer().then(kb => {
+            if (kb) console.log('[Eva Brain] Connected to central brain. Rules:', kb.rules?.length, 'Learnings:', kb.learnings?.length);
+        });
+
+        // Check Eva's connections on startup
+        Promise.all([
+            evaCheckConnection(),
+            evaSyncFromServer().then(kb => !!kb)
+        ]).then(([ollama, brain]) => {
+            const el = document.getElementById('eva-status');
+            if (el) {
+                const parts = [];
+                if (ollama.connected && ollama.hasModel) parts.push('AI ✓');
+                else parts.push('AI ✗');
+                if (brain) parts.push('Brain ✓');
+                else parts.push('Brain ✗');
+
+                const allGood = ollama.connected && ollama.hasModel && brain;
+                el.textContent = `✦ Eva: ${parts.join(' · ')}`;
+                el.style.color = allGood ? '#a78bfa' : (ollama.connected || brain ? '#f59e0b' : '#555');
+            }
+        });
 
         // Load build status on page load
         refreshBuildStatus();

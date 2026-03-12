@@ -54,7 +54,8 @@
 ### Managers/
 - **MeshManager.swift** - Core scanning engine: ARSession, mesh capture, surface classification, edge detection, auto photo capture coordination
 - **SurfaceClassifier.swift** - Classifies mesh faces as floor/ceiling/wall/object/protrusion/door/window using normals + height calibration + ML
-- **ScanServerManager.swift** - Uploads scans to ScanWizard server. Manages project folders (list, create). API key auth
+- **ScanServerManager.swift** - Uploads scans to ScanWizard server. Manages project folders (list, create). API key auth. Notifies Eva brain after upload
+- **EvaBrainManager.swift** - Eva AI central brain sync. Pulls/pushes knowledge (rules, params, decisions, learnings) to/from server. Syncs on app launch
 - **ScanSessionManager.swift** - Local persistence of scan sessions (save, load, update, delete)
 - **TrainingDataExporter.swift** - Exports scans as NumPy-compatible JSON (points + normals + labels) for ML training and server upload
 - **MeshExporter.swift** - Exports meshes to PLY, USDZ, OBJ with surface type grouping
@@ -103,6 +104,7 @@
 - **setup_db.php** - One-time DB setup: creates users table + default admin account. DELETE after running
 - **reset-password.php** - Password reset landing page (from email link), verifies token and accepts new password
 - **api/auth.php** - Auth API: login, register, logout, approve, reject, list_users, verify_reset_token, reset_password
+- **api/eva.php** - Eva AI central brain API: GET/POST knowledge base (params, rules, decisions, learnings, scan history). Shared by Swift app, Ollama, PointCloudLabeler, and Claude
 - **includes/config.php** - DB credentials, API keys, paths, limits, ADMIN_EMAIL
 - **includes/db.php** - PDO connection helper (singleton)
 - **includes/.htaccess** - Blocks direct web access to include files
@@ -141,6 +143,14 @@
   - Auto front-direction from vertical surface normals (scan orientation)
   - Density magnet: cursor snaps toward dense point regions when drawing (XZ weighted centroid)
   - Eva AI: auto-complete room boundary via A* pathfinding through density grid
+  - Eva AI: Draw Boundary — outside-in ray-casting with learnable parameters
+  - Eva AI: Detect Glass — find LiDAR pass-through window artifacts (beyond boundary + annotation + sparse region detection)
+  - Eva AI: Learn from Corrections — compares Eva's boundary to user edits, asks Ollama for parameter adjustments
+  - Eva AI: Ask Eva — chat input that sends scan context to local Ollama (Llama 3.1 8B) for intelligent analysis
+  - Eva Central Brain — syncs knowledge (rules, params, learnings, decisions) with server via api/eva.php
+  - Observer arrows: directional camera/viewpoint indicators, two-click placement (A key)
+  - Annotation circles: tagged area markers (gap/window/noise/door/obstruction/other) with color coding (C key)
+  - Annotation polygons: irregular area markers with tagged fill, used to teach Eva about regions (G key)
   - Action replay: re-execute drawing actions from action log with animation
   - Vertex numbering: numbered labels on guide line vertices (canvas sprite textures)
   - Why-history auto-fill: suggests reasons for actions based on user history and built-in defaults
@@ -154,19 +164,43 @@
 
 ## Data Flow
 
-1. **Scan**: iOS captures LiDAR mesh via ARKit -> MeshManager classifies surfaces
-2. **Export**: TrainingDataExporter converts to NumPy JSON (points + normals + labels)
-3. **Project Selection**: ProjectPickerView shows server folders, user picks (persists as default)
-4. **Upload**: ScanServerManager POSTs JSON to upload.php with `?project=` param
-5. **Server Storage**: Saves to `scans/{project}/scan_TIMESTAMP.json`, updates manifest
-6. **Labeling**: PointCloudLabeler loads from server, user refines labels, saves back
-7. **Training**: Export labeled data for ML training
+1. **App Launch**: iOS syncs Eva's brain from server (rules, params, learnings) via EvaBrainManager
+2. **Scan**: iOS captures LiDAR mesh via ARKit -> MeshManager classifies surfaces
+3. **Export**: TrainingDataExporter converts to NumPy JSON (points + normals + labels)
+4. **Project Selection**: ProjectPickerView shows server folders, user picks (persists as default)
+5. **Upload**: ScanServerManager POSTs JSON to upload.php with `?project=` param
+6. **Eva Notified**: After upload, EvaBrainManager logs scan summary + decision to server brain
+7. **Server Storage**: Saves to `scans/{project}/scan_TIMESTAMP.json`, updates manifest
+8. **Labeling**: PointCloudLabeler loads from server, syncs Eva brain, user refines labels
+9. **Eva Learns**: User corrects Eva's boundary → Ollama analyzes → params updated → pushed to server brain
+10. **Training**: Export labeled data for ML training
+11. **Next Session**: All systems (iOS, Labeler, Ollama, Claude) pull Eva's latest knowledge from server
+
+## Eva AI Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│        Eva Central Brain (server)               │
+│        /api/eva.php → /eva/knowledge.json       │
+│                                                 │
+│  params, rules, decisions, learnings, history   │
+└──────┬──────────┬──────────┬──────────┬─────────┘
+       │          │          │          │
+  ┌────┴───┐ ┌───┴────┐ ┌───┴───┐ ┌───┴──────┐
+  │ Swift  │ │Labeler │ │Ollama │ │ Claude   │
+  │iOS App │ │  Web   │ │Local  │ │ Sessions │
+  │        │ │        │ │  AI   │ │          │
+  └────────┘ └────────┘ └───────┘ └──────────┘
+```
 
 ---
 
 ## Key Configuration
 
 - **Server URL**: `https://scanwizard.robo-wizard.com`
-- **API Key**: `ScanWizard2025Secret` (match in ScanServerManager.swift and config.php)
+- **API Key**: `ScanWizard2025Secret` (match in ScanServerManager.swift, EvaBrainManager.swift, and config.php)
+- **Eva Brain API**: `https://scanwizard.robo-wizard.com/api/eva.php`
+- **Eva Knowledge Store**: `eva/knowledge.json` on server
+- **Ollama (local AI)**: `http://localhost:11434` — Llama 3.1 8B model
 - **Max upload**: 128 MB
 - **Scans path**: `scans/` (with project subfolders)
