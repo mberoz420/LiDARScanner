@@ -3667,8 +3667,10 @@
             if (!drawMode && !isGuideActive) return;
 
             // Pick snap target: guide vertices/midpoints/intersections first, then point cloud
-            const guideSnap = isGuideActive ? findGuideSnapPoint(event) : null;
-            const pcSnap    = (snapEnabled && snapTypes.vertex) ? findSnapPoint(event) : null;
+            // Circles and arrows skip snapping — use raw world position
+            const noSnap = (activeTool === 'circle' || activeTool === 'arrow');
+            const guideSnap = (isGuideActive && !noSnap) ? findGuideSnapPoint(event) : null;
+            const pcSnap    = (snapEnabled && snapTypes.vertex && !noSnap) ? findSnapPoint(event) : null;
             const bestSnap  = guideSnap || pcSnap;
 
             drawSnapTarget = bestSnap
