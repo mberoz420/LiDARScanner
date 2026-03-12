@@ -172,9 +172,4 @@ class EvaBrainManager: ObservableObject {
     }
 }
 
-// Bridge: debugLog may not be visible here, provide fallback
-private func debugLog(_ msg: String) {
-    #if DEBUG
-    print(msg)
-    #endif
-}
+// debugLog is defined in MeshManager.swift — no redeclaration needed
