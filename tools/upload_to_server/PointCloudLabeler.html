@@ -4030,24 +4030,34 @@
          * 4. Add traced paths as new guide lines
          */
         function autoCompleteBoundary() {
-            if (!points.length) { document.getElementById('selection-info').textContent = 'No point cloud loaded.'; return; }
-            if (guideLines.length === 0) { document.getElementById('selection-info').textContent = 'Draw some guide lines first — AI needs a starting point.'; return; }
+            if (!points.length) { document.getElementById('selection-info').textContent = 'Eva: No point cloud loaded.'; return; }
+            if (guideLines.length === 0) { document.getElementById('selection-info').textContent = 'Eva: Draw some guide lines first — I need a starting point.'; return; }
 
             const info = document.getElementById('selection-info');
-            info.textContent = 'AI: Analyzing density and tracing boundary...';
+            info.textContent = 'Eva: Analyzing density and tracing boundary...';
+            console.log('[Eva] autoCompleteBoundary started. guideLines:', guideLines.length, 'points:', points.length);
 
-            // 1. Collect open endpoints
+            // Defer to allow UI update
+            setTimeout(() => { _autoCompleteBoundaryWork(); }, 50);
+        }
+
+        function _autoCompleteBoundaryWork() {
+            const info = document.getElementById('selection-info');
+
+            // 1. Collect open endpoints (include splines too)
             const endpoints = [];
             guideLines.forEach((guide, gi) => {
-                if (guide.closed || guide.type === 'spline') return;
+                if (guide.closed) return;
                 const pts = guide.points;
                 if (pts.length < 2) return;
                 endpoints.push({ x: pts[0].x, z: pts[0].z, guideIdx: gi, end: 'start' });
                 endpoints.push({ x: pts[pts.length-1].x, z: pts[pts.length-1].z, guideIdx: gi, end: 'end' });
             });
 
+            console.log('[Eva] Open endpoints found:', endpoints.length);
+
             if (endpoints.length < 2) {
-                info.textContent = 'Need at least 2 open endpoints to auto-complete.';
+                info.textContent = 'Eva: Need at least 2 open endpoints — draw some guide lines and leave gaps.';
                 return;
             }
 
@@ -4215,9 +4225,12 @@
             // 6. Trace paths for each pair
             let tracedCount = 0;
             const y = drawPlaneLocked ? drawPlaneY : 0;
+            console.log('[Eva] Pairs to trace:', pairs.length, 'density threshold:', thresh);
 
             for (const [ep1, ep2] of pairs) {
+                console.log('[Eva] Tracing from', ep1.x.toFixed(2), ep1.z.toFixed(2), 'to', ep2.x.toFixed(2), ep2.z.toFixed(2));
                 const rawPath = tracePath(ep1.x, ep1.z, ep2.x, ep2.z);
+                console.log('[Eva] Path result:', rawPath ? rawPath.length + ' points' : 'NO PATH FOUND');
                 if (!rawPath || rawPath.length < 2) continue;
 
                 // Simplify (5cm tolerance)
@@ -5410,10 +5423,13 @@
                 guideMarkers = data.guide_markers;
                 rebuildGuideLines();
             }
+            // Reset and load observer arrows
+            observerArrows = [];
             if (data.observer_arrows && Array.isArray(data.observer_arrows)) {
                 observerArrows = data.observer_arrows;
-                rebuildObserverArrows();
+                console.log('[Load] Restored', observerArrows.length, 'observer arrows');
             }
+            rebuildObserverArrows();
             if (data.construction_lines && Array.isArray(data.construction_lines)) {
                 constructionLines = data.construction_lines;
                 rebuildConstructionLines();
@@ -7408,6 +7424,7 @@
             };
             if (meshFaces) data.faces = meshFaces;
             if (scanRoomPlanes) data.room_planes = scanRoomPlanes;
+            console.log('[Save] observer_arrows:', observerArrows.length, 'guide_lines:', guideLines.length);
             return data;
         }
 
